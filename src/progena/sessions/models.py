@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from src.progena.utils import utcnow
+
+ResponseStatus = Literal[
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+    "interrupted",
+    "unknown",
+]
 
 # Internal runtime vendor projections; browser delivery remains canonical SSE.
 CONVERSATION_MESSAGES_INCLUDE = "progena.langchain_messages"

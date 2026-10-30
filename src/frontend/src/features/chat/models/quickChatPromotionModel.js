@@ -1,4 +1,4 @@
-import { stripEphemeralStreamEvents } from './conversationPageModel';
+import { retainAuthoritativeUsage, stripEphemeralStreamEvents } from './conversationPageModel';
 
 const MAX_PERSISTED_MESSAGES = 100;
 
@@ -13,7 +13,7 @@ function summaryMarkerAnchorId(marker) {
  */
 export function createQuickChatPromotion(history, threadId, summaryMarkers = []) {
   const messages = Array.isArray(history)
-    ? history.map((message) => ({ ...message }))
+    ? history.map((message) => retainAuthoritativeUsage(message))
     : [];
   const markers = Array.isArray(summaryMarkers) && summaryMarkers.length > 0
     ? summaryMarkers.map((marker) => ({ ...marker }))

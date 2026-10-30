@@ -71,6 +71,73 @@ function filterSupportedPersistedStreamEvents(streamEvents) {
   });
 }
 
+const RESPONSE_STATUSES = new Set(['running', 'completed', 'failed', 'cancelled', 'interrupted', 'unknown']);
+
+function normalizeResponseStatus(value) {
+  if (value === 'incomplete') return 'interrupted';
+  return typeof value === 'string' && RESPONSE_STATUSES.has(value) ? value : 'unknown';
+}
+
+function normalizeOutputTokenCount(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+const PROVIDER_USAGE_PROVENANCE = 'provider';
+
+function hasAuthoritativeUsage(message) {
+  return message?.usageProvenance === PROVIDER_USAGE_PROVENANCE;
+}
+
+function normalizeTimelineUsage(timelineItems, message) {
+  if (!Array.isArray(timelineItems)) return timelineItems;
+  const authoritative = hasAuthoritativeUsage(message);
+  const tokenCount = authoritative ? normalizeOutputTokenCount(message.tokenCount) : null;
+  const finalCallTokenCount = authoritative ? normalizeOutputTokenCount(message.finalCallTokenCount) : null;
+  return timelineItems.map((item) => {
+    if (item?.kind !== 'assistant_message') return item;
+    const {
+      tokenCount: _tokenCount,
+      finalCallTokenCount: _finalCallTokenCount,
+      usageProvenance: _usageProvenance,
+      ...withoutUsage
+    } = item;
+    return authoritative
+      ? {
+        ...withoutUsage,
+        tokenCount,
+        finalCallTokenCount,
+        usageProvenance: PROVIDER_USAGE_PROVENANCE,
+      }
+      : withoutUsage;
+  });
+}
+
+// Local cache and handoffs can contain prior releases' transport chunk
+// counters. Preserve counts only when their provider provenance is explicit.
+export function retainAuthoritativeUsage(message) {
+  if (!message || typeof message !== 'object') return message;
+  const {
+    tokenCount: _tokenCount,
+    finalCallTokenCount: _finalCallTokenCount,
+    usageProvenance: _usageProvenance,
+    ...withoutUsage
+  } = message;
+  if (!hasAuthoritativeUsage(message)) {
+    return Array.isArray(message.timelineItems)
+      ? { ...withoutUsage, timelineItems: normalizeTimelineUsage(message.timelineItems, message) }
+      : withoutUsage;
+  }
+  const retained = {
+    ...withoutUsage,
+    tokenCount: normalizeOutputTokenCount(message.tokenCount),
+    finalCallTokenCount: normalizeOutputTokenCount(message.finalCallTokenCount),
+    usageProvenance: PROVIDER_USAGE_PROVENANCE,
+  };
+  return Array.isArray(message.timelineItems)
+    ? { ...retained, timelineItems: normalizeTimelineUsage(message.timelineItems, retained) }
+    : retained;
+}
+
 /**
  * `preserveTimeline` is only for trusted in-memory handoffs (Quick Chat
  * promotion), whose timelines can hold partial answers absent from `content`.
@@ -104,7 +171,12 @@ export function normalizeStoredMessage(message, index, { preserveTimeline = fals
     id: typeof message.id === 'string' ? message.id : `msg_restored_${index}_${timestamp}`,
     role,
     content,
-    tokenCount: Number.isFinite(message.tokenCount) ? message.tokenCount : 0,
+    tokenCount: hasAuthoritativeUsage(message) ? normalizeOutputTokenCount(message.tokenCount) : null,
+    finalCallTokenCount: hasAuthoritativeUsage(message)
+      ? normalizeOutputTokenCount(message.finalCallTokenCount)
+      : null,
+    usageProvenance: hasAuthoritativeUsage(message) ? PROVIDER_USAGE_PROVENANCE : null,
+    responseStatus: normalizeResponseStatus(message.responseStatus),
     reasoningTokenCount: Number.isFinite(message.reasoningTokenCount)
       ? message.reasoningTokenCount
       : 0,
@@ -132,7 +204,7 @@ export function normalizeStoredMessage(message, index, { preserveTimeline = fals
   // timeline from the normalized streamEvents unless the caller trusts it.
   if (role === 'assistant') {
     base.timelineItems = preserveTimeline && Array.isArray(message.timelineItems) && message.timelineItems.length > 0
-      ? message.timelineItems
+      ? normalizeTimelineUsage(message.timelineItems, base)
       : buildDefaultAssistantTimeline(base);
   }
 
@@ -140,14 +212,14 @@ export function normalizeStoredMessage(message, index, { preserveTimeline = fals
 }
 
 export function stripEphemeralStreamEvents(message) {
-  const events = Array.isArray(message?.streamEvents) ? message.streamEvents : [];
-  if (events.length === 0) return message;
+  const retainedUsage = retainAuthoritativeUsage(message);
+  const events = Array.isArray(retainedUsage?.streamEvents) ? retainedUsage.streamEvents : [];
   // Keep only persisted categories; also strip base64 images to keep localStorage bounded.
   const persistable = events
     .filter((event) => PERSISTED_CATEGORIES.has(categoryForEventType(event.eventType, event.metadata)))
     .map((event) => (event.images ? { ...event, images: undefined } : event));
-  if (persistable.length === events.length && !events.some((e) => e.images)) {
-    return message;
+  if (persistable.length === events.length && !events.some((event) => event.images)) {
+    return retainedUsage;
   }
-  return { ...message, streamEvents: persistable };
+  return { ...retainedUsage, streamEvents: persistable };
 }

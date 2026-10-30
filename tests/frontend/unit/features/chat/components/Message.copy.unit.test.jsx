@@ -1,227 +1,85 @@
-import { afterEach, afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import React from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+// @vitest-environment jsdom
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Message } from '@frontend/features/chat/components/Message';
-import { RegenerateDisabledContext } from '@frontend/features/chat/components/RegenerateDisabledContext';
-
-const actionHarness = {
-  feedback: '',
-  regenerateDisabledWhileGenerating: false,
-  useRenderedContext: false,
-};
-
-vi.mock('react', async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    memo: (component) => component,
-    useMemo: (factory) => factory(),
-    useState: (initialValue) => [actionHarness.feedback || initialValue, (nextValue) => {
-      actionHarness.feedback = typeof nextValue === 'function'
-        ? nextValue(actionHarness.feedback)
-        : nextValue;
-    }],
-    useRef: (initialValue) => ({ current: initialValue }),
-    useCallback: (callback) => callback,
-    useEffect: () => {},
-    useContext: (context) => (
-      actionHarness.useRenderedContext
-        ? actual.useContext(context)
-        : actionHarness.regenerateDisabledWhileGenerating
-    ),
-  };
-});
+import ChatMessages from '@frontend/features/chat/components/ChatMessages';
 
 vi.mock('react-redux', () => ({
   useSelector: (selector) => selector({ uiData: { preferences: { agentName: 'Progena' } } }),
 }));
 
-vi.mock("@frontend/lib/safeMarkdown", () => ({
-  formatMessage: content => content,
-  renderSafeMarkdown: content => content,
-  sanitizeHtmlFragment: content => content
-}));
-vi.mock("@frontend/features/chat/models/messageRenderUtils", () => ({
-  appendStreamingCursor: content => content,
-  describeStreamEvent: () => ({
-    title: '',
-    metaDetail: '',
-    bodyHtml: '',
-    bodyDetail: ''
-  }),
-  badgeClassForEvent: () => '',
-  toolDetailsForEvent: () => null,
-  todosDetailsForEvent: () => null,
-  tokenMetaItemsForEvent: () => [],
-  formatTimestamp: () => ''
-}));
+let host;
+let root;
 
-const previousReact = globalThis.React;
-beforeAll(() => {
-  globalThis.React = React;
-});
-afterAll(() => {
-  globalThis.React = previousReact;
+beforeEach(() => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  host = document.createElement('div');
+  document.body.append(host);
+  root = createRoot(host);
 });
 
-function findByClass(node, className) {
-  if (!node || typeof node !== 'object') return null;
-  let component = node.type;
-  while (component && typeof component === 'object' && typeof component.type !== 'undefined') {
-    component = component.type;
-  }
-  component = typeof component === 'function' ? component : null;
-  if (component) {
-    const match = findByClass(component(node.props), className);
-    if (match) return match;
-  }
-  if (typeof node.props?.className === 'string' && node.props.className.split(' ').includes(className)) {
-    return node;
-  }
-  const children = node.props?.children;
-  if (Array.isArray(children)) {
-    for (const child of children) {
-      const match = findByClass(child, className);
-      if (match) return match;
-    }
-  }
-  return findByClass(children, className);
-}
+afterEach(async () => {
+  if (root) await act(async () => root.unmount());
+  host.remove();
+  vi.unstubAllGlobals();
+});
 
-function assistantMessage(content, timelineBacked) {
-  if (!timelineBacked) {
-    return {
-      role: 'assistant',
-      content,
-      timestamp: 1720000000000,
-      streamEvents: [],
-      timelineItems: undefined,
-    };
-  }
-
+function assistantMessage(id, content) {
   return {
+    id,
     role: 'assistant',
     content,
-    timestamp: 1720000000000,
-    streamEvents: [],
+    responseStatus: 'completed',
     timelineItems: [{
       kind: 'assistant_message',
-      id: 'timeline-assistant',
+      id: `${id}-answer`,
       content,
-      timestamp: 1720000000000,
-      tokenCount: 0,
+      timestamp: 1_000,
       isStreaming: false,
       error: false,
     }],
   };
 }
 
-function renderAssistantActions(message, onRegenerate) {
-  return Message({ message, onRegenerate });
+function action(name) {
+  const button = host.querySelector(`button[aria-label="${name}"]`);
+  expect(button).not.toBeNull();
+  return button;
 }
-
-function renderWithRegenerateDisabledContext(value, element) {
-  actionHarness.useRenderedContext = true;
-  try {
-    return renderToStaticMarkup(
-      <RegenerateDisabledContext.Provider value={value}>
-        {element}
-      </RegenerateDisabledContext.Provider>,
-    );
-  } finally {
-    actionHarness.useRenderedContext = false;
-  }
-}
-
-afterEach(() => {
-  actionHarness.feedback = '';
-  actionHarness.regenerateDisabledWhileGenerating = false;
-  actionHarness.useRenderedContext = false;
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
-});
 
 describe('assistant message actions', () => {
-  it('copies a direct assistant response and acknowledges the completed copy', async () => {
-    const clipboard = {
-      text: null,
-      writeText(value) {
-        this.text = value;
-        return Promise.resolve();
-      },
-    };
+  it('copies the timeline answer content and exposes copy feedback', async () => {
+    const clipboard = { writeText: vi.fn(() => Promise.resolve()) };
     vi.stubGlobal('navigator', { clipboard });
-    const message = assistantMessage('Copy this answer exactly', false);
+    const response = 'Copy this answer exactly, including punctuation.';
 
-    const copyButton = findByClass(renderAssistantActions(message), 'copy-btn');
-    const copyLabel = findByClass(copyButton, 'msg-action-btn__label');
+    await act(async () => root.render(<Message message={assistantMessage('assistant-copy', response)} />));
+    const copy = action('Copy message');
+    await act(async () => copy.click());
 
-    expect(copyButton?.props['aria-label']).toBe('Copy message');
-    expect(copyButton?.props.className).toContain('msg-action-btn');
-    expect(copyLabel?.props.children).toBe('Copy');
-    expect(copyButton?.props['data-tooltip']).toBeUndefined();
-
-    await copyButton.props.onClick();
-
-    const acknowledgedCopyButton = findByClass(renderAssistantActions(message), 'copy-btn');
-    expect(clipboard.text).toBe('Copy this answer exactly');
-    expect(acknowledgedCopyButton?.props.className).toContain('is-feedback-visible');
-    expect(acknowledgedCopyButton?.props['data-tooltip']).toBe('Copied');
+    expect(clipboard.writeText).toHaveBeenCalledWith(response);
+    expect(action('Copy message').dataset.tooltip).toBe('Copied');
   });
 
-  it('regenerates a direct assistant response and acknowledges completion', () => {
-    const regeneration = { count: 0 };
-    const onRegenerate = () => {
-      regeneration.count += 1;
-    };
-    const message = assistantMessage('Answer to regenerate', false);
+  it('regenerates the selected historical assistant message and exposes feedback', async () => {
+    const onRegenerate = vi.fn();
+    const historicalAssistant = assistantMessage('assistant-regenerate', 'Regenerate this response.');
 
-    const regenerateButton = findByClass(renderAssistantActions(message, onRegenerate), 'regen-btn');
-    const regenerateLabel = findByClass(regenerateButton, 'msg-action-btn__label');
-
-    expect(regenerateButton?.props['aria-label']).toBe('Regenerate response');
-    expect(regenerateLabel?.props.children).toBe('Regenerate');
-
-    regenerateButton.props.onClick();
-
-    const acknowledgedRegenerateButton = findByClass(
-      renderAssistantActions(message, onRegenerate),
-      'regen-btn',
-    );
-    expect(regeneration.count).toBe(1);
-    expect(acknowledgedRegenerateButton?.props.className).toContain('is-feedback-visible');
-    expect(acknowledgedRegenerateButton?.props['data-tooltip']).toBe('Regenerated');
-  });
-
-  it('offers the same labeled expandable controls from a timeline assistant row', () => {
-    const message = assistantMessage('Timeline response', true);
-    const markup = renderToStaticMarkup(React.createElement(Message, {
-      message,
-      onRegenerate: () => {},
-    }));
-
-    expect(markup).toContain('class="msg-action-btn copy-btn"');
-    expect(markup).toContain('aria-label="Copy message"');
-    expect(markup).toContain('class="msg-action-btn__label">Copy</span>');
-    expect(markup).toContain('class="msg-action-btn regen-btn"');
-    expect(markup).toContain('aria-label="Regenerate response"');
-    expect(markup).toContain('class="msg-action-btn__label">Regenerate</span>');
-  });
-  it.each([
-    { name: 'disables the historical-card action while generation is active', contextValue: true, staleProp: false, isDisabled: true },
-    { name: 'enables the historical-card action after generation ends', contextValue: false, staleProp: true, isDisabled: false },
-  ])('$name', ({ contextValue, staleProp, isDisabled }) => {
-    const markup = renderWithRegenerateDisabledContext(
-      contextValue,
-      <Message
-        message={assistantMessage('Historical response', true)}
-        onRegenerate={() => {}}
-        regenerateDisabled={staleProp}
+    await act(async () => root.render(
+      <ChatMessages
+        messages={[
+          { id: 'user-before', role: 'user', content: 'Original question' },
+          historicalAssistant,
+        ]}
+        onRegenerate={onRegenerate}
       />,
-    );
-    const regenerateButton = markup.match(/<button[^>]*class="msg-action-btn regen-btn"[^>]*>/)?.[0];
+    ));
+    const regenerate = action('Regenerate response');
+    await act(async () => regenerate.click());
 
-    expect(regenerateButton).toBeDefined();
-    expect(regenerateButton?.includes(' disabled=""')).toBe(isDisabled);
+    expect(onRegenerate).toHaveBeenCalledTimes(1);
+    expect(onRegenerate).toHaveBeenCalledWith(historicalAssistant.id);
+    expect(action('Regenerate response').dataset.tooltip).toBe('Regenerated');
   });
 });

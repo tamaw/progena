@@ -125,9 +125,9 @@ describe('profile cache retention estimates', () => {
   });
 
   it('never turns a missing historical timestamp into a fresh countdown on reload', () => {
-    const reloaded = normalizeBackendChatMessage({ role: 'assistant', content: 'Answer', context_usage: usage });
+    const reloaded = normalizeBackendChatMessage({ role: 'assistant', content: 'Answer', response_status: 'completed', context_usage: usage });
     expect(resolveComposerCacheExpiry({ messages: [reloaded], profiles: [profile] })).toBeNull();
-    const saved = normalizeBackendChatMessage({ role: 'assistant', content: 'Answer', created_at: new Date(responseAt).toISOString(), context_usage: usage });
+    const saved = normalizeBackendChatMessage({ role: 'assistant', content: 'Answer', response_status: 'completed', created_at: new Date(responseAt).toISOString(), context_usage: usage });
     expect(resolveComposerCacheExpiry({ messages: [saved], profiles: [profile] }).expiresAt).toBe(responseAt + 3600000);
   });
 

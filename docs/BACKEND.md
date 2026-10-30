@@ -206,6 +206,30 @@ No additional EventSource, polling, database notification channel, or independen
 compaction ledger is used. Summary timestamps describe checkpoint commits, not
 exact generation duration; no token-saving percentage is inferred.
 
+### Message output usage and terminal work state
+
+Canonical chat messages carry nullable `token_count` and `final_call_token_count`,
+plus `response_status` (`running`, `completed`, `failed`, `cancelled`,
+`interrupted`, or `unknown`). The total is explicit provider output summed across
+the root-model calls grouped with the visible reply; the final-call count belongs
+only to the visible final model response. It is not a count of rendered text,
+input tokens, tool-result bytes or delegated-agent usage. Reasoning is included
+in output, not added to it. Explicit zero remains zero; missing usage in any
+contributing call makes the aggregate unknown. Total-only provider metadata is
+not a substitute for output usage.
+
+Reasoning-only checkpoint tails remain visible even without tool calls or answer
+text. They retain reported aggregate output but do not invent final-answer usage
+or successful completion. Unknown response status does not erase a known final
+model call's usage.
+
+The runtime observes provider status and native graph interrupts through the
+existing response-content stream; the backend does not create a second ledger
+or a notification path. Historical transient provider states remain unknown
+without current running evidence. Browser completion callbacks must not turn a
+provider-incomplete result into completed work.
+
+
 
 ### Dedicated replay and resync semantics
 

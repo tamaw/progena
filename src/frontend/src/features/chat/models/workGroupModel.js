@@ -295,6 +295,49 @@ export function summarizeWork(workItems, steps, endedAt = null) {
   };
 }
 
+const TURN_RESPONSE_STATES = new Set(['running', 'completed', 'failed', 'cancelled', 'interrupted', 'unknown']);
+
+/** Normalize the persisted event-derived response state without inventing completion. */
+export function normalizeTurnResponseStatus(responseStatus) {
+  return TURN_RESPONSE_STATES.has(responseStatus) ? responseStatus : 'unknown';
+}
+
+/**
+ * Summary for the one turn-level work disclosure. A group's tool lifecycle is
+ * already self-contained, so flattening preserves the existing merge rules
+ * while measuring the entire root response from its first event.
+ */
+export function summarizeTurnWork(groups, workItems, endedAt = null) {
+  const items = Array.isArray(workItems) && workItems.length > 0
+    ? workItems
+    : (Array.isArray(groups) ? groups.flatMap((group) => group?.items || []) : []);
+  return summarizeWork(items, buildWorkSteps(items), endedAt);
+}
+
+/**
+ * Turn status is explicit and event-derived. A failed tool may be retried in
+ * an otherwise completed response, so it remains a count rather than changing
+ * the completed response into a failure.
+ */
+export function turnWorkHeader({ responseStatus, running, summary }) {
+  const status = normalizeTurnResponseStatus(responseStatus);
+  const elapsed = formatElapsed(summary.elapsedMs);
+  const tools = summary.toolCount > 0 ? `${summary.toolCount} tool${summary.toolCount === 1 ? '' : 's'}` : '';
+  const meta = [running || summary.elapsedMs >= 1000 ? elapsed : '', tools].filter(Boolean).join(' · ');
+  if (running || status === 'running') return { title: 'Working', meta, badge: 'Running' };
+  if (status === 'failed') return { title: 'Work failed', meta, badge: 'Failed' };
+  if (status === 'cancelled') return { title: 'Work cancelled', meta, badge: 'Cancelled' };
+  if (status === 'interrupted') return { title: 'Work interrupted', meta, badge: 'Interrupted' };
+  if (status === 'completed') {
+    return {
+      title: summary.elapsedMs >= 1000 ? `Worked for ${elapsed}` : 'Worked',
+      meta: tools,
+      badge: 'Completed',
+    };
+  }
+  return { title: 'Work', meta, badge: 'Unknown' };
+}
+
 /**
  * Header text for a group: its reasoning summary; null while live without
  * one (the header types a "-ing" word instead); else "Worked for 17s".

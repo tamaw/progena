@@ -36,6 +36,48 @@ describe('quick chat promotion', () => {
     expect(handoff.messages[100].timelineItems[0].event.images).toEqual([image]);
   });
 
+  it('keeps canonical output accounting in both promotion handoffs', () => {
+    const history = [{
+      id: 'answer-1',
+      role: 'assistant',
+      content: 'Done',
+      tokenCount: 42,
+      finalCallTokenCount: 9,
+      usageProvenance: 'provider',
+      responseStatus: 'completed',
+    }];
+
+    const { handoff, persistedHandoff } = createQuickChatPromotion(history, 'thread-canonical');
+
+    expect(handoff.messages[0]).toMatchObject({
+      tokenCount: 42,
+      finalCallTokenCount: 9,
+      usageProvenance: 'provider',
+      responseStatus: 'completed',
+    });
+    expect(persistedHandoff.messages[0]).toMatchObject({
+      tokenCount: 42,
+      finalCallTokenCount: 9,
+      usageProvenance: 'provider',
+      responseStatus: 'completed',
+    });
+  });
+
+  it('does not promote an unprovenanced chunk counter from quick-chat memory', () => {
+    const { handoff, persistedHandoff } = createQuickChatPromotion([{
+      id: 'old-live-turn',
+      role: 'assistant',
+      content: 'Partial',
+      tokenCount: 4,
+      finalCallTokenCount: 2,
+    }], 'thread-canonical');
+
+    for (const message of [handoff.messages[0], persistedHandoff.messages[0]]) {
+      expect(message).not.toHaveProperty('tokenCount');
+      expect(message).not.toHaveProperty('finalCallTokenCount');
+    }
+  });
+
   it('round-trips only retained-window markers while keeping the live handoff complete', () => {
     const history = Array.from({ length: 101 }, (_, index) => ({
       id: `message-${index}`,

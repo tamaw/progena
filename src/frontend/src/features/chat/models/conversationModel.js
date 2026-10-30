@@ -175,21 +175,30 @@ function persistedStreamEvents(streamEvents) {
   ));
 }
 
-// tokenCount/reasoningTokenCount/cacheReadTokenCount/model are deliberately
-// excluded here. The locally-streamed tokenCount is a crude per-chunk
-// counter (see liveAssistantTurnModel.js's `next.tokenCount += 1`), not the
-// backend's real tokenizer-based count, so it never matches the canonical
-// value the reconciliation fetch returns -- and `model` is frequently unset
-// on the local turn. Including either meant every foreground send's own
-// reconciliation looked non-equivalent to its own canonical echo purely on
-// cosmetic metadata, forcing an unwanted swap-and-remount of the row the
-// user is looking at (visible as a "refresh" moments after every reply).
-// Those numbers self-correct the next time the thread is genuinely reloaded
-// (switch/refresh); they aren't worth discarding the row over.
+// Provider usage is part of the rendered terminal result. Once a canonical
+// response arrives, replace a same-content local row when any provider-reported
+// usage/status value differs so live, reloaded, and reconciled views agree.
+function contextUsageRenderSignature(contextUsage) {
+  return {
+    inputTokens: contextUsage?.inputTokens ?? null,
+    outputTokens: contextUsage?.outputTokens ?? null,
+    totalTokens: contextUsage?.totalTokens ?? null,
+    profileName: contextUsage?.profileName ?? '',
+    deployment: contextUsage?.deployment ?? '',
+    providerId: contextUsage?.providerId ?? '',
+  };
+}
+
 function messageRenderSignature(message) {
   return {
     role: typeof message?.role === 'string' ? message.role : '',
     content: typeof message?.content === 'string' ? message.content : '',
+    tokenCount: message?.tokenCount ?? null,
+    finalCallTokenCount: message?.finalCallTokenCount ?? null,
+    reasoningTokenCount: message?.reasoningTokenCount ?? null,
+    cacheReadTokenCount: message?.cacheReadTokenCount ?? null,
+    responseStatus: typeof message?.responseStatus === 'string' ? message.responseStatus : 'unknown',
+    contextUsage: contextUsageRenderSignature(message?.contextUsage),
     reasoningText: typeof message?.reasoningText === 'string' ? message.reasoningText : '',
     agentName: typeof message?.agentName === 'string' ? message.agentName : '',
     streamEvents: persistedStreamEvents(message?.streamEvents).map(eventRenderSignature),

@@ -1,1270 +1,278 @@
-import React from 'react';
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
-import { renderToStaticMarkup } from 'react-dom/server';
+// @vitest-environment jsdom
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Message } from '@frontend/features/chat/components/Message';
-import { normalizeStreamEvent } from '@frontend/features/chat/models/streamEventsModel';
-import MessageImageStrip from '@frontend/features/chat/components/MessageImageStrip';
 
 vi.mock('react-redux', () => ({
   useSelector: (selector) => selector({ uiData: { preferences: { agentName: 'Progena' } } }),
 }));
 
-// These tests cover which items a turn routes into its work group and how
-// each row renders; WorkGroup's own collapse/live preview is covered in
-// WorkGroup.unit.test.jsx. Render the group expanded here via the real rows.
-vi.mock('@frontend/features/chat/components/WorkGroup', async () => {
-  const { default: TimelineItem } = await import('@frontend/features/chat/components/TimelineItem');
+let host;
+let root;
+
+beforeEach(() => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.stubGlobal('ResizeObserver', class {
+    observe() {}
+    disconnect() {}
+  });
+  host = document.createElement('div');
+  document.body.append(host);
+  root = createRoot(host);
+});
+
+afterEach(async () => {
+  if (root) await act(async () => root.unmount());
+  host.remove();
+  vi.unstubAllGlobals();
+});
+
+function tool(id, eventType, timestamp, toolName = 'read_file', metadata = {}) {
   return {
-    default: ({ items }) => React.createElement(
-      'div',
-      { className: 'work-group' },
-      items.map((item, index) => React.createElement(TimelineItem, { key: item.id || index, item, itemIndex: index })),
-    ),
+    kind: 'stream_event',
+    id,
+    timestamp,
+    event: {
+      id,
+      eventType,
+      timestamp,
+      content: '',
+      metadata: {
+        tool_name: toolName,
+        tool_call_id: `${id}-call`,
+        args_preview: { path: `/${id}` },
+        ...metadata,
+      },
+    },
   };
-});
-
-// Ensure React is in global scope for the component's JSX compilation
-// when the automatic JSX runtime import is not injected by vitest.
-if (typeof globalThis.React === 'undefined') {
-  globalThis.React = React;
 }
 
-// ---- Mock the markdown module ----
-vi.mock('@frontend/lib/markdown', () => ({
-  renderMarkdownToHtml: (content) => {
-    if (!content) return '';
-    const lines = content.split('\n').filter(Boolean);
-    return lines.map((l) => `<p>${l}</p>`).join('\n');
-  },
-  extractMarkdownImages: () => [],
-}));
-
-// ---- Minimal DOM stubs ----
-// MessageView uses sanitizeHtmlFragment which calls document.createElement
-// and checks Node.ELEMENT_NODE. In Node 26, neither document nor Node are
-// globals, so we provide minimal stubs that pass instanceof checks.
-let savedDocument;
-let savedNode;
-
-// Node must be a constructor so that React/vitest internal instanceof
-// checks (e.g. "x instanceof Node") don't throw.
-function MockNode() {}
-MockNode.ELEMENT_NODE = 1;
-MockNode.TEXT_NODE = 3;
-
-class MockElement {
-  constructor(tagName) {
-    this.tagName = tagName.toUpperCase();
-    this._children = [];
-    this._attrs = new Map();
-    this.textContent = '';
-    this._innerHTML = '';
-    this.parentNode = null;
-  }
-
-  get innerHTML() {
-    if (this._innerHTML) return this._innerHTML;
-    return this._children.map((c) => (typeof c === 'string' ? c : c.outerHTML || c.textContent || '')).join('');
-  }
-
-  set innerHTML(v) {
-    this._innerHTML = v;
-    this._children = [];
-  }
-
-  get content() {
-    return this;
-  }
-
-  get childNodes() {
-    return this._children;
-  }
-
-  get attributes() {
-    return Array.from(this._attrs.entries()).map(([name, value]) => ({ name, value }));
-  }
-
-  appendChild(child) {
-    child.parentNode = this;
-    this._children.push(child);
-    return child;
-  }
-
-  removeAttribute(name) {
-    this._attrs.delete(name);
-  }
-
-  cloneNode(deep) {
-    const c = new MockElement(this.tagName);
-    c._innerHTML = this._innerHTML;
-    c.textContent = this.textContent;
-    c._children = deep !== false
-      ? this._children.map((ch) => (typeof ch === 'string' ? ch : ch.cloneNode(deep)))
-      : [];
-    return c;
-  }
-
-  replaceWith(...nodes) {
-    const parent = this.parentNode;
-    if (!parent) return;
-    const idx = parent._children.indexOf(this);
-    if (idx !== -1) {
-      parent._children.splice(idx, 1, ...nodes);
-    }
-  }
-
-  get nodeType() {
-    return this.tagName ? MockNode.ELEMENT_NODE : MockNode.TEXT_NODE;
-  }
-
-  get outerHTML() {
-    const attrs = Array.from(this._attrs.entries())
-      .map(([k, v]) => (v ? ` ${k}="${v}"` : ` ${k}`))
-      .join('');
-    return `<${this.tagName.toLowerCase()}${attrs}>${this.innerHTML}</${this.tagName.toLowerCase()}>`;
-  }
-}
-
-class MockTextNode {
-  constructor(text) {
-    this._text = text;
-    this.nodeType = MockNode.TEXT_NODE;
-  }
-
-  get textContent() {
-    return this._text;
-  }
-
-  cloneNode() {
-    return new MockTextNode(this._text);
-  }
-}
-
-const mockDoc = {
-  createElement(tag) {
-    return new MockElement(tag);
-  },
-  createTextNode(text) {
-    return new MockTextNode(text);
-  },
-};
-
-const MS_EPOCH = 1720000000000;
-
-beforeAll(() => {
-  savedDocument = globalThis.document;
-  savedNode = globalThis.Node;
-  globalThis.Node = MockNode;
-  globalThis.document = mockDoc;
-});
-
-afterAll(() => {
-  globalThis.document = savedDocument;
-  globalThis.Node = savedNode;
-});
-
-function baseMessage(overrides = {}) {
+function answer(content, timestamp) {
   return {
-    id: 'm1',
-    role: 'assistant',
-    content: 'Hello world',
-    timestamp: MS_EPOCH,
+    kind: 'assistant_message',
+    id: 'answer',
+    content,
+    timestamp,
     isStreaming: false,
     error: false,
-    isScheduled: false,
-    streamEvents: [],
-    tokenCount: 42,
-    reasoningTokenCount: 0,
-    reasoningText: '',
-    model: '',
-    displayAgentName: '',
-    displayModelName: '',
-    displayToolCalls: [],
-    timelineItems: undefined,
+  };
+}
+
+function message(timelineItems, overrides = {}) {
+  return {
+    id: 'turn-1',
+    role: 'assistant',
+    content: '',
+    responseStatus: 'completed',
+    timelineItems,
     ...overrides,
   };
 }
-function divMarkupByClass(markup, className) {
-  const openingTag = `<div class="${className}">`;
-  const start = markup.indexOf(openingTag);
-  if (start === -1) return '';
 
-  const divTag = /<\/?div\b[^>]*>/g;
-  divTag.lastIndex = start;
-  let depth = 0;
-  let match;
-  while ((match = divTag.exec(markup))) {
-    depth += match[0].startsWith('</') ? -1 : 1;
-    if (depth === 0) return markup.slice(start, divTag.lastIndex);
-  }
-  return '';
+async function renderMessage(value) {
+  await act(async () => root.render(<Message message={value} />));
 }
 
-/* ------------------------------------------------------------------ */
-/*  timelineItems                                                      */
-/* ------------------------------------------------------------------ */
+function assistantWork() {
+  const section = host.querySelector('section[aria-label="Assistant work"]');
+  expect(section).not.toBeNull();
+  return section;
+}
 
-describe('Message with timelineItems', () => {
-  it('renders all work first, then delegated-agent cards, then the answer, even when work followed answer text', () => {
-    const message = baseMessage({
-      timelineItems: [
-        {
-          kind: 'stream_event',
-          id: 'e1',
-          event: {
-            id: 'e1',
-            eventType: 'tool_start',
-            content: '',
-            metadata: { tool_name: 'search_web' },
-          },
-        },
-        {
-          kind: 'assistant_message',
-          id: 'a1',
-          content: 'I found results.',
-          timestamp: MS_EPOCH,
-          displayAgentName: '',
-          displayModelName: '',
-          displayToolCalls: ['search_web'],
-          tokenCount: 10,
-          reasoningTokenCount: 0,
-          reasoningText: '',
-          isStreaming: false,
-          error: false,
-        },
-        {
-          kind: 'stream_event',
-          id: 'e2',
-          event: {
-            id: 'e2',
-            eventType: 'tool_result',
-            content: '',
-            metadata: { tool_name: 'search_web', result_preview: '3 hits', duration_ms: 1200 },
-          },
-        },
-        {
-          kind: 'subagent',
-          id: 'subagent-1',
-          toolCallId: 'task-1',
-          subagentName: 'researcher',
-          taskSummary: '',
-          status: 'success',
-          entries: [],
-          resultPreview: 'Delegated result',
-        },
-      ],
-    });
+async function openOuterWork(section) {
+  const toggle = section.querySelector('button[aria-expanded="false"]');
+  expect(toggle).not.toBeNull();
+  await act(async () => toggle.click());
+  expect(toggle.getAttribute('aria-expanded')).toBe('true');
+}
 
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+async function openAllInnerGroups(section) {
+  const toggles = [...section.querySelectorAll('.work-group__toggle')];
+  await act(async () => toggles.forEach((toggle) => toggle.click()));
+  return toggles;
+}
 
-    const toolStartPos = html.indexOf('→ Search Web');
-    const toolResultPos = html.indexOf('✓ Search Web');
-    const cardPos = html.indexOf('researcher');
-    const assistantPos = html.indexOf('I found results.');
-
-    expect(toolStartPos).toBeGreaterThan(0);
-    expect(toolResultPos).toBeGreaterThan(toolStartPos);
-    expect(cardPos).toBeGreaterThan(toolResultPos);
-    expect(assistantPos).toBeGreaterThan(cardPos);
-  });
-  it('renders streamed assistant content once in the explicit timeline row', () => {
-    const streamedContent = 'Live assistant response';
-    const message = baseMessage({
-      content: streamedContent,
-      isStreaming: true,
-      timelineItems: [{
-        kind: 'assistant_message',
-        id: 'assistant-live',
-        content: streamedContent,
-        timestamp: MS_EPOCH,
-        displayAgentName: '',
-        displayModelName: '',
-        displayToolCalls: [],
-        tokenCount: 0,
-        reasoningTokenCount: 0,
-        reasoningText: '',
-        isStreaming: true,
-        error: false,
-      }],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const timelineItem = divMarkupByClass(html, 'chat-entry-chain--item');
-    const messageEntries = html.match(/class="entry__main msg__entry-main"/g) || [];
-
-    expect(timelineItem).toContain('class="entry__main msg__entry-main"');
-    expect(timelineItem).toContain(streamedContent);
-    expect(messageEntries).toHaveLength(1);
-  });
-
-  it('exposes image thumbnails as keyboard-activatable controls', () => {
-    const html = renderToStaticMarkup(React.createElement(MessageImageStrip, {
-      images: [{ id: 'image-1', src: 'https://cdn.example.test/image.png', alt: 'Generated result' }],
+describe('assistant turn work disclosure', () => {
+  it('keeps 38 reasoning sections behind one collapsed assistant-work disclosure', async () => {
+    const timelineItems = Array.from({ length: 38 }, (_, index) => ({
+      kind: 'stream_event',
+      id: `reasoning-${index + 1}`,
+      timestamp: (index + 1) * 1_000,
+      event: {
+        id: `reasoning-${index + 1}`,
+        eventType: 'reasoning_delta',
+        timestamp: (index + 1) * 1_000,
+        content: `**Reasoning ${index + 1}**\n\nStep ${index + 1}.`,
+        metadata: {},
+      },
     }));
 
-    expect(html).toContain('role="button"');
-    expect(html).toContain('tabindex="0"');
-    expect(html).toContain('aria-label="View image 1 full size"');
-    expect(html).toContain('alt="Generated result"');
+    await renderMessage(message(timelineItems));
+
+    const section = assistantWork();
+    expect(section.querySelector('button[aria-expanded="false"]')).not.toBeNull();
+    expect(section.querySelectorAll('.work-group__toggle')).toHaveLength(0);
+    expect(section.textContent).not.toContain('Reasoning 38');
   });
 
-  it('renders image attachments retained by normalized persisted stream events after reload', () => {
-    const normalizedEvent = normalizeStreamEvent({
-      id: 'e-image',
-      event_type: 'tool_result',
-      metadata: { tool_name: 'generate_image', result_preview: 'created image' },
-      images: [{ id: 'img-1', base64: 'AAA', media_type: 'image/png' }],
-      timestamp: '2026-07-15T02:31:08.000Z',
-    }, 0);
-    const message = baseMessage({
-      streamEvents: [normalizedEvent],
-      timelineItems: [
+  it('opens every reasoning section and its associated tool exactly once', async () => {
+    const timelineItems = Array.from({ length: 38 }, (_, index) => {
+      const number = index + 1;
+      const timestamp = number * 2_000;
+      return [
         {
           kind: 'stream_event',
-          id: 'e-image',
+          id: `reasoning-${number}`,
+          timestamp,
           event: {
-            id: 'e-image',
-            eventType: 'tool_result',
-            metadata: { tool_name: 'generate_image', result_preview: 'created image' },
-          },
-        },
-        {
-          kind: 'assistant_message',
-          id: 'assistant-image',
-          content: 'Here is the generated image.',
-          timestamp: MS_EPOCH,
-          displayAgentName: '',
-          displayModelName: '',
-          displayToolCalls: [],
-          tokenCount: 0,
-          reasoningTokenCount: 0,
-          reasoningText: '',
-          isStreaming: false,
-          error: false,
-        },
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).toContain('msg-img-strip');
-    expect(html).toContain('View image 1 full size');
-  });
-
-  it('renders fallback body detail text for classic stream-event rows', () => {
-    const message = baseMessage({
-      timelineItems: undefined,
-      streamEvents: [
-        {
-          id: 'a2a-progress-1',
-          eventType: 'a2a_call_progress',
-          timestamp: MS_EPOCH,
-          content: '',
-          metadata: {
-            agent_name: 'example_agent',
-            state: 'working',
-            message_text: 'Step 1/3: prep...',
-          },
-        },
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).toContain('Step 1/3: prep...');
-    expect(html).toContain('message-stream-event-detail');
-  });
-  it('renders a submitted task summary entry before the subagent final result', () => {
-    const message = baseMessage({
-      timelineItems: [{
-        kind: 'subagent',
-        id: 'subagent-call-summary',
-        toolCallId: 'call-summary',
-        subagentName: 'researcher',
-        taskSummary: 'Read the README.md and summarize its purpose',
-        // Running, so the card's body is open (finished cards collapse).
-        status: 'running',
-        startedAt: MS_EPOCH,
-        finishedAt: MS_EPOCH + 100,
-        durationMs: 100,
-        resultPreview: 'Final answer from the researcher',
-        error: null,
-        entries: [],
-      }],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const bodyPos = html.indexOf('subagent-card__body');
-    const summaryEntryPos = html.indexOf('subagent-card__task-summary-entry');
-    const summaryPos = html.indexOf('Read the README.md and summarize its purpose');
-    const resultPos = html.indexOf('Final answer from the researcher');
-
-    expect(bodyPos).toBeGreaterThan(-1);
-    expect(summaryEntryPos).toBeGreaterThan(bodyPos);
-    expect(summaryPos).toBeGreaterThan(summaryEntryPos);
-    expect(resultPos).toBeGreaterThan(summaryPos);
-    expect(html).toContain('Read the README.md and summarize its purpose');
-    expect(html.slice(summaryEntryPos, resultPos)).toContain('message-stream-event-body');
-    expect(divMarkupByClass(html, 'subagent-card__children')).toMatch(
-      /Read the README\.md and summarize its purpose[\s\S]*Final answer from the researcher/,
-    );
-  });
-
-  it('omits the task summary line when persisted metadata has no description', () => {
-    const message = baseMessage({
-      timelineItems: [{
-        kind: 'subagent',
-        id: 'subagent-call-no-summary',
-        toolCallId: 'call-no-summary',
-        subagentName: 'researcher',
-        status: 'success',
-        startedAt: MS_EPOCH,
-        finishedAt: MS_EPOCH + 100,
-        durationMs: 100,
-        resultPreview: 'Final answer from the researcher',
-        error: null,
-        entries: [],
-      }],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    expect(html).not.toContain('subagent-card__task-summary');
-  });
-
-  it('renders a successful nested tool as a closed disclosure with payload details', () => {
-    const rawArgs = '{"path":"src/main.py","include_line_numbers":true}';
-    const rawResult = '{"content":"function main()"}';
-    const message = baseMessage({
-      timelineItems: [{
-        kind: 'subagent',
-        id: 'subagent-call-nested-tool',
-        toolCallId: 'call-nested-tool',
-        subagentName: 'researcher',
-        // Running, so the card's body is open (finished cards collapse).
-        status: 'running',
-        startedAt: MS_EPOCH,
-        finishedAt: MS_EPOCH + 1250,
-        durationMs: 1250,
-        resultPreview: 'Final answer from the researcher',
-        error: null,
-        entries: [{
-          kind: 'tool',
-          id: 'nested-tool-1',
-          toolName: 'read_file',
-          status: 'success',
-          argsPreview: rawArgs,
-          resultPreview: rawResult,
-          error: null,
-          durationMs: 1250,
-        }],
-      }],
-    });
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const disclosures = html.match(/<details class="tool-event-disclosure">[\s\S]*?<\/details>/g) || [];
-    expect(disclosures).toHaveLength(1);
-    const disclosure = disclosures[0] || '';
-
-    expect(disclosure).toContain('read_file · path: src/main.py');
-    expect(disclosure).not.toContain('completed');
-    expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
-    expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
-
-    const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
-    expect(payloadStart).toBeGreaterThan(-1);
-    const summary = disclosure.slice(0, payloadStart);
-    const payload = disclosure.slice(payloadStart);
-    expect(summary).not.toContain(rawResult.replaceAll('"', '&quot;'));
-    expect(payload).toContain(rawArgs.replaceAll('"', '&quot;'));
-    expect(payload).toContain(rawResult.replaceAll('"', '&quot;'));
-  });
-
-  it('renders reasoning-token metadata only on its reasoning timeline event', () => {
-    const message = baseMessage({
-      timelineItems: [
-        {
-          kind: 'stream_event',
-          id: 'reasoning-1',
-          event: {
-            id: 'reasoning-1',
+            id: `reasoning-${number}`,
             eventType: 'reasoning_delta',
-            timestamp: MS_EPOCH,
-            content: 'Checking the result before responding',
-            metadata: { reasoning_tokens: 3 },
-          },
-        },
-        {
-          kind: 'assistant_message',
-          id: 'a1',
-          content: 'Response from agent',
-          timestamp: MS_EPOCH,
-          displayAgentName: 'CodeReviewer',
-          displayModelName: 'gpt-4',
-          displayToolCalls: ['review'],
-          tokenCount: 5,
-          reasoningTokenCount: 3,
-          reasoningText: '',
-          isStreaming: false,
-          error: false,
-        },
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const reasoningRowStart = html.indexOf('<article class="message-stream-event');
-    const assistantRowStart = html.indexOf('<article class="message-wrapper assistant');
-    const reasoningRow = html.slice(reasoningRowStart, assistantRowStart);
-    const assistantRow = html.slice(assistantRowStart);
-
-    expect(reasoningRowStart).toBeGreaterThan(-1);
-    expect(assistantRowStart).toBeGreaterThan(reasoningRowStart);
-    expect(reasoningRow).toContain('3 reasoning tokens');
-    expect(assistantRow).not.toContain('3 reasoning tokens');
-    expect(assistantRow).toContain('5 tokens');
-    expect(assistantRow).toContain('CodeReviewer');
-    expect(assistantRow).toContain('gpt-4');
-    expect(assistantRow).toContain('review');
-    expect(assistantRow).toContain('Response from agent');
-  });
-
-  it('renders stream_event kind as a stream event row', () => {
-    const message = baseMessage({
-      timelineItems: [
-        {
-          kind: 'stream_event',
-          id: 'e1',
-          event: {
-            id: 'e1',
-            eventType: 'tool_start',
-            content: '',
-            metadata: { tool_name: 'search' },
-          },
-        },
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).toContain('message-stream-event');
-    expect(html).toContain('chat-event-entry');
-    expect(html).toContain('entry__badge--tool');
-    expect(html).toContain('→ Search');
-  });
-
-  it('renders node_update stream event as a step', () => {
-    const message = baseMessage({
-      timelineItems: [
-        {
-          kind: 'stream_event',
-          id: 'e1',
-          event: {
-            id: 'e1',
-            eventType: 'node_update',
-            content: '',
-            metadata: { node_name: 'model_call', output_keys: ['response'] },
-          },
-        },
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).toContain('chat-event-badge--step');
-    expect(html).toContain('Model Call');
-    expect(html).toContain('outputs: response');
-  });
-
-  it('renders reasoning stream event with reasoning badge', () => {
-    const message = baseMessage({
-      timelineItems: [
-        {
-          kind: 'stream_event',
-          id: 'e1',
-          event: {
-            id: 'e1',
-            eventType: 'reasoning_delta',
-            content: 'Thinking step by step',
+            timestamp,
+            content: `**Reasoning ${number}**\n\nStep ${number}.`,
             metadata: {},
           },
         },
-      ],
-    });
+        tool(`tool-${number}-start`, 'tool_start', timestamp + 100, 'read_file', {
+          tool_call_id: `tool-${number}`,
+          args_preview: { path: `/file-${number}` },
+        }),
+        tool(`tool-${number}-result`, 'tool_result', timestamp + 200, 'read_file', {
+          tool_call_id: `tool-${number}`,
+          result_preview: `Read ${number}`,
+        }),
+      ];
+    }).flat();
 
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    await renderMessage(message(timelineItems));
 
-    expect(html).toContain('chat-event-badge--reason');
-    expect(html).toContain('Reasoning');
+    const section = assistantWork();
+    await openOuterWork(section);
+    const innerToggles = await openAllInnerGroups(section);
+
+    expect(innerToggles).toHaveLength(38);
+    expect(section.querySelectorAll('.tool-call-entry')).toHaveLength(38);
+    expect(section.textContent.match(/Reasoning 38/g)).toHaveLength(1);
+    expect(section.textContent.match(/path: \/file-38/g)).toHaveLength(1);
   });
 
-  it('reconstructs earlier reasoning ahead of a later tool timeline item with visible text', () => {
-    const reasoningTimestamp = '2026-07-15T02:31:08.000Z';
-    const toolTimestamp = new Date('2026-07-15T02:31:09.000Z').getTime();
-    const message = baseMessage({
-      reasoningText: 'Thinking before the tool call',
-      reasoningTimestamp,
-      timelineItems: [
-        {
-          kind: 'stream_event',
-          id: 'tool-later',
-          event: {
-            id: 'tool-later',
-            eventType: 'tool_start',
-            timestamp: toolTimestamp,
-            content: '',
-            metadata: { tool_name: 'search_web' },
-          },
-        },
-        {
-          kind: 'assistant_message',
-          id: 'assistant-after-tool',
-          content: 'The tool result is ready.',
-          timestamp: toolTimestamp + 1000,
-          displayAgentName: '',
-          displayModelName: '',
-          displayToolCalls: [],
-          tokenCount: 0,
-          reasoningTokenCount: 0,
-          reasoningText: '',
-          isStreaming: false,
-          error: false,
-        },
-      ],
-    });
+  it('keeps delegated-agent cards and the answer visible outside closed root work', async () => {
+    await renderMessage(message([
+      tool('root-start', 'tool_start', 1_000),
+      {
+        kind: 'subagent',
+        id: 'subagent-1',
+        toolCallId: 'subagent-call',
+        subagentName: 'researcher',
+        taskSummary: '',
+        status: 'success',
+        entries: [],
+        resultPreview: 'Research complete',
+      },
+      {
+        kind: 'a2a_call',
+        id: 'a2a-1',
+        agentName: 'remote analyst',
+        status: 'success',
+        messages: [],
+        resultPreview: 'Remote analysis complete',
+      },
+      answer('Final answer remains readable.', 5_000),
+    ]));
 
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const reasoningRowPos = html.indexOf('reasoning_summary');
-    const toolRowPos = html.indexOf('tool_start');
-    const formattedReasoningTimestamp = new Date(reasoningTimestamp).toLocaleTimeString([], {
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-    });
+    const section = assistantWork();
+    const subagent = host.querySelector('.subagent-card');
+    const remoteAgent = host.querySelector('.a2a-call-card');
+    const finalAnswer = [...host.querySelectorAll('.msg--assistant')]
+      .find((element) => element.textContent.includes('Final answer remains readable.'));
 
-    expect(reasoningRowPos).toBeGreaterThan(-1);
-    expect(toolRowPos).toBeGreaterThan(reasoningRowPos);
-    expect(html.slice(reasoningRowPos, toolRowPos)).toContain('Thinking before the tool call');
-    expect(html.slice(reasoningRowPos, toolRowPos)).toContain(formattedReasoningTimestamp);
+    expect(section.querySelector('button[aria-expanded="false"]')).not.toBeNull();
+    expect(subagent).not.toBeNull();
+    expect(remoteAgent).not.toBeNull();
+    expect(finalAnswer).not.toBeNull();
+    expect(section.contains(subagent)).toBe(false);
+    expect(section.contains(remoteAgent)).toBe(false);
+    expect(section.contains(finalAnswer)).toBe(false);
   });
 
-  it('places each saved model call reasoning segment ahead of the tool calls it led to', () => {
-    const first = Date.parse('2026-07-15T02:31:08.000Z');
-    const second = Date.parse('2026-07-15T02:31:12.000Z');
-    const toolItem = (id, timestamp, toolName) => ({
-      kind: 'stream_event',
-      id,
-      timestamp,
-      event: { id, eventType: 'tool_start', timestamp, content: '', metadata: { tool_name: toolName } },
-    });
-    const message = baseMessage({
-      reasoningText: 'joined text must not be used',
-      reasoningSegments: [
-        { text: '**Listing files**\n\nfirst call', timestamp: new Date(first).toISOString() },
-        { text: '**Reading files**\n\nsecond call', timestamp: new Date(second).toISOString() },
-      ],
-      timelineItems: [
-        toolItem('t1', first, 'list_files'),
-        toolItem('t2', second, 'read_file'),
-      ],
-    });
+  it('keeps each reasoning section before the tool work it led to after expansion', async () => {
+    await renderMessage(message([
+      {
+        kind: 'stream_event',
+        id: 'reasoning-first',
+        timestamp: 1_000,
+        event: {
+          id: 'reasoning-first',
+          eventType: 'reasoning_delta',
+          timestamp: 1_000,
+          content: '**Inspect files**\n\nRead configuration first.',
+          metadata: {},
+        },
+      },
+      tool('read-start', 'tool_start', 1_100, 'read_file', { tool_call_id: 'read' }),
+      tool('read-result', 'tool_result', 1_200, 'read_file', { tool_call_id: 'read', result_preview: 'Found config' }),
+      {
+        kind: 'stream_event',
+        id: 'reasoning-second',
+        timestamp: 1_300,
+        event: {
+          id: 'reasoning-second',
+          eventType: 'reasoning_delta',
+          timestamp: 1_300,
+          content: '**Search references**\n\nThen find callers.',
+          metadata: {},
+        },
+      },
+      tool('search-start', 'tool_start', 1_400, 'search_web', { tool_call_id: 'search' }),
+      tool('search-result', 'tool_result', 1_500, 'search_web', { tool_call_id: 'search', result_preview: 'Found callers' }),
+    ]));
 
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const positions = ['first call', '→ List Files', 'second call', '→ Read File'].map((text) => html.indexOf(text));
+    const section = assistantWork();
+    await openOuterWork(section);
+    await openAllInnerGroups(section);
 
-    expect(positions.every((position) => position >= 0)).toBe(true);
-    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
-    expect(html).not.toContain('joined text must not be used');
+    const chronology = ['Inspect files', 'Read File', 'Search references', 'Search Web']
+      .map((text) => section.textContent.indexOf(text));
+    expect(chronology.every((position) => position >= 0)).toBe(true);
+    expect([...chronology].sort((left, right) => left - right)).toEqual(chronology);
   });
 
-  it('renders tool_error stream event with error styling', () => {
-    const message = baseMessage({
-      timelineItems: [
-        {
-          kind: 'stream_event',
-          id: 'e1',
-          event: {
-            id: 'e1',
-            eventType: 'tool_error',
-            content: '',
-            metadata: { tool_name: 'deploy', error: 'permission denied', duration_ms: 500 },
-          },
-        },
-      ],
-    });
+  it('shows failed-tool evidence without turning a completed turn into a failed turn', async () => {
+    await renderMessage(message([
+      tool('failed-start', 'tool_start', 1_000, 'read_file', { tool_call_id: 'failed' }),
+      tool('failed-result', 'tool_result', 2_000, 'read_file', {
+        tool_call_id: 'failed',
+        success: false,
+        error: 'Permission denied',
+      }),
+      answer('Recovered and completed the request.', 3_000),
+    ]));
 
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const section = assistantWork();
+    expect(section.textContent).toContain('Worked for 2s');
+    expect(section.textContent).toContain('1 failed');
+    expect(section.textContent).not.toContain('Work failed');
 
-    expect(html).toContain('entry__badge--err');
-    expect(html).toContain('✗ Deploy');
-    expect(html).toContain('permission denied');
-  });
+    await openOuterWork(section);
+    await openAllInnerGroups(section);
 
-  it('defaults displayAgentName to Progena when empty', () => {
-    const message = baseMessage({
-      timelineItems: [
-        {
-          kind: 'assistant_message',
-          id: 'a1',
-          content: 'Hi',
-          timestamp: MS_EPOCH,
-          displayAgentName: '',
-          displayModelName: '',
-          displayToolCalls: [],
-          tokenCount: 0,
-          reasoningTokenCount: 0,
-          reasoningText: '',
-          isStreaming: false,
-          error: false,
-        },
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).toContain('Progena');
+    expect(section.querySelector('.tool-call-entry--error')).not.toBeNull();
+    expect(section.textContent).toContain('Permission denied');
   });
 });
 
-/* ------------------------------------------------------------------ */
-/*  Fallback: no timelineItems                                          */
-/* ------------------------------------------------------------------ */
 
-describe('Message fallback layout without timelineItems', () => {
-  it('renders classic layout for assistant message with no timelineItems', () => {
-    const message = baseMessage({ timelineItems: undefined });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).toContain('msg--assistant');
-    expect(html).toContain('Hello world');
-    expect(html).toContain('chat-entry-chain--single');
-    expect(html).not.toContain('chat-entry-chain--connected');
-  });
-
-  it('renders stream events above message in classic fallback when streamEvents exist', () => {
-    const message = baseMessage({
-      timelineItems: undefined,
-      streamEvents: [
-        {
-          id: 'e1',
-          eventType: 'tool_start',
-          content: '',
-          metadata: { tool_name: 'search' },
-        },
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).toContain('chat-entry-chain--connected');
-    expect(html).toContain('message-stream-event');
-    expect(html).toContain('Hello world');
-  });
-
-  it('keeps hidden internal stream events out of the classic fallback transcript', () => {
-    const message = baseMessage({
-      timelineItems: undefined,
-      streamEvents: [
-        normalizeStreamEvent({ id: 'meta', event_type: 'assistant_metadata', metadata: { display_agent_name: 'Coder' } }, 0),
-        normalizeStreamEvent({ id: 'delta', event_type: 'message_delta', content: 'hidden text' }, 1),
-        normalizeStreamEvent({ id: 'pending', event_type: 'node_update', metadata: { node_name: 'pending_response' } }, 2),
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).toContain('Hello world');
-    expect(html).toContain('chat-entry-chain--single');
-    expect(html).not.toContain('chat-entry-chain--connected');
-    expect(html).not.toContain('message-stream-event');
-    expect(html).not.toContain('hidden text');
-  });
-
-  it('handles null timelineItems as classic fallback', () => {
-    const message = baseMessage({ timelineItems: null });
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    expect(html).toContain('msg--assistant');
-    expect(html).toContain('Hello world');
-  });
-
-  it('handles empty timelineItems array as classic fallback', () => {
-    const message = baseMessage({ timelineItems: [] });
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    expect(html).toContain('msg--assistant');
-    expect(html).toContain('Hello world');
-  });
-});
-
-/* ------------------------------------------------------------------ */
-/*  User messages                                                       */
-/* ------------------------------------------------------------------ */
-
-describe('Message user messages', () => {
-  it('are unaffected by timelineItems', () => {
-    const message = baseMessage({
-      role: 'user',
-      content: 'User text here',
-      timelineItems: [
-        {
-          kind: 'assistant_message',
-          id: 'a1',
-          content: 'Should not render',
-          timestamp: MS_EPOCH,
-        },
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).toContain('User text here');
-    expect(html).not.toContain('Should not render');
-    expect(html).toContain('entry__badge--user');
-    expect(html).not.toContain('chat-entry-chain');
-  });
-
-  it('labels a user entry as Message', () => {
-    const message = baseMessage({
-      role: 'user',
-      content: 'hi',
-      timestamp: MS_EPOCH,
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).toContain('Message');
-  });
-});
-
-describe('normal tool content and metadata display', () => {
-  it('renders a tool_start summary in normal content with a closed Payload disclosure', () => {
-    const rawArgs = '{"path":"src/main.py","include_line_numbers":true}';
-    const message = baseMessage({
-      timelineItems: [{
-        kind: 'stream_event',
-        id: 'tool-start-1',
-        event: {
-          id: 'tool-start-1',
-          eventType: 'tool_start',
-          timestamp: MS_EPOCH,
-          metadata: {
-            tool_name: 'read_file',
-            args_preview: rawArgs,
-          },
-        },
-      }],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const headerStart = html.indexOf('message-stream-event-header');
-    const headerEnd = html.indexOf('</div>', headerStart);
-    const header = html.slice(headerStart, headerEnd);
-    const disclosureStart = html.indexOf('<details class="tool-event-disclosure">');
-    expect(disclosureStart).toBeGreaterThan(-1);
-    const disclosure = html.slice(disclosureStart);
-    const summaryStart = html.indexOf('class="tool__summary');
-
-    expect(summaryStart).toBeGreaterThan(disclosureStart);
-    expect(html).toContain('path: src/main.py');
-    expect(header).not.toContain('path: src/main.py');
-    expect(disclosure).toContain('tool-event-disclosure__summary');
-    expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
-    expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
-    const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
-    expect(payloadStart).toBeGreaterThan(-1);
-    expect(disclosure.indexOf('class="tool__summary')).toBeLessThan(payloadStart);
-    expect(disclosure.indexOf(rawArgs.replaceAll('"', '&quot;'))).toBeGreaterThan(payloadStart);
-    expect(disclosure).toContain(rawArgs.replaceAll('"', '&quot;'));
-  });
-
-  it('renders a2a_send outer start and result rows as closed readable disclosures', () => {
-    const rawArgs = '{"agent":"example_agent","request":"hi"}';
-    const rawResult = 'Agent finished successfully';
-    const message = baseMessage({
-      timelineItems: [
-        {
-          kind: 'stream_event',
-          id: 'call-agent-start-1',
-          event: {
-            id: 'call-agent-start-1',
-            eventType: 'tool_start',
-            timestamp: MS_EPOCH,
-            metadata: {
-              tool_name: 'a2a_send',
-              args_preview: rawArgs,
-            },
-          },
-        },
-        {
-          kind: 'stream_event',
-          id: 'call-agent-result-1',
-          event: {
-            id: 'call-agent-result-1',
-            eventType: 'tool_result',
-            timestamp: MS_EPOCH,
-            metadata: {
-              tool_name: 'a2a_send',
-              duration_ms: 187,
-              result_preview: rawResult,
-            },
-          },
-        },
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const disclosures = html.match(/<details class="tool-event-disclosure">[\s\S]*?<\/details>/g) || [];
-
-    expect(disclosures).toHaveLength(2);
-    expect(disclosures.every((disclosure) => !/<details[^>]*\bopen(?:=|\s|>)/.test(disclosure))).toBe(true);
-    expect(disclosures[0]).toContain('agent: example_agent • request: hi');
-    expect(disclosures[0]).toContain(rawArgs.replaceAll('"', '&quot;'));
-    expect(disclosures[1]).toContain('Agent finished successfully');
-    expect(html).toContain('187ms');
-    expect(disclosures[1]).toContain(rawResult);
-    expect(disclosures.every((disclosure) => disclosure.includes('class="tool chat-event-tool"'))).toBe(true);
-  });
-
-  it('renders artifact result summary as content, raw JSON inside closed Payload, and duration before timestamp', () => {
-    const rawResult = '{"content":"raw result"}';
-    const message = baseMessage({
-      timelineItems: [{
-        kind: 'stream_event',
-        id: 'tool-result-1',
-        event: {
-          id: 'tool-result-1',
-          eventType: 'tool_result',
-          timestamp: MS_EPOCH,
-          metadata: {
-            tool_name: 'read_file',
-            duration_ms: 1250,
-            artifact: { summary: '12 lines read' },
-            result_preview: rawResult,
-          },
-        },
-      }],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const timestamp = new Date(MS_EPOCH).toLocaleTimeString([], {
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-    });
-    const headerStart = html.indexOf('message-stream-event-header');
-    const headerEnd = html.indexOf('</div>', headerStart);
-    const header = html.slice(headerStart, headerEnd);
-    const disclosureStart = html.indexOf('<details class="tool-event-disclosure">');
-    const disclosure = html.slice(disclosureStart);
-
-    expect(html).toContain('12 lines read');
-    expect(header).toContain('1.25s');
-    expect(header).not.toContain('12 lines read');
-    expect(header).not.toContain(rawResult);
-    expect(header.indexOf('1.25s')).toBeLessThan(header.indexOf(timestamp));
-    expect(disclosure).toContain('tool-event-disclosure__summary');
-    expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
-    expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
-    const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
-    expect(payloadStart).toBeGreaterThan(-1);
-    expect(disclosure.indexOf(rawResult.replaceAll('"', '&quot;'))).toBeGreaterThan(payloadStart);
-    expect(disclosure).toContain(rawResult.replaceAll('"', '&quot;'));
-  });
-
-  it('keeps the fallback stream-event renderer consistent with TimelineItem', () => {
-    const rawArgs = '{"query":"status"}';
-    const message = baseMessage({
-      timelineItems: undefined,
-      streamEvents: [{
-        id: 'fallback-tool-start-1',
-        eventType: 'tool_start',
-        metadata: { tool_name: 'search_web', args_preview: rawArgs },
-      }],
-    });
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    const disclosureStart = html.indexOf('<details class="tool-event-disclosure">');
-    expect(disclosureStart).toBeGreaterThan(-1);
-    const disclosure = html.slice(disclosureStart);
-    expect(html).toContain('class="tool__summary');
-    expect(html).toContain('query: status');
-    expect(disclosure).toContain('tool-event-disclosure__summary');
-    expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
-    const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
-    expect(payloadStart).toBeGreaterThan(-1);
-    expect(disclosure.indexOf(rawArgs.replaceAll('"', '&quot;'))).toBeGreaterThan(payloadStart);
-    expect(disclosure).toContain(rawArgs.replaceAll('"', '&quot;'));
-  });
-
-  it('renders persisted a2a_send stream events as closed readable disclosures', () => {
-    const rawArgs = '{"agent":"example_agent","request":"hi"}';
-    const rawResult = 'Legacy route completed';
-    const message = baseMessage({
-      timelineItems: undefined,
-      streamEvents: [
-        {
-          id: 'legacy-call-agent-start-1',
-          eventType: 'tool_start',
-          metadata: {
-            tool_name: 'a2a_send',
-            args_preview: rawArgs,
-          },
-        },
-        {
-          id: 'legacy-call-agent-result-1',
-          eventType: 'tool_result',
-          metadata: {
-            tool_name: 'a2a_send',
-            duration_ms: 91,
-            result_preview: rawResult,
-          },
-        },
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const disclosures = html.match(/<details class="tool-event-disclosure">[\s\S]*?<\/details>/g) || [];
-
-    expect(disclosures).toHaveLength(2);
-    expect(disclosures.every((disclosure) => !/<details[^>]*\bopen(?:=|\s|>)/.test(disclosure))).toBe(true);
-    expect(disclosures[0]).toContain('agent: example_agent • request: hi');
-    expect(disclosures[0]).toContain(rawArgs.replaceAll('"', '&quot;'));
-    expect(disclosures[1]).toContain('Legacy route completed');
-    expect(html).toContain('91ms');
-  });
-
-  it('keeps fallback result summaries out of the header while retaining raw output', () => {
-    const rawResult = '{"content":"fallback raw result"}';
-    const message = baseMessage({
-      timelineItems: undefined,
-      streamEvents: [{
-        id: 'fallback-tool-result-1',
-        eventType: 'tool_result',
-        timestamp: MS_EPOCH,
-        metadata: {
-          tool_name: 'read_file',
-          duration_ms: 750,
-          artifact: { summary: '7 lines read' },
-          result_preview: rawResult,
-        },
-      }],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const headerStart = html.indexOf('message-stream-event-header');
-    const headerEnd = html.indexOf('</div>', headerStart);
-    const header = html.slice(headerStart, headerEnd);
-    const disclosureStart = html.indexOf('<details class="tool-event-disclosure">');
-    const disclosure = html.slice(disclosureStart);
-
-    expect(header).toContain('750ms');
-    expect(header).not.toContain('7 lines read');
-    expect(header).not.toContain(rawResult);
-    expect(html).toContain('class="tool__summary');
-    expect(html).toContain('7 lines read');
-    expect(disclosure).toContain('tool-event-disclosure__summary');
-    const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
-    expect(payloadStart).toBeGreaterThan(-1);
-    expect(disclosure.indexOf(rawResult.replaceAll('"', '&quot;'))).toBeGreaterThan(payloadStart);
-    expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
-    expect(disclosure).toContain(rawResult.replaceAll('"', '&quot;'));
-  });
-  it('renders a concise list_agents summary while retaining structured raw output', () => {
-    const rawResult = JSON.stringify({ agents: [{ name: 'alpha' }, { name: 'beta' }] });
-    const message = baseMessage({
-      timelineItems: [{
-        kind: 'stream_event',
-        id: 'list-agents-result-1',
-        event: {
-          id: 'list-agents-result-1',
-          eventType: 'tool_result',
-          timestamp: MS_EPOCH,
-          metadata: {
-            tool_name: 'list_agents',
-            duration_ms: 240,
-            result_preview: rawResult,
-          },
-        },
-      }],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const headerStart = html.indexOf('message-stream-event-header');
-    const headerEnd = html.indexOf('</div>', headerStart);
-    const header = html.slice(headerStart, headerEnd);
-    const disclosureStart = html.indexOf('<details class="tool-event-disclosure">');
-    expect(disclosureStart).toBeGreaterThan(-1);
-    const disclosure = html.slice(disclosureStart);
-    const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
-    const escapedResult = rawResult.replaceAll('"', '&quot;');
-
-    expect(html).toContain('Found 2 agents');
-    expect(header).not.toContain('Found 2 agents');
-    expect(header).not.toContain(rawResult);
-    expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
-    expect(disclosure).toContain('tool-event-disclosure__summary');
-    expect(disclosure).toContain('class="tool__summary tool-event-disclosure__summary">Found 2 agents</span>');
-    expect(payloadStart).toBeGreaterThan(-1);
-    expect(disclosure.indexOf('class="tool__summary')).toBeLessThan(payloadStart);
-    expect(disclosure.indexOf(escapedResult)).toBeGreaterThan(payloadStart);
-    expect(disclosure).toContain(escapedResult);
-    expect(disclosure).not.toContain(rawResult);
-  });
-});
-
-describe('reasoning summary presentation', () => {
-  it('renders explicit summary and detail metadata in normal content with an exact closed disclosure count', () => {
-    const providerSummary = 'The provider supplied this summary.';
-    const providerDetail = 'Evidence 🔍';
-    const unstructuredContent = 'This event content must never be rendered.';
-    const message = baseMessage({
-      timelineItems: [{
-        kind: 'stream_event',
-        id: 'provider-reasoning-summary',
-        event: {
-          id: 'provider-reasoning-summary',
-          eventType: 'reasoning_summary',
-          content: unstructuredContent,
-          metadata: { summary: providerSummary, detail: providerDetail },
-        },
-      }],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const disclosure = html.match(/<details\b[^>]*\breasoning-event-disclosure\b[^>]*>[\s\S]*?<\/details>/)?.[0] || '';
-    const summaryEnd = disclosure.indexOf('</summary>');
-    const summary = disclosure.slice(0, summaryEnd);
-    const detail = disclosure.slice(summaryEnd);
-
-    expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
-    expect(summary).toMatch(/class="[^"]*\bmessage-content\b[^"]*\breasoning-event-disclosure__summary/);
-    expect(summary).toContain(providerSummary);
-    expect(summary).not.toContain(providerDetail);
-    expect(summary).not.toContain(unstructuredContent);
-    expect(detail).toContain(providerDetail);
-    expect(detail).not.toContain(unstructuredContent);
-  });
-
-  it('renders reconstructed persisted reasoning as a visible summary and closed paragraph detail', () => {
-    const summaryParagraph = 'The persisted agent checked the repository state.';
-    const detailParagraph = 'It compared the changed files with the requested behavior.';
-    const finalParagraph = 'The remaining differences explain the next repair step.';
-    const message = baseMessage({
-      timelineItems: [{
-        kind: 'stream_event',
-        id: 'persisted-reasoning',
-        event: {
-          id: 'persisted-reasoning',
-          eventType: 'reasoning_summary',
-          content: `${summaryParagraph}\n\n${detailParagraph}\n\n${finalParagraph}`,
-          metadata: {
-            source: 'message_reasoning',
-            text_length: summaryParagraph.length + detailParagraph.length + finalParagraph.length + 4,
-          },
-        },
-      }],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const disclosure = html.match(/<details\b[^>]*\breasoning-event-disclosure\b[^>]*>[\s\S]*?<\/details>/)?.[0] || '';
-    const summaryEnd = disclosure.indexOf('</summary>');
-    const summary = disclosure.slice(0, summaryEnd);
-    const detail = disclosure.slice(summaryEnd);
-
-    expect(summaryEnd).toBeGreaterThan(-1);
-    expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
-    expect(summary).toContain(summaryParagraph);
-    expect(summary).not.toContain(detailParagraph);
-    expect(summary).not.toContain(finalParagraph);
-    expect(detail).toContain(detailParagraph);
-    expect(detail).toContain(finalParagraph);
-  });
-
-  it('renders a metadata summary alone in normal message-content markup without a disclosure', () => {
-    const providerSummary = 'The provider supplied the complete summary.';
-    const unstructuredContent = 'Event content does not substitute for detail.';
-    const message = baseMessage({
-      timelineItems: [{
-        kind: 'stream_event',
-        id: 'summary-only-reasoning',
-        event: {
-          id: 'summary-only-reasoning',
-          eventType: 'reasoning_summary',
-          content: unstructuredContent,
-          metadata: { summary: providerSummary },
-        },
-      }],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).toContain('class="message-content reasoning-event-content entry__content"');
-    expect(html).toContain(providerSummary);
-    expect(html).not.toContain(unstructuredContent);
-    expect(html).not.toContain('reasoning-event-disclosure');
-  });
-  it('renders explicit reasoning summary and detail metadata in the classic fallback stream', () => {
-    const providerSummary = 'The provider supplied this summary.';
-    const providerDetail = 'The fallback preserved the detailed trace.';
-    const unstructuredContent = 'This event content must never be rendered.';
-    const message = baseMessage({
-      timelineItems: undefined,
-      streamEvents: [{
-        id: 'fallback-reasoning-summary',
-        eventType: 'reasoning_summary',
-        content: unstructuredContent,
-        metadata: { summary: providerSummary, detail: providerDetail },
-      }],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const eventStart = html.indexOf('message-stream-event');
-    const assistantStart = html.indexOf('Hello world');
-    const summaryPos = html.indexOf(providerSummary);
-    const detailPos = html.indexOf(providerDetail);
-
-    expect(eventStart).toBeGreaterThan(-1);
-    expect(summaryPos).toBeGreaterThan(eventStart);
-    expect(detailPos).toBeGreaterThan(summaryPos);
-    expect(detailPos).toBeLessThan(assistantStart);
-    expect(html).not.toContain(unstructuredContent);
-  });
-});
-
-describe('user message attachments', () => {
-  it('renders a chip with the file-type badge, size, and a full-name tooltip', () => {
-    const message = baseMessage({
-      role: 'user',
-      content: 'i think i added a file lol',
-      attachments: [
-        { id: 'att_1', name: 'AEGEAN_AIRLINES_SA_Booking_Confirmation.pdf', mime_type: 'application/pdf', size_bytes: 294275, error: null },
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).toContain('message-attachment-chip');
-    expect(html).toContain('AEGEAN_AIRLINES_SA_Booking_Confirmation.pdf');
-    // 294275 bytes -> 287 KB (no decimal once the value is >= 10)
-    expect(html).toContain('287 KB');
-    expect(html).toContain('PDF');
-    expect(html).toContain('title="AEGEAN_AIRLINES_SA_Booking_Confirmation.pdf — 287 KB"');
-  });
-
-  it('surfaces the extraction error instead of a size in the chip and tooltip', () => {
-    const message = baseMessage({
-      role: 'user',
-      content: 'oops',
-      attachments: [
-        { id: 'att_2', name: 'weird.bin', mime_type: 'application/octet-stream', size_bytes: 10, error: 'Unsupported binary format' },
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).toContain('message-attachment-chip--error');
-    expect(html).toContain('Unsupported binary format');
-    expect(html).toContain('title="weird.bin — Unsupported binary format"');
-  });
-
-  it('renders no attachments section when the message has none', () => {
-    const message = baseMessage({ role: 'user', content: 'hi', attachments: [] });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).not.toContain('message-attachments');
-  });
+describe('terminal replies without tool work', () => {
+  it.each(['failed', 'cancelled', 'interrupted'])(
+    'keeps provider %s visible even when there is no work disclosure',
+    async (status) => {
+      await renderMessage(message(undefined, {
+        content: 'Partial answer',
+        responseStatus: status,
+      }));
+      expect(host.querySelector('section[aria-label="Assistant work"]')).toBeNull();
+      expect(host.querySelector('[role="status"]')?.textContent.toLowerCase()).toBe(status);
+      expect(host.textContent).toContain('Partial answer');
+    },
+  );
 });

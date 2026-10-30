@@ -70,6 +70,31 @@ describe('TimelineItem assistant messages', () => {
     expect(terminalMarkup).toContain('<p><strong>formatted terminal content</strong></p>');
   });
 
+  it('renders the provider token breakdown for an assistant row, including zero', () => {
+    const markup = renderToStaticMarkup(React.createElement(TimelineItem, {
+      item: assistantItem({
+        isStreaming: false,
+        tokenCount: 0,
+        finalCallTokenCount: 0,
+      }),
+      itemIndex: 0,
+    }));
+
+    expect(markup).toContain('0 output tokens');
+    expect(markup).toContain('Whole response');
+    expect(markup).toContain('Final model call');
+  });
+
+  it('retains the scheduled assistant badge on a rebuilt timeline row', () => {
+    const markup = renderToStaticMarkup(React.createElement(TimelineItem, {
+      item: assistantItem({ isScheduled: true }),
+      itemIndex: 0,
+    }));
+
+    expect(markup).toContain('scheduled-badge');
+    expect(markup).toContain('Scheduled');
+  });
+
   it('renders sanitized reasoning disclosure content without throwing', () => {
     const bodyHtml = '<strong>Reasoning summary</strong>';
     const reasoningDetailHtml = '<p>Reasoning detail</p>';

@@ -1,0 +1,59 @@
+.usage {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-muted);
+  cursor: help;
+  outline: none;
+}
+
+.usage:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--color-focus-ring, var(--color-primary));
+  outline-offset: 2px;
+}
+
+.tooltip {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 7px);
+  right: 0;
+  display: none;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 24px));
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface-raised, var(--color-surface));
+  box-shadow: var(--shadow-md);
+  color: var(--color-text);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.usage:hover .tooltip,
+.usage:focus .tooltip {
+  display: grid;
+  gap: 4px;
+}
+
+.tooltipTitle {
+  color: var(--color-text-secondary);
+  font-weight: 600;
+}
+
+.tooltipRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.tooltipRow span:last-child {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.tooltipDetail {
+  color: var(--color-text-muted);
+}

@@ -59,6 +59,15 @@ to the backend and receives browser application data through two SSE roles:
     `checkpoint_id` selects an exact checkpoint. The standard item page stays
     bounded to 1–100 items; browser chat pages remain unchanged. `metadata` values
     may be non-strings.
+  - The existing `usage_update` stream event carries nullable `output_tokens`
+    (all root-model calls in this response) and `final_call_output_tokens`
+    (the visible final model call), plus canonical `response_status`.
+    These are provider-reported output, never transport-frame counts. Repaired
+    historical messages before the current user boundary are not current-turn
+    output. Missing counts stay unknown; explicit zero is preserved. Provider
+    incompleteness and native graph interrupts remain interrupted even if the
+    enclosing response transport completes. Existing `usage`/`context_usage`
+    metadata remain separate from this strict display contract.
 - `GET /v1/events` broadcasts runtime agent events to the backend.
 
 ### JavaScript execution

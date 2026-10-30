@@ -304,6 +304,39 @@ describe('mergeCanonicalMessages', () => {
     expect(merged[0]).toBe(localMessages[0]);
     expect(merged[1]).toBe(localMessages[1]);
   });
+
+  it('replaces a same-content terminal row when canonical output accounting arrives', () => {
+    const local = [{
+      id: 'local-answer',
+      role: 'assistant',
+      content: 'Done',
+      tokenCount: null,
+      finalCallTokenCount: null,
+      responseStatus: 'running',
+      contextUsage: null,
+    }];
+    const canonical = [{
+      id: 'canonical-answer',
+      role: 'assistant',
+      content: 'Done',
+      tokenCount: 30,
+      finalCallTokenCount: 8,
+      responseStatus: 'completed',
+      contextUsage: {
+        inputTokens: 90,
+        outputTokens: 8,
+        totalTokens: 98,
+        profileName: 'general',
+        deployment: 'gpt-a',
+        providerId: 'provider-a',
+      },
+    }];
+
+    const merged = mergeCanonicalMessages(local, canonical);
+
+    expect(merged).toEqual(canonical);
+    expect(merged[0]).toBe(canonical[0]);
+  });
 });
 
 describe('canonical assistant visual ownership', () => {

@@ -6,6 +6,8 @@ import json
 import re
 from typing import Any
 
+from src.progena.sessions.models import ResponseStatus
+
 # deepagents' execute footer; a truncation note may follow it, and offloaded
 # output puts it first, so match a whole line rather than the end of text.
 _EXECUTE_FAILURE = re.compile(r"^\[Command failed with exit code -?\d+\]$", re.MULTILINE)
@@ -30,6 +32,50 @@ def coerce_messages_list(messages: Any) -> list:
         return list(messages)
     except TypeError:
         return []
+
+
+def extract_response_status(msg: Any) -> ResponseStatus:
+    """Normalize persisted terminal provider state without inferring current activity."""
+    if isinstance(msg, dict):
+        raw_mapping = msg
+        additional_kwargs = msg.get("additional_kwargs")
+    else:
+        raw_mapping = {}
+        additional_kwargs = getattr(msg, "additional_kwargs", None)
+    response_metadata = (
+        msg.get("response_metadata")
+        if isinstance(msg, dict)
+        else getattr(msg, "response_metadata", None)
+    )
+    containers = (
+        response_metadata if isinstance(response_metadata, dict) else {},
+        additional_kwargs if isinstance(additional_kwargs, dict) else {},
+        raw_mapping,
+    )
+    for container in containers:
+        status = container.get("status")
+        if isinstance(status, str):
+            normalized = status.strip().lower().replace("_", "-")
+            if normalized in {"failed", "failure", "error", "errored", "rejected"}:
+                return "failed"
+            if normalized in {"cancelled", "canceled", "cancel", "aborted"}:
+                return "cancelled"
+            if normalized in {"interrupted", "interrupt", "stopped", "incomplete"}:
+                return "interrupted"
+            if normalized in {"completed", "complete", "succeeded", "success", "finished"}:
+                return "completed"
+        finish_reason = container.get("finish_reason")
+        if isinstance(finish_reason, str):
+            normalized = finish_reason.strip().lower().replace("_", "-")
+            if normalized in {"failed", "failure", "error", "content-filter"}:
+                return "failed"
+            if normalized in {"cancelled", "canceled", "cancel", "aborted"}:
+                return "cancelled"
+            if normalized in {"interrupted", "interrupt", "incomplete"}:
+                return "interrupted"
+            if normalized in {"stop", "stopped", "length", "completed", "complete"}:
+                return "completed"
+    return "unknown"
 
 
 def attach_reasoning_trace(
@@ -339,6 +385,31 @@ def extract_token_usage(msg: Any) -> dict[str, int] | None:
     return None
 
 
+def extract_output_token_count(msg: Any) -> int | None:
+    """Read explicit provider output usage; total-only usage is not output."""
+    for key in ("usage_metadata", "response_metadata"):
+        container = msg.get(key) if isinstance(msg, dict) else getattr(msg, key, None)
+        if isinstance(container, dict):
+            count = _output_tokens_from_container(container)
+            if count is not None:
+                return count
+    return None
+
+
+def _output_tokens_from_container(container: dict[str, Any]) -> int | None:
+    for key in ("output_tokens", "completion_tokens"):
+        count = container.get(key)
+        if type(count) is int and count >= 0:
+            return count
+    for key in ("usage", "token_usage"):
+        nested = container.get(key)
+        if isinstance(nested, dict):
+            count = _output_tokens_from_container(nested)
+            if count is not None:
+                return count
+    return None
+
+
 def extract_context_usage(msg: Any) -> dict[str, int | str] | None:
     """Return one complete model call's usage and persisted profile attribution.
 
@@ -606,6 +677,7 @@ __all__ = [
     "extract_message_text",
     "extract_reasoning_token_count",
     "extract_reasoning_trace",
+    "extract_response_status",
     "extract_token_usage",
     "get_last_ai_message",
     "summarize_message_schema",

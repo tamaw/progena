@@ -36,42 +36,6 @@ function rawStreamEvent(type, overrides = {}) {
   };
 }
 
-// ─── createLiveAssistantTurn ─────────────────────────────────────────────
-
-describe('createLiveAssistantTurn', () => {
-  it('returns a fresh turn with null assistantMessageId and empty timeline', () => {
-    const turn = createLiveAssistantTurn({ streamId: STREAM_ID, startedAt: NOW });
-    expect(turn).toEqual({
-      streamId: STREAM_ID,
-      startedAt: NOW,
-      assistantMessageId: null,
-      assistantTimestamp: null,
-      content: '',
-      tokenCount: 0,
-      reasoningText: '',
-      reasoningTokenCount: 0,
-      cacheReadTokenCount: 0,
-      contextUsage: null,
-      reasoningSummaryReceived: false,
-      streamEvents: [],
-      displayAgentName: '',
-      displayModelName: '',
-      displayToolCalls: [],
-      timelineItems: [],
-      summaryActivities: [],
-      lastActivity: null,
-      pendingCommentary: '',
-      isStreaming: true,
-      error: false,
-    });
-  });
-
-  it('preserves the given streamId and startedAt', () => {
-    const turn = createLiveAssistantTurn({ streamId: 'abc', startedAt: 42 });
-    expect(turn.streamId).toBe('abc');
-    expect(turn.startedAt).toBe(42);
-  });
-});
 
 // ─── applyAssistantMetadata ──────────────────────────────────────────────
 
@@ -187,6 +151,8 @@ describe('applyAssistantStreamEvent', () => {
     const turn = applyAssistantChunk(baseTurn(), 'Done', NOW);
     const next = applyAssistantStreamEvent(turn, rawStreamEvent('usage_update', {
       metadata: {
+        output_tokens: null,
+        final_call_output_tokens: null,
         context_usage: {
           input_tokens: 120,
           output_tokens: 30,
@@ -199,9 +165,70 @@ describe('applyAssistantStreamEvent', () => {
     }), NOW);
 
     expect(next.timelineItems).toHaveLength(1);
+    expect(next.tokenCount).toBeNull();
+    expect(next.finalCallTokenCount).toBeNull();
     expect(next.contextUsage).toMatchObject({ totalTokens: 150, profileName: 'general' });
     expect(finalizeLiveAssistantTurn(next, { status: 'completed', now: NOW }).contextUsage)
       .toMatchObject({ totalTokens: 150, providerId: 'provider-a' });
+  });
+
+  it('uses terminal provider output totals once instead of transport chunk counts', () => {
+    const chunks = applyAssistantChunk(applyAssistantChunk(baseTurn(), 'First ', NOW), 'second', NOW + 1);
+    const next = applyAssistantStreamEvent(chunks, rawStreamEvent('usage_update', {
+      metadata: {
+        output_tokens: 18,
+        final_call_output_tokens: 7,
+      },
+    }), NOW + 2);
+
+    expect(chunks.tokenCount).toBeNull();
+    expect(next.tokenCount).toBe(18);
+    expect(next.finalCallTokenCount).toBe(7);
+    expect(next.timelineItems[0]).toMatchObject({ tokenCount: 18, finalCallTokenCount: 7 });
+  });
+
+  it('keeps provider interruption authoritative when the transport completes', () => {
+    const live = applyAssistantChunk(baseTurn(), 'Partial answer', NOW);
+    const withTerminalUsage = applyAssistantStreamEvent(live, rawStreamEvent('usage_update', {
+      metadata: {
+        output_tokens: 0,
+        final_call_output_tokens: 0,
+        response_status: 'interrupted',
+      },
+    }), NOW + 1);
+    const committed = finalizeLiveAssistantTurn(withTerminalUsage, {
+      status: 'completed',
+      now: NOW + 2,
+    });
+
+    expect(committed).toMatchObject({
+      content: 'Partial answer',
+      tokenCount: 0,
+      finalCallTokenCount: 0,
+      usageProvenance: 'provider',
+      responseStatus: 'interrupted',
+      responseTimestamp: null,
+    });
+    expect(committed.timelineItems[0]).toMatchObject({
+      tokenCount: 0,
+      finalCallTokenCount: 0,
+      usageProvenance: 'provider',
+      responseStatus: 'interrupted',
+    });
+  });
+
+  it('does not turn an explicit unknown provider status into completion', () => {
+    const live = applyAssistantStreamEvent(
+      applyAssistantChunk(baseTurn(), 'Answer', NOW),
+      rawStreamEvent('usage_update', { metadata: { response_status: 'unknown' } }),
+      NOW + 1,
+    );
+    const committed = finalizeLiveAssistantTurn(live, { status: 'completed', now: NOW + 2 });
+
+    expect(committed).toMatchObject({
+      responseStatus: 'unknown',
+      responseTimestamp: null,
+    });
   });
 
   it('appends a stream_event timeline item for todos_update', () => {
@@ -1323,19 +1350,19 @@ describe('applyA2ACallEvent', () => {
 // ─── applyAssistantChunk ─────────────────────────────────────────────────
 
 describe('applyAssistantChunk', () => {
-  it('appends content and increments tokenCount', () => {
+  it('appends content without treating transport chunks as token counts', () => {
     const turn = baseTurn();
     const next = applyAssistantChunk(turn, 'Hello', NOW);
     expect(next.content).toBe('Hello');
-    expect(next.tokenCount).toBe(1);
+    expect(next.tokenCount).toBeNull();
   });
 
-  it('accumulates multiple chunks', () => {
+  it('keeps usage unknown across multiple chunks', () => {
     const turn = baseTurn();
     const a = applyAssistantChunk(turn, 'Hello ', NOW);
     const b = applyAssistantChunk(a, 'World', NOW);
     expect(b.content).toBe('Hello World');
-    expect(b.tokenCount).toBe(2);
+    expect(b.tokenCount).toBeNull();
   });
 
   // Acceptance: first chunk creates assistant row and stamps assistantTimestamp.
@@ -1365,13 +1392,13 @@ describe('applyAssistantChunk', () => {
     expect(next.timelineItems[0].displayAgentName).toBe('CustomAgent');
   });
 
-  it('on subsequent chunks: updates the existing assistant_message timeline item content/tokenCount', () => {
+  it('on subsequent chunks: updates the existing assistant_message while usage remains unknown', () => {
     const turn = baseTurn();
     const first = applyAssistantChunk(turn, 'Hello ', NOW);
     const second = applyAssistantChunk(first, 'World', NOW);
     expect(second.timelineItems).toHaveLength(1);
     expect(second.timelineItems[0].content).toBe('Hello World');
-    expect(second.timelineItems[0].tokenCount).toBe(2);
+    expect(second.timelineItems[0].tokenCount).toBeNull();
   });
 
   it('on subsequent chunks: preserves stream-event identity while replacing the assistant row immutably', () => {
@@ -1387,18 +1414,18 @@ describe('applyAssistantChunk', () => {
     const nextAssistant = second.timelineItems.find((item) => item.kind === 'assistant_message');
 
     expect(second.content).toBe('Answer more');
-    expect(second.tokenCount).toBe(2);
+    expect(second.tokenCount).toBeNull();
     expect(second.timelineItems).not.toBe(priorTimelineItems);
     expect(nextStreamEvent).toBe(priorStreamEvent);
     expect(nextAssistant).not.toBe(priorAssistant);
     expect(nextAssistant.content).toBe('Answer more');
-    expect(nextAssistant.tokenCount).toBe(2);
+    expect(nextAssistant.tokenCount).toBeNull();
 
     expect(first.content).toBe('Answer');
-    expect(first.tokenCount).toBe(1);
+    expect(first.tokenCount).toBeNull();
     expect(first.timelineItems).toBe(priorTimelineItems);
     expect(priorAssistant.content).toBe('Answer');
-    expect(priorAssistant.tokenCount).toBe(1);
+    expect(priorAssistant.tokenCount).toBeNull();
   });
 
   it('does NOT overwrite assistantMessageId or assistantTimestamp on subsequent chunks', () => {
@@ -1426,7 +1453,7 @@ describe('applyAssistantChunk', () => {
     const copy = { ...turn, timelineItems: [...turn.timelineItems] };
     applyAssistantChunk(turn, 'data', NOW);
     expect(turn.content).toBe('');
-    expect(turn.tokenCount).toBe(0);
+    expect(turn.tokenCount).toBeNull();
     expect(turn.assistantMessageId).toBeNull();
     expect(turn.timelineItems).toEqual(copy.timelineItems);
   });
@@ -1962,6 +1989,17 @@ describe('finalizeLiveAssistantTurn', () => {
     expect(finalizeLiveAssistantTurn(null, { status: 'completed', now: NOW })).toBeNull();
     expect(finalizeLiveAssistantTurn(undefined, { status: 'completed', now: NOW })).toBeNull();
   });
+  it.each([
+    ['completed', 'completed'],
+    ['error', 'failed'],
+    ['cancelled', 'cancelled'],
+    ['interrupted', 'interrupted'],
+    ['unrecognised-terminal-event', 'unknown'],
+  ])('records responseStatus from the terminal lifecycle event: %s', (status, responseStatus) => {
+    const result = finalizeLiveAssistantTurn(applyAssistantChunk(baseTurn(), 'Answer', NOW), { status, now: NOW });
+    expect(result.responseStatus).toBe(responseStatus);
+  });
+
 
   // Acceptance: completion with output returns a normal committed message.
   describe('status = completed', () => {
@@ -2187,4 +2225,21 @@ describe('finalizeLiveAssistantTurn', () => {
     const assistantItem = result.timelineItems.find((i) => i.kind === 'assistant_message');
     expect(assistantItem.isStreaming).toBe(false);
   });
+});
+
+
+describe('spectator terminal evidence', () => {
+  it.each(['completed', 'failed', 'cancelled', 'interrupted'])(
+    'retains provider %s when the spectator transport has no terminal status',
+    (status) => {
+      let turn = applyAssistantChunk(baseTurn(), 'Observed answer');
+      turn = applyAssistantStreamEvent(turn, rawStreamEvent('usage_update', {
+        metadata: { output_tokens: 7, final_call_output_tokens: 7, response_status: status },
+      }));
+      const committed = finalizeLiveAssistantTurn(turn, { status: 'unknown', now: NOW });
+      expect(committed.responseStatus).toBe(status);
+      expect(committed.timelineItems.find((item) => item.kind === 'assistant_message').responseStatus).toBe(status);
+      expect(committed.responseTimestamp).toBe(status === 'completed' ? NOW : null);
+    },
+  );
 });

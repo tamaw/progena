@@ -93,6 +93,47 @@ describe('normalizeBackendChatMessage', () => {
     });
   });
 
+  it('preserves zero provider output counts and the terminal response status', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm-output-zero',
+      role: 'assistant',
+      content: 'No output billed',
+      token_count: 0,
+      final_call_token_count: 0,
+      response_status: 'completed',
+    }, 0);
+
+    expect(m).toMatchObject({
+      tokenCount: 0,
+      finalCallTokenCount: 0,
+      usageProvenance: 'provider',
+      responseStatus: 'completed',
+    });
+    expect(m.timelineItems.at(-1)).toMatchObject({
+      tokenCount: 0,
+      finalCallTokenCount: 0,
+      usageProvenance: 'provider',
+      responseStatus: 'completed',
+    });
+  });
+
+  it('keeps an incomplete provider response interrupted after reload even with body text', () => {
+    const message = normalizeBackendChatMessage({
+      id: 'm-incomplete',
+      role: 'assistant',
+      content: 'Partial provider answer',
+      created_at: '2026-10-30T12:00:00Z',
+      response_status: 'incomplete',
+    }, 0);
+
+    expect(message).toMatchObject({
+      content: 'Partial provider answer',
+      responseStatus: 'interrupted',
+      responseTimestamp: null,
+      usageProvenance: 'provider',
+    });
+  });
+
   it('preserves optional assistant display metadata', () => {
     const m = normalizeBackendChatMessage({
       id: 'm3',

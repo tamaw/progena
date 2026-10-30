@@ -166,13 +166,13 @@ describe('useChatApi dedicated response transport', () => {
 
     expect(source.closed).toBe(true);
     expect(onComplete).toHaveBeenCalledOnce();
-    expect(onComplete).toHaveBeenCalledWith('');
+    expect(onComplete).toHaveBeenCalledWith('completed');
     expect(onError).not.toHaveBeenCalled();
     expect(observed).toEqual([
       ['delta', 'First '],
       ['event', 'tool_call', 'Searching'],
       ['delta', 'answer'],
-      ['complete', ''],
+      ['complete', 'completed'],
     ]);
   });
 
@@ -240,7 +240,7 @@ describe('useChatApi dedicated response transport', () => {
       ['delta', 'First'],
       ['delta', ' late'],
       ['event', 'tool_result', 'arrived after terminal'],
-      ['complete', ''],
+      ['complete', 'completed'],
     ]);
   });
 
@@ -279,7 +279,7 @@ describe('useChatApi dedicated response transport', () => {
 
     expect(settled).toBe(true);
     expect(onComplete).toHaveBeenCalledOnce();
-    expect(onComplete).toHaveBeenCalledWith('');
+    expect(onComplete).toHaveBeenCalledWith('completed');
     expect(onError).not.toHaveBeenCalled();
   });
 

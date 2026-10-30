@@ -9,7 +9,10 @@ import {
   splitGroupReasoning,
   selectRecentLines,
   splitReasoningSections,
+  normalizeTurnResponseStatus,
+  summarizeTurnWork,
   summarizeWork,
+  turnWorkHeader,
   workGroupHeader,
 } from '@frontend/features/chat/models/workGroupModel';
 
@@ -219,6 +222,29 @@ describe('workGroupHeader', () => {
   it('describes headless reasoning-only work as thinking', () => {
     const items = [eventItem('1', 'reasoning_summary', {}, 1_000, 'plain reasoning')];
     expect(headerFor(items, { endedAt: 6_000 }).title).toBe('Thought for 5s');
+  });
+});
+
+describe('turn work summary', () => {
+  const items = [
+    eventItem('1', 'tool_start', { tool_name: 'ls', tool_call_id: 'a' }, 1_000),
+    eventItem('2', 'tool_error', { tool_name: 'ls', tool_call_id: 'a' }, 2_000),
+  ];
+
+  it('keeps a retried tool failure as evidence without changing completed response state', () => {
+    const summary = summarizeTurnWork([{ items }], items, 5_000);
+    expect(summary).toMatchObject({ elapsedMs: 4_000, toolCount: 1, failedCount: 1 });
+    expect(turnWorkHeader({ responseStatus: 'completed', running: false, summary }))
+      .toEqual({ title: 'Worked for 4s', meta: '1 tool', badge: 'Completed' });
+  });
+
+  it('renders only explicit terminal states and keeps unknown history neutral', () => {
+    const summary = summarizeTurnWork([], items, null);
+    expect(normalizeTurnResponseStatus('old-state')).toBe('unknown');
+    expect(turnWorkHeader({ responseStatus: 'failed', running: false, summary }).title).toBe('Work failed');
+    expect(turnWorkHeader({ responseStatus: 'cancelled', running: false, summary }).title).toBe('Work cancelled');
+    expect(turnWorkHeader({ responseStatus: 'interrupted', running: false, summary }).title).toBe('Work interrupted');
+    expect(turnWorkHeader({ responseStatus: 'unknown', running: false, summary }).title).toBe('Work');
   });
 });
 

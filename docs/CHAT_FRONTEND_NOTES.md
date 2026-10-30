@@ -102,6 +102,43 @@ Auto-selection should run once after the correlated session snapshot hydrates
 the Redux list, respecting pinned and bucket ordering; it must not reselect on
 unrelated replay or later global updates.
 
+## Message output usage and completed work
+
+Message `tokenCount` is provider-reported output for the root-model calls grouped
+with that reply; `finalCallTokenCount` is the final visible model call's output.
+The tooltip separates the response total, intermediate calls and final call.
+Input and delegated-agent usage are excluded; reasoning is a subset of output,
+not a second amount to add. A known zero is valid. Missing usage remains unknown:
+neither stream-chunk counts nor text-length estimates may become exact output
+usage. A known final-call count remains visible if an earlier call makes the
+whole-response total unavailable.
+
+The existing dedicated-stream `usage_update` carries authoritative nullable
+`output_tokens`, `final_call_output_tokens` and canonical `response_status`.
+Provider/native interruption survives a completed transport callback. Actual
+transport errors and cancellation remain terminal. Canonical reconciliation
+compares usage and status as well as content, so unchanged text can still receive
+correct completed counts.
+
+Scratch history and handoff messages retain exact counts only with
+`usageProvenance: 'provider'`. Legacy local transport-frame counters are cleared
+from both the message and any denormalized assistant timeline rows; text and
+other transcript data remain available. A canonical history read supplies fresh
+provider counts. This does not authorize storing backend transcripts locally.
+
+All assistant rendering uses the same timeline path. Root work is one outer
+keyboard-operable disclosure using the existing work-summary row styling.
+Completed work starts collapsed; the detailed reasoning sections/tool rows stay
+inside. Delegated-agent cards, the answer and conversation-summary markers remain
+outside this disclosure. Native reasoning headings remain verbatim inside;
+they are not rewritten as evidence that an action succeeded.
+
+Work state comes from actual response/provider/native interrupt evidence:
+completed, failed, cancelled, interrupted, or neutral unknown. A failed tool is
+shown as a failure count, not automatically as a failed whole response. Elapsed
+work time remains the transcript span through answer start, not tool CPU time.
+
+
 ## Conversation summaries
 
 Native summarization uses the existing response-content activity and committed

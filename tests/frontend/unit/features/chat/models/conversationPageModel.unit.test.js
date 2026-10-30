@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeStoredMessage } from '@frontend/features/chat/models/conversationPageModel';
+import { normalizeStoredMessage, stripEphemeralStreamEvents } from '@frontend/features/chat/models/conversationPageModel';
 import {
   applyAssistantChunk,
   createLiveAssistantTurn,
@@ -25,5 +25,79 @@ describe('normalizeStoredMessage', () => {
   it('rebuilds stored timelines from persisted fields by default', () => {
     const restored = normalizeStoredMessage(failedTurnWithPartialAnswer(), 0);
     expect(JSON.stringify(restored.timelineItems)).not.toContain('partial answer');
+  });
+
+  it('keeps known zero provider output usage and response status through storage normalization', () => {
+    const restored = normalizeStoredMessage({
+      id: 'stored-answer',
+      role: 'assistant',
+      content: 'Done',
+      timestamp: NOW,
+      tokenCount: 0,
+      finalCallTokenCount: 0,
+      usageProvenance: 'provider',
+      responseStatus: 'completed',
+    }, 0);
+
+    expect(restored).toMatchObject({
+      tokenCount: 0,
+      finalCallTokenCount: 0,
+      usageProvenance: 'provider',
+      responseStatus: 'completed',
+    });
+    expect(restored.timelineItems.at(-1)).toMatchObject({
+      tokenCount: 0,
+      finalCallTokenCount: 0,
+      usageProvenance: 'provider',
+      responseStatus: 'completed',
+    });
+  });
+
+  it('invalidates old serialized chunk counters, including denormalized timelines', () => {
+    const restored = normalizeStoredMessage({
+      id: 'old-chunk-counter',
+      role: 'assistant',
+      content: 'Done',
+      timestamp: NOW,
+      tokenCount: 12,
+      finalCallTokenCount: 3,
+      timelineItems: [{
+        kind: 'assistant_message',
+        id: 'old-chunk-counter',
+        tokenCount: 12,
+        finalCallTokenCount: 3,
+      }],
+    }, 0, { preserveTimeline: true });
+
+    expect(restored).toMatchObject({
+      tokenCount: null,
+      finalCallTokenCount: null,
+      usageProvenance: null,
+      responseStatus: 'unknown',
+    });
+    expect(restored.timelineItems[0]).not.toHaveProperty('tokenCount');
+    expect(restored.timelineItems[0]).not.toHaveProperty('finalCallTokenCount');
+  });
+
+  it('persists only provider-provenanced output counts in the local cache', () => {
+    const oldSerialized = stripEphemeralStreamEvents({
+      id: 'old-cache',
+      tokenCount: 8,
+      finalCallTokenCount: 2,
+    });
+    const providerUsage = stripEphemeralStreamEvents({
+      id: 'provider-cache',
+      tokenCount: 0,
+      finalCallTokenCount: 0,
+      usageProvenance: 'provider',
+    });
+
+    expect(oldSerialized).not.toHaveProperty('tokenCount');
+    expect(oldSerialized).not.toHaveProperty('finalCallTokenCount');
+    expect(providerUsage).toMatchObject({
+      tokenCount: 0,
+      finalCallTokenCount: 0,
+      usageProvenance: 'provider',
+    });
   });
 });
