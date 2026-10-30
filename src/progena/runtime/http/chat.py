@@ -819,17 +819,28 @@ class RuntimeChatService:
         include_summaries = "progena.conversation_summaries" in include_set
 
         checkpoint_id = request.query.get("checkpoint_id") or None
-        conversation = await load_conversation(
-            graph.checkpointer,
-            conversation_id,
-            checkpoint_id=checkpoint_id,
-            include_summaries=include_summaries,
-            include_subagents=include_summaries,
-        )
-        if conversation is None:
-            return _json_error("Conversation not found", "not_found", 404)
+        if include_summaries:
+            conversation = await load_conversation(
+                graph.checkpointer,
+                conversation_id,
+                checkpoint_id=checkpoint_id,
+                include_summaries=True,
+                include_subagents=True,
+            )
+            if conversation is None:
+                return _json_error("Conversation not found", "not_found", 404)
+            messages = conversation.root.messages
+            summaries = conversation.summaries
+        else:
+            config: dict[str, Any] = {"configurable": {"thread_id": conversation_id}}
+            if checkpoint_id:
+                config["configurable"]["checkpoint_id"] = checkpoint_id
+            snapshot = await graph.aget_state(config)
+            if snapshot.created_at is None:
+                return _json_error("Conversation not found", "not_found", 404)
+            messages = snapshot.values.get("messages") or []
+            summaries = ()
 
-        messages = conversation.root.messages
         sourced_items = conversation_items_with_sources(messages, conversation_id)
         try:
             page, meta = paginate_items(
@@ -847,7 +858,7 @@ class RuntimeChatService:
         payload: dict[str, Any] = {**meta, "data": page}
         if include_summaries:
             payload["progena_summary_occurrences"] = [
-                _summary_occurrence_payload(summary) for summary in conversation.summaries
+                _summary_occurrence_payload(summary) for summary in summaries
             ]
         return web.json_response(make_json_safe(payload))
 

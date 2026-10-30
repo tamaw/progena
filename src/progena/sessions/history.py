@@ -60,6 +60,9 @@ class _LoadedThread:
     thread: ThreadMessages
     checkpoint_id: str
     summaries: tuple[SummaryOccurrence, ...]
+    checkpoint_ids: frozenset[str]
+    checkpoint_time: datetime | None
+    history: tuple[CheckpointTuple, ...]
 
 
 @dataclass(frozen=True)
@@ -108,12 +111,9 @@ async def load_conversation(
             if marker is not None:
                 summaries.append(marker)
     if include_subagents:
-        for tool_call_id, ns in (await _subagent_namespaces(checkpointer, thread_id)).items():
-            loaded = await _load_thread(
-                checkpointer, thread_id, ns, include_summaries=include_summaries
-            )
-            if loaded is None:
-                continue
+        for tool_call_id, loaded in (
+            await _selected_subagent_threads(checkpointer, thread_id, root, include_summaries)
+        ).items():
             subagents[tool_call_id] = loaded.thread
             if not include_summaries:
                 continue
@@ -146,37 +146,184 @@ async def _load_thread(
     checkpoint_id: str | None = None,
     include_summaries: bool = False,
 ) -> _LoadedThread | None:
-    history = [t async for t in checkpointer.alist(_config(thread_id, ns))]  # newest first
-    if checkpoint_id is not None:
-        checkpoint_index = next(
-            (
-                index
-                for index, checkpoint in enumerate(history)
-                if _checkpoint_id(checkpoint) == checkpoint_id
-            ),
-            None,
-        )
-        if checkpoint_index is None:
-            return None
-        history = history[checkpoint_index:]
-    if not history:
+    tip = await checkpointer.aget_tuple(_config(thread_id, ns, checkpoint_id))
+    if tip is None:
         return None
-    tip = history[0]
+    history = await _checkpoint_ancestry(checkpointer, thread_id, ns, tip)
+    chronological_history = tuple(reversed(history))
     channels, _ = await achannels_from_checkpoint(
         _MESSAGES_SPECS, tip.checkpoint, saver=checkpointer, config=tip.config
     )
     messages = channels["messages"].get() if channels["messages"].is_available() else []
     thread = ThreadMessages(
         messages=list(messages),
-        committed_at=_commit_times(history[::-1]),
+        committed_at=_commit_times(list(chronological_history)),
         # An unnamed subagent namespace gets "" so the renderer uses the task's subagent_type.
         nick=str(tip.metadata.get("lc_agent_name") or ("" if ns else DEFAULT_AGENT_NICK)),
     )
     return _LoadedThread(
         thread=thread,
         checkpoint_id=_checkpoint_id(tip),
-        summaries=tuple(_summary_occurrences(history[::-1], ns=ns)) if include_summaries else (),
+        summaries=(
+            tuple(_summary_occurrences(list(chronological_history), ns=ns))
+            if include_summaries
+            else ()
+        ),
+        checkpoint_ids=frozenset(
+            _checkpoint_id(checkpoint) for checkpoint in chronological_history
+        ),
+        checkpoint_time=_checkpoint_time(tip),
+        history=chronological_history,
     )
+
+
+async def _checkpoint_ancestry(
+    checkpointer: Any,
+    thread_id: str,
+    ns: str,
+    tip: CheckpointTuple,
+) -> list[CheckpointTuple]:
+    """Return one checkpoint's local ancestor chain, newest first.
+
+    Listing a namespace also returns forked checkpoints.  Following native
+    ``parent_config`` instead keeps a historical render on the requested
+    checkpoint's actual ancestry.
+    """
+    # Batch native checkpoint rows; walking parents with aget_tuple would add
+    # one database round trip per historical step.
+    checkpoints = {
+        _checkpoint_id(checkpoint): checkpoint
+        async for checkpoint in checkpointer.alist(_config(thread_id, ns))
+    }
+    history = [tip]
+    seen = {_checkpoint_id(tip)}
+    current = tip
+    while True:
+        parent_config = getattr(current, "parent_config", None)
+        configurable = (
+            parent_config.get("configurable") if isinstance(parent_config, Mapping) else None
+        )
+        if not isinstance(configurable, Mapping):
+            break
+        parent_id = configurable.get("checkpoint_id")
+        if (
+            not isinstance(parent_id, str)
+            or not parent_id
+            or parent_id in seen
+            or configurable.get("thread_id") != thread_id
+            or configurable.get("checkpoint_ns", "") != ns
+        ):
+            break
+        parent = checkpoints.get(parent_id)
+        if parent is None:
+            break
+        history.append(parent)
+        seen.add(parent_id)
+        current = parent
+    return history
+
+
+async def _selected_subagent_threads(
+    checkpointer: Any,
+    thread_id: str,
+    root: _LoadedThread,
+    include_summaries: bool,
+) -> dict[str, _LoadedThread]:
+    """Resolve native child scopes for history or an immutable summary view.
+
+    Summary reads bound child tips to the parent's timestamp so their root
+    revision is cacheable. Live trace reads retain independently advancing child
+    state; both views require the child's native parent to belong to the lineage.
+    """
+    checkpoints_by_ns: dict[str, list[CheckpointTuple]] = {}
+    async for checkpoint in checkpointer.alist({"configurable": {"thread_id": thread_id}}):
+        ns = _checkpoint_namespace(checkpoint)
+        if ns:
+            checkpoints_by_ns.setdefault(ns, []).append(checkpoint)
+
+    selected = {"": root}
+    for ns in sorted(checkpoints_by_ns, key=lambda value: (value.count("|"), value)):
+        parent_ns, separator, _leaf = ns.rpartition("|")
+        if not separator:
+            parent_ns = ""
+        parent = selected.get(parent_ns)
+        if parent is None or parent.checkpoint_time is None:
+            continue
+        candidates = [
+            checkpoint
+            for checkpoint in checkpoints_by_ns[ns]
+            if (timestamp := _checkpoint_time(checkpoint)) is not None
+            and (not include_summaries or timestamp <= parent.checkpoint_time)
+            and _linked_parent_checkpoint(checkpoint, parent_ns) in parent.checkpoint_ids
+        ]
+        if not candidates:
+            continue
+        tip = max(candidates, key=_checkpoint_sort_key)
+        loaded = await _load_thread(
+            checkpointer,
+            thread_id,
+            ns,
+            checkpoint_id=_checkpoint_id(tip),
+            include_summaries=include_summaries,
+        )
+        if loaded is not None:
+            selected[ns] = loaded
+
+    subagents: dict[str, _LoadedThread] = {}
+    for ns, loaded in selected.items():
+        if not ns:
+            continue
+        parent_ns, separator, leaf = ns.rpartition("|")
+        if not separator:
+            parent_ns, leaf = "", ns
+        parent = selected.get(parent_ns)
+        tool_call_id = _task_tool_call_id(leaf, loaded, parent, parent_ns)
+        if tool_call_id is not None:
+            subagents[tool_call_id] = loaded
+    return subagents
+
+
+def _checkpoint_namespace(checkpoint: CheckpointTuple) -> str:
+    configurable = checkpoint.config.get("configurable", {})
+    return str(configurable.get("checkpoint_ns") or "")
+
+
+def _checkpoint_sort_key(checkpoint: CheckpointTuple) -> tuple[str, str]:
+    timestamp = _checkpoint_time(checkpoint)
+    return (timestamp.isoformat() if timestamp is not None else "", _checkpoint_id(checkpoint))
+
+
+def _linked_parent_checkpoint(checkpoint: CheckpointTuple, parent_ns: str) -> str | None:
+    parents = (
+        checkpoint.metadata.get("parents") if isinstance(checkpoint.metadata, Mapping) else None
+    )
+    parent_id = parents.get(parent_ns) if isinstance(parents, Mapping) else None
+    return parent_id if isinstance(parent_id, str) and parent_id else None
+
+
+def _task_tool_call_id(
+    leaf: str,
+    child: _LoadedThread,
+    parent: _LoadedThread | None,
+    parent_ns: str,
+) -> str | None:
+    task_id = leaf.partition(":")[2]
+    parent_id = _linked_parent_checkpoint(child.history[-1], parent_ns)
+    if not task_id or parent is None or parent_id is None:
+        return None
+    parent_checkpoint = next(
+        (checkpoint for checkpoint in parent.history if _checkpoint_id(checkpoint) == parent_id),
+        None,
+    )
+    if parent_checkpoint is None:
+        return None
+    for write_task, channel, value in parent_checkpoint.pending_writes or ():
+        if write_task != task_id or channel != "messages":
+            continue
+        for message in value if isinstance(value, list) else [value]:
+            if isinstance(message, ToolMessage):
+                return message.tool_call_id
+    return None
 
 
 def _checkpoint_id(checkpoint: CheckpointTuple) -> str:
@@ -286,35 +433,6 @@ def _commit_times(history: list[CheckpointTuple]) -> dict[str, datetime]:
                     assert committed_at is not None
                     times[message_id] = committed_at
     return times
-
-
-async def _subagent_namespaces(checkpointer: Any, thread_id: str) -> dict[str, str]:
-    """Map each ``task`` tool_call_id to the subagent namespace it ran in.
-
-    A subagent's namespace ends in ``tools:<pregel task id>``; its parent
-    checkpoint (``metadata.parents``) holds that task's pending ``messages``
-    write: the ToolMessage carrying the originating ``tool_call_id``.
-    """
-    first_seen: dict[str, CheckpointTuple] = {}
-    async for checkpoint in checkpointer.alist({"configurable": {"thread_id": thread_id}}):
-        ns = checkpoint.config["configurable"]["checkpoint_ns"]
-        if ns:
-            first_seen[ns] = checkpoint  # alist is newest first; keep the oldest.
-    links: dict[str, str] = {}
-    for ns, checkpoint in first_seen.items():
-        parent_ns, _, leaf = ns.rpartition("|")
-        task_id = leaf.partition(":")[2]
-        parent_id = (checkpoint.metadata.get("parents") or {}).get(parent_ns)
-        if not task_id or not parent_id:
-            continue
-        parent = await checkpointer.aget_tuple(_config(thread_id, parent_ns, parent_id))
-        for write_task, channel, value in (parent.pending_writes if parent else None) or ():
-            if write_task != task_id or channel != "messages":
-                continue
-            for message in value if isinstance(value, list) else [value]:
-                if isinstance(message, ToolMessage):
-                    links[message.tool_call_id] = ns
-    return links
 
 
 def _config(thread_id: str, ns: str, checkpoint_id: str | None = None) -> dict[str, Any]:

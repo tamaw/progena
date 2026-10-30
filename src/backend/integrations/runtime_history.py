@@ -65,11 +65,22 @@ class RuntimeConversationReader:
     def close(self) -> None:
         self._client.close()
 
-    def get_messages(self, thread_id: str, checkpoint_id: str | None = None) -> list[Any]:
-        """LangChain messages of ``thread_id`` at ``checkpoint_id`` (latest when None).
+    def get_messages(
+        self,
+        thread_id: str,
+        checkpoint_id: str | None = None,
+        *,
+        exact_revision: bool = False,
+    ) -> list[Any]:
+        """LangChain messages at ``checkpoint_id`` (latest when omitted).
 
-        An unknown conversation (runtime 404) has no messages.
+        Ordinary reads may use the last observed thread state during a runtime
+        outage. Callers combining messages with checkpoint-scoped data must
+        pass ``exact_revision=True`` so an unavailable revision cannot be
+        paired with data from another checkpoint.
         """
+        if exact_revision and not checkpoint_id:
+            raise RuntimeUnavailable("an exact message read requires a checkpoint id")
         cache_key = (thread_id, checkpoint_id or "")
         with self._lock:
             cached = self._cache.get(cache_key)
@@ -83,6 +94,8 @@ class RuntimeConversationReader:
                 raise RuntimeUnavailable("runtime marked unavailable")
             messages = self._fetch(thread_id, checkpoint_id)
         except RuntimeUnavailable:
+            if exact_revision:
+                raise
             with self._lock:
                 latest = self._latest_by_thread.get(thread_id)
             if latest is None:
@@ -101,10 +114,10 @@ class RuntimeConversationReader:
         self, thread_id: str, checkpoint_id: str | None = None
     ) -> list[RuntimeSummaryOccurrence]:
         """Committed summary occurrences for one immutable checkpoint revision."""
-        cache_key = (thread_id, checkpoint_id or "")
+        cache_key = (thread_id, checkpoint_id) if checkpoint_id else None
         with self._lock:
-            cached = self._summary_cache.get(cache_key)
-            if cached is not None:
+            cached = self._summary_cache.get(cache_key) if cache_key is not None else None
+            if cached is not None and cache_key is not None:
                 self._summary_cache.move_to_end(cache_key)
                 return list(cached)
             cooling_down = time.monotonic() < self._unavailable_until
@@ -113,11 +126,12 @@ class RuntimeConversationReader:
             raise RuntimeUnavailable("runtime marked unavailable")
         summaries = self._fetch_summary_occurrences(thread_id, checkpoint_id)
 
-        with self._lock:
-            self._summary_cache[cache_key] = tuple(summaries)
-            self._summary_cache.move_to_end(cache_key)
-            while len(self._summary_cache) > MAX_CACHE_ENTRIES:
-                self._summary_cache.popitem(last=False)
+        if cache_key is not None:
+            with self._lock:
+                self._summary_cache[cache_key] = tuple(summaries)
+                self._summary_cache.move_to_end(cache_key)
+                while len(self._summary_cache) > MAX_CACHE_ENTRIES:
+                    self._summary_cache.popitem(last=False)
         return list(summaries)
 
     def _fetch(self, thread_id: str, checkpoint_id: str | None) -> list[Any]:

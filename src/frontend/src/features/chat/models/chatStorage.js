@@ -1,3 +1,5 @@
+import { normalizeConversationSummaryMarkers } from './conversationSummaryModel';
+
 // localStorage plumbing for the conversation page. All chat-local preferences
 // flow through readJson/writeJsonOrRemove so the parse/validate/remove pattern
 // lives in exactly one place.
@@ -66,6 +68,7 @@ export function normalizeQuickChatHandoff(value) {
   return {
     messages: Array.isArray(value.messages) ? value.messages : [],
     threadId: typeof value.threadId === 'string' ? value.threadId : null,
+    summaryMarkers: normalizeConversationSummaryMarkers(value.summaryMarkers),
   };
 }
 

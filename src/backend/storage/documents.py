@@ -1098,15 +1098,24 @@ class PostgresDocumentStore:
         self._pool = self._create_pool()
         self._pool.open()
 
-    def _checkpoint_messages(self, *, thread_id: str, checkpoint_id: str | None) -> list[Any]:
+    def _checkpoint_messages(
+        self,
+        *,
+        thread_id: str,
+        checkpoint_id: str | None,
+        exact_revision: bool = False,
+    ) -> list[Any]:
         """Messages of one thread checkpoint, read through the runtime.
 
-        Raises ``RuntimeUnavailable`` when the runtime cannot be reached and
-        no earlier copy of the thread is known.
+        Exact revision reads never substitute a previously cached thread
+        snapshot: callers use them only when pairing messages with other
+        checkpoint-scoped state.
         """
         if self._conversation_reader is None:
             return []
-        return self._conversation_reader.get_messages(thread_id, checkpoint_id)
+        return self._conversation_reader.get_messages(
+            thread_id, checkpoint_id, exact_revision=exact_revision
+        )
 
     @contextmanager
     def _cursor(self):
@@ -2574,9 +2583,11 @@ class PostgresDocumentStore:
         resolved_thread_id = row.get("thread_id")
         if not isinstance(resolved_thread_id, str) or not resolved_thread_id:
             return None
-        resolved_checkpoint_id = str(row["checkpoint_id"]) if row.get("checkpoint_id") else None
+        resolved_checkpoint_id = str(row["checkpoint_id"])
         messages = self._checkpoint_messages(
-            thread_id=resolved_thread_id, checkpoint_id=resolved_checkpoint_id
+            thread_id=resolved_thread_id,
+            checkpoint_id=resolved_checkpoint_id,
+            exact_revision=include_summary_occurrences,
         )
         summary_occurrences: tuple[RuntimeSummaryOccurrence, ...] = ()
         if include_summary_occurrences and self._conversation_reader is not None:

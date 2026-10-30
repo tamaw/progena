@@ -41,6 +41,27 @@ describe('conversation summary markers', () => {
     ]);
   });
 
+  it('retains marker and array identity for equal canonical reconciliation', () => {
+    const current = mergeConversationSummaryMarkers([], [rootMarker]);
+    const reconciled = mergeConversationSummaryMarkers(current, [{ ...rootMarker }]);
+
+    expect(reconciled).toBe(current);
+    expect(reconciled[0]).toBe(current[0]);
+  });
+
+  it('retains unchanged descriptors when another marker arrives', () => {
+    const current = mergeConversationSummaryMarkers([], [rootMarker]);
+    const reconciled = mergeConversationSummaryMarkers(current, [{
+      ...rootMarker,
+      id: 'summary-2',
+      anchor_message_id: 'message-2',
+    }]);
+
+    expect(reconciled).not.toBe(current);
+    expect(reconciled[0]).toBe(current[0]);
+    expect(reconciled[1]).toMatchObject({ id: 'summary-2' });
+  });
+
   it('reserves subagent-scope markers for their matching task card', () => {
     const entries = buildConversationSummaryEntries(
       [{ id: 'message-1', role: 'assistant', content: 'Delegating' }],

@@ -189,6 +189,13 @@ the durable marker ID. Frontends clear live activity on finish/terminal and
 deduplicate committed markers by their history-projected ID. Expanded summaries
 are sanitized Markdown; collapsed markers do not parse the summary body.
 
+Summary-bearing details require messages and summaries from the same checkpoint
+revision; an unavailable exact message revision fails the read instead of using
+another revision's cached transcript. Child summaries are bounded by the selected
+parent checkpoint's timestamp and native ancestry. Independently advancing child
+state is not cached under an older root revision. Ordinary conversation-item reads
+retain the snapshot-only path; only the summaries include traverses history.
+
 No additional EventSource, polling, database notification channel, or independent
 compaction ledger is used. Summary timestamps describe checkpoint commits, not
 exact generation duration; no token-saving percentage is inferred.

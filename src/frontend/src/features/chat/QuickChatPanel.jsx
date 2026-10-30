@@ -62,6 +62,7 @@ export function QuickChatPanel({
   const [history, setHistory] = useState(quickChatMemory.history);
   const [summaryMarkers, setSummaryMarkers] = useState([]);
   const [scratchThreadId, setScratchThreadId] = useState(quickChatMemory.threadId);
+  const scratchThreadIdRef = useRef(quickChatMemory.threadId);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState('');
   const [composerSeed, setComposerSeed] = useState({ key: 0, message: '' });
@@ -154,6 +155,7 @@ export function QuickChatPanel({
   const startFreshQuickThread = useCallback(() => {
     const threadId = createUuid();
     sessionPromiseRef.current = Promise.resolve(threadId);
+    scratchThreadIdRef.current = threadId;
     if (isQuickChatMountedRef.current) {
       setScratchThreadId(threadId);
     }
@@ -167,9 +169,11 @@ export function QuickChatPanel({
   const rehydrateFromPersistedThread = useCallback(async (persistedThreadId) => {
     const epoch = quickChatEpochRef.current;
     const expectedActiveStreamId = activeStreamIdRef.current;
+    const expectedThreadId = scratchThreadIdRef.current;
     const isCurrent = () => isQuickChatMountedRef.current
       && quickChatEpochRef.current === epoch
-      && activeStreamIdRef.current === expectedActiveStreamId;
+      && activeStreamIdRef.current === expectedActiveStreamId
+      && scratchThreadIdRef.current === expectedThreadId;
     let normalizedMessages;
     let loadedSummaryMarkers = [];
     try {
@@ -198,10 +202,11 @@ export function QuickChatPanel({
     } catch {
       return !isCurrent();
     }
-    if (!normalizedMessages) return true;
+    if (!normalizedMessages || !isCurrent()) return true;
     setLiveAssistantTurn(null);
     setHistory(normalizedMessages);
-    setSummaryMarkers(loadedSummaryMarkers);
+    setSummaryMarkers((current) => mergeConversationSummaryMarkers(current, loadedSummaryMarkers));
+    scratchThreadIdRef.current = persistedThreadId;
     setScratchThreadId(persistedThreadId);
     sessionPromiseRef.current = Promise.resolve(persistedThreadId);
     lastPersistedThreadIdRef.current = persistedThreadId;
@@ -299,6 +304,7 @@ export function QuickChatPanel({
     quickChatMemory.history = history;
   }, [history]);
   useEffect(() => {
+    scratchThreadIdRef.current = scratchThreadId;
     quickChatMemory.threadId = scratchThreadId;
   }, [scratchThreadId]);
 
@@ -414,6 +420,8 @@ export function QuickChatPanel({
     let terminalStatus = 'failed';
     let terminalError = '';
     let terminalReceived = false;
+    let terminalThreadId = null;
+    let terminalReconciliationRequested = false;
     const isStale = () => activeStreamIdRef.current !== streamId;
 
     const commitLiveTurn = (status, errorMessage = '') => {
@@ -427,10 +435,18 @@ export function QuickChatPanel({
       }
       setLiveAssistantTurn(null);
       activeStreamIdRef.current = null;
+      if (terminalThreadId && !terminalReconciliationRequested) {
+        terminalReconciliationRequested = true;
+        // Release stream ownership before this non-blocking canonical read.
+        // Its epoch/thread guard discards a response superseded by a new turn,
+        // reset, unmount, or thread switch.
+        void rehydrateFromPersistedThread(terminalThreadId);
+      }
     };
 
     try {
       const threadId = await ensureQuickThread();
+      terminalThreadId = threadId;
       if (isStale()) return;
 
       // The page context stays in the agent's input but never becomes visible
@@ -490,12 +506,6 @@ export function QuickChatPanel({
       if (!terminalReceived && !isStale()) {
         terminalStatus = 'completed';
         commitLiveTurn('completed');
-      }
-      if (terminalStatus === 'completed' && !isStale()) {
-        // Completion only clears the transient callback row. Rehydrate the
-        // durable transcript so a genuinely committed summary marker can
-        // appear without inventing one from the callback's finished event.
-        void rehydrateFromPersistedThread(threadId);
       }
     } catch (sendError) {
       terminalStatus = 'failed';

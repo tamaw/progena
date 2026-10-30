@@ -68,7 +68,11 @@ describe('pinned session ids', () => {
 describe('loadQuickChatHandoff', () => {
   it('returns a normalized handoff', () => {
     localStorage.setItem('handoff', JSON.stringify({ messages: [{ id: 'm' }], threadId: 's' }));
-    expect(loadQuickChatHandoff('handoff')).toEqual({ messages: [{ id: 'm' }], threadId: 's' });
+    expect(loadQuickChatHandoff('handoff')).toEqual({
+      messages: [{ id: 'm' }],
+      threadId: 's',
+      summaryMarkers: [],
+    });
   });
   it('returns null for a missing or non-object payload', () => {
     expect(loadQuickChatHandoff('handoff')).toBeNull();
@@ -85,6 +89,24 @@ describe('normalizeQuickChatHandoff', () => {
     })).toEqual({
       messages: [{ id: 'm', streamEvents: [{ images: ['data:image/png;base64,rich'] }] }],
       threadId: 'thread-canonical',
+      summaryMarkers: [],
     });
+  });
+  it('normalizes committed markers for the handoff consumer', () => {
+    expect(normalizeQuickChatHandoff({
+      messages: [],
+      threadId: 'thread-canonical',
+      summaryMarkers: [{
+        id: 'summary-1',
+        anchor_message_id: 'message-1',
+        summary: 'Earlier context.',
+        scope: { kind: 'conversation', id: 'thread-canonical' },
+      }],
+    }).summaryMarkers).toEqual([{
+      id: 'summary-1',
+      anchorMessageId: 'message-1',
+      summary: 'Earlier context.',
+      scope: { kind: 'conversation', id: 'thread-canonical' },
+    }]);
   });
 });

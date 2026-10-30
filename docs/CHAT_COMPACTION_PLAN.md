@@ -1,6 +1,6 @@
 # Conversation-summary visibility
 
-Status: implemented locally; verification and remaining suite limitation below.
+Status: implemented; PR #462 reviewed and follow-up fixes verified locally.
 Branch: `feat/conversation-summary-visibility`, created fresh from fetched
 `origin/main` at `463494e0`.
 
@@ -112,11 +112,54 @@ are required. Merge and deployment remain explicitly human-authorized actions.
 - Python: Ruff and pinned Pyright passed; 85 targeted runtime/backend regressions
   passed after fixes. The earlier broad run had 2,372 passes, eight skipped
   knowledge-indexer tests requiring `PROGENA_DATABASE_URL`, and two failures.
-  The summary assertion was corrected and passed in the targeted rerun. The
-  remaining failure is outside changed code:
-  `routines/test_code_node.py::test_code_node_rejects_oversized_result_inside_the_sandbox`
-  raises QuickJS `DeadlockError` instead of the expected size-limit `JSError`.
-  The complete suite is therefore not reported green.
+  The summary assertion was corrected and passed in the targeted rerun. The other
+  failure was `routines/test_code_node.py::test_code_node_rejects_oversized_result_inside_the_sandbox`:
+  QuickJS raised `DeadlockError` instead of the size-limit `JSError`. That initial
+  broad run was not green; the follow-up sandbox fix is described below.
 
 Temporary smoke entry points were removed. No production mutation, migration,
 merge or deployment was performed.
+
+## PR review follow-up
+
+PR #462 review identified six actionable issues: ordinary item reads traversing
+full checkpoint history, child summaries escaping their root revision, stale
+message fallback mixed with exact summaries, unreachable own-turn Quick Chat
+reconciliation, dropped markers in persisted promotion, and historical render
+churn from equivalent summary arrays.
+
+The sandbox fix leaves the one-second deadline and 1 MiB cap unchanged. It
+rejects impossible UTF-16 lengths immediately, then counts additional UTF-8 bytes
+using native runs grouped by encoding width rather than scanning each ASCII byte
+in JavaScript. Captured native helpers resist guest prototype mutation. A real
+routine smoke executed ASCII/BMP near-limit successes concurrently with
+oversized-result rejections; both rejections surfaced the size-limit `JSError`.
+Exact-limit and one-byte-over boundary coverage includes ASCII, two-byte,
+three-byte, astral and mixed Unicode results.
+
+The suggested object-agent middleware replacement was rejected and the reviewer
+retracted it: the existing LangChain summarizer has no configured trigger and
+does not currently summarize. Enabling it would exceed the visibility-only scope.
+
+### Follow-up verification
+
+- Full Python suite, four workers: **2,385 passed, eight skipped**. The skips are
+  the existing knowledge-indexer tests requiring `PROGENA_DATABASE_URL`; the
+  sandbox deadlock regression and UTF-8 boundaries pass.
+- Frontend: **1,334 passed**; ESLint and the production build pass under Node 24.
+  Ruff, formatting checks and pinned Pyright pass.
+- A native nested-agent graph using disposable Postgres returned one committed
+  child summary at the completed root revision and none at its preceding parent
+  checkpoint. Original child messages and marker identity survived reload.
+  Checkpoint ancestry is walked in memory from batched native rows, not with an
+  additional database round trip for every ancestor.
+- Root-revision pinning applies to summary-bearing views. Existing live Runs
+  traces continue to observe independently advancing child state and retain
+  nested token attribution.
+- Browser smoke used real localStorage promotion/write/read and actual chat
+  components with native-projected data. It restored one marker, retained array
+  identity for equivalent reconciliation, and preserved bounded keyboard
+  disclosure without browser errors. Temporary smoke entry points were removed.
+- Quick Chat regression coverage exercises own-turn terminal reconciliation,
+  stale successor protection, cancelled/failed terminals, persisted promotion
+  boundaries and unrelated historical-row render stability.

@@ -4,7 +4,57 @@ function normalizeScope(scope) {
   const id = typeof scope.id === 'string' ? scope.id.trim() : '';
   if (!id || (kind !== 'conversation' && kind !== 'subagent')) return null;
   const label = typeof scope.label === 'string' ? scope.label.trim() : '';
-  return { kind, id, ...(label ? { label } : {}) };
+  const expectedKeys = label ? ['kind', 'id', 'label'] : ['kind', 'id'];
+  const isCanonical = scope.kind === kind
+    && scope.id === id
+    && (!label || scope.label === label)
+    && Object.keys(scope).length === expectedKeys.length
+    && expectedKeys.every((key) => Object.hasOwn(scope, key));
+  return isCanonical ? scope : { kind, id, ...(label ? { label } : {}) };
+}
+
+function normalizeMarker(marker) {
+  const id = typeof marker?.id === 'string' ? marker.id.trim() : '';
+  const summary = typeof marker?.summary === 'string' ? marker.summary : '';
+  const anchor = marker?.anchor_message_id ?? marker?.anchorMessageId;
+  const anchorMessageId = typeof anchor === 'string' && anchor.trim() ? anchor.trim() : null;
+  const scope = normalizeScope(marker?.scope);
+  if (!id || !summary.trim() || !scope) return null;
+  const committedAt = typeof marker?.committed_at === 'string'
+    ? marker.committed_at
+    : typeof marker?.committedAt === 'string' ? marker.committedAt : '';
+  const expectedKeys = committedAt
+    ? ['id', 'summary', 'anchorMessageId', 'scope', 'committedAt']
+    : ['id', 'summary', 'anchorMessageId', 'scope'];
+  const isCanonical = marker
+    && typeof marker === 'object'
+    && !Array.isArray(marker)
+    && marker.id === id
+    && marker.summary === summary
+    && marker.anchorMessageId === anchorMessageId
+    && marker.scope === scope
+    && (!committedAt || marker.committedAt === committedAt)
+    && Object.keys(marker).length === expectedKeys.length
+    && expectedKeys.every((key) => Object.hasOwn(marker, key));
+  return isCanonical ? marker : {
+    id,
+    summary,
+    anchorMessageId,
+    scope,
+    ...(committedAt ? { committedAt } : {}),
+  };
+}
+
+function areSummaryMarkersEqual(left, right) {
+  return left === right || (
+    left.id === right.id
+    && left.summary === right.summary
+    && left.anchorMessageId === right.anchorMessageId
+    && left.committedAt === right.committedAt
+    && left.scope.kind === right.scope.kind
+    && left.scope.id === right.scope.id
+    && left.scope.label === right.scope.label
+  );
 }
 
 /**
@@ -14,22 +64,21 @@ function normalizeScope(scope) {
  * marker AFTER that visible projected message; null renders at transcript head.
  */
 export function normalizeConversationSummaryMarkers(markers) {
+  const source = Array.isArray(markers) ? markers : [];
   const seen = new Set();
   const normalized = [];
-  for (const marker of Array.isArray(markers) ? markers : []) {
-    const id = typeof marker?.id === 'string' ? marker.id.trim() : '';
-    const summary = typeof marker?.summary === 'string' ? marker.summary : '';
-    const anchor = marker?.anchor_message_id ?? marker?.anchorMessageId;
-    const anchorMessageId = typeof anchor === 'string' && anchor.trim() ? anchor.trim() : null;
-    const scope = normalizeScope(marker?.scope);
-    if (!id || !summary.trim() || !scope || seen.has(id)) continue;
-    const committedAt = typeof marker?.committed_at === 'string'
-      ? marker.committed_at
-      : typeof marker?.committedAt === 'string' ? marker.committedAt : '';
-    seen.add(id);
-    normalized.push({ id, summary, anchorMessageId, scope, ...(committedAt ? { committedAt } : {}) });
+  let unchanged = Array.isArray(markers);
+  for (const marker of source) {
+    const normalizedMarker = normalizeMarker(marker);
+    if (!normalizedMarker || seen.has(normalizedMarker.id)) {
+      unchanged = false;
+      continue;
+    }
+    seen.add(normalizedMarker.id);
+    normalized.push(normalizedMarker);
+    if (normalizedMarker !== marker) unchanged = false;
   }
-  return normalized;
+  return unchanged && normalized.length === source.length ? markers : normalized;
 }
 
 /**
@@ -38,14 +87,22 @@ export function normalizeConversationSummaryMarkers(markers) {
  * a newer copy. This makes overlapping older-message pages idempotent.
  */
 export function mergeConversationSummaryMarkers(current, incoming) {
-  const merged = normalizeConversationSummaryMarkers(current);
-  const indexById = new Map(merged.map((marker, index) => [marker.id, index]));
-  for (const marker of normalizeConversationSummaryMarkers(incoming)) {
+  const normalizedCurrent = normalizeConversationSummaryMarkers(current);
+  const normalizedIncoming = normalizeConversationSummaryMarkers(incoming);
+  if (normalizedIncoming.length === 0) {
+    return normalizedCurrent;
+  }
+
+  const indexById = new Map(normalizedCurrent.map((marker, index) => [marker.id, index]));
+  let merged = normalizedCurrent;
+  for (const marker of normalizedIncoming) {
     const index = indexById.get(marker.id);
     if (index === undefined) {
+      if (merged === normalizedCurrent) merged = normalizedCurrent.slice();
       indexById.set(marker.id, merged.length);
       merged.push(marker);
-    } else {
+    } else if (!areSummaryMarkersEqual(merged[index], marker)) {
+      if (merged === normalizedCurrent) merged = normalizedCurrent.slice();
       merged[index] = marker;
     }
   }

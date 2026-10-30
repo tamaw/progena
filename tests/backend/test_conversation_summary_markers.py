@@ -83,3 +83,24 @@ def test_summary_read_never_substitutes_an_older_checkpoint_when_runtime_fails()
         assert reader.get_summary_occurrences("thread-1", "cp-1")[0].id == "summary:root:cp-1"
     finally:
         reader.close()
+
+
+def test_unpinned_summary_reads_do_not_freeze_the_latest_revision() -> None:
+    calls = 0
+
+    def respond(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"progena_summary_occurrences": []})
+
+    reader = RuntimeConversationReader("http://runtime.test")
+    reader.close()
+    reader._client = httpx.Client(
+        base_url="http://runtime.test", transport=httpx.MockTransport(respond)
+    )
+    try:
+        assert reader.get_summary_occurrences("thread-1") == []
+        assert reader.get_summary_occurrences("thread-1") == []
+        assert calls == 2
+    finally:
+        reader.close()

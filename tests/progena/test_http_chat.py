@@ -696,6 +696,30 @@ async def test_items_with_real_graph() -> None:
         await _stop_chat_server(server)
 
 
+async def test_items_without_summary_include_reads_one_graph_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = _make_real_graph()
+    loop_runner = FakeLoopRunner(graph=graph)
+    server = await _start_chat_server(loop_runner)
+
+    async def _unexpected_history_load(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("ordinary items reads must not traverse checkpoint history")
+
+    monkeypatch.setattr("src.progena.runtime.http.chat.load_conversation", _unexpected_history_load)
+    try:
+        await graph.ainvoke(
+            {"messages": [HumanMessage(content="hello", id="h1")]},
+            {"configurable": {"thread_id": "t1"}},
+        )
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{server.base_url}/v1/conversations/t1/items?order=asc")
+        assert response.status_code == 200
+        assert [item["id"] for item in response.json()["data"]] == ["h1", "a1"]
+    finally:
+        await _stop_chat_server(server)
+
+
 async def test_turn_threads_progena_source_from_metadata() -> None:
     loop_runner = FakeLoopRunner()
     bridges: list[Any] = []

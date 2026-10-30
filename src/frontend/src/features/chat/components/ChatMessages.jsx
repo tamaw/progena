@@ -6,6 +6,28 @@ import { Message } from './Message';
 import { buildConversationSummaryEntries, normalizeConversationSummaryMarkers } from '../models/conversationSummaryModel';
 import { followTranscript } from '../models/transcriptScroll';
 
+function sameMarkerReferences(previous, next) {
+  return previous === next || (
+    Array.isArray(previous)
+    && Array.isArray(next)
+    && previous.length === next.length
+    && previous.every((marker, index) => marker === next[index])
+  );
+}
+
+function subagentCallIdsForMessage(message) {
+  if (message?.role !== 'assistant' || !Array.isArray(message.timelineItems)) {
+    return null;
+  }
+  const ids = new Set();
+  for (const item of message.timelineItems) {
+    if (item?.kind === 'subagent' && typeof item.toolCallId === 'string' && item.toolCallId) {
+      ids.add(item.toolCallId);
+    }
+  }
+  return ids.size > 0 ? ids : null;
+}
+
 const HistoricalMessage = memo(function HistoricalMessage({
   message,
   summaryMarkers,
@@ -25,7 +47,12 @@ const HistoricalMessage = memo(function HistoricalMessage({
       onRegenerate={message.role === 'assistant' && onRegenerate ? handleMessageRegenerate : undefined}
     />
   );
-});
+}, (previous, next) => (
+  previous.message === next.message
+  && previous.streamEventFilter === next.streamEventFilter
+  && previous.onRegenerate === next.onRegenerate
+  && sameMarkerReferences(previous.summaryMarkers, next.summaryMarkers)
+));
 
 function ChatMessages({
   messages,
@@ -77,6 +104,19 @@ function ChatMessages({
     () => normalizedSummaryMarkers.filter((marker) => marker.scope.kind === 'subagent'),
     [normalizedSummaryMarkers],
   );
+  const historicalSummaryMarkersByMessage = useMemo(() => {
+    const markersByMessage = new Map();
+    for (const message of Array.isArray(messages) ? messages : []) {
+      const messageId = typeof message?.id === 'string' ? message.id : '';
+      const subagentCallIds = subagentCallIdsForMessage(message);
+      if (!messageId || !subagentCallIds) continue;
+      const nextMarkers = nestedSummaryMarkers.filter((marker) => (
+        marker.anchorMessageId === messageId && subagentCallIds.has(marker.scope.id)
+      ));
+      markersByMessage.set(message, nextMarkers);
+    }
+    return markersByMessage;
+  }, [messages, nestedSummaryMarkers]);
   const liveOwnedMarkers = useMemo(() => {
     if (!liveOwnedMessageId) return [];
     const visibleMarkerIds = new Set(
@@ -101,7 +141,7 @@ function ChatMessages({
           <HistoricalMessage
             key={message.id ?? `${message.role}-${index}`}
             message={message}
-            summaryMarkers={message.role === 'assistant' ? nestedSummaryMarkers : undefined}
+            summaryMarkers={historicalSummaryMarkersByMessage.get(message)}
             streamEventFilter={streamEventFilter}
             onRegenerate={onRegenerate}
           />
