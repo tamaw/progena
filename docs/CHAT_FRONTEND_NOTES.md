@@ -171,13 +171,15 @@ Escape, blur/pointer exit and scrolling dismiss it without moving focus.
 ## Conversation summaries
 
 Native summarization uses the existing response-content activity and committed
-chat history. `Summarizing conversation…` is transient model-generation activity;
+chat history. `Compacting conversation` is transient model-generation activity;
 it is never promoted to a completed marker merely because a callback finished.
 Committed `summary_markers` render as keyboard-expandable transcript rows with
 an amber dot, shared message header/body styling, and sanitized Markdown.
 The expanded body is the actual generated summary, not its model-facing wrapper.
 Stable scope/anchor identities preserve placement and deduplication during paging
 and canonical reconciliation; collapsed rows do not parse Markdown.
+The committed row is labelled `Conversation compacted`, avoiding regional
+summarise/summarize spelling differences without changing event names.
 
 Transcript gutters keep user messages standalone. Intermediate response rows
 connect to the next response dot across the actual row gap, including expanded

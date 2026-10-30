@@ -19,7 +19,7 @@ export const ConversationSummaryActivity = memo(function ConversationSummaryActi
       </div>
       <div className="entry__main">
         <div className="entry__head">
-          <span className="entry__role">Summarizing conversation</span>
+          <span className="entry__role">Compacting conversation</span>
           {attribution && <span className={styles.attribution}>{attribution}</span>}
         </div>
       </div>
@@ -42,7 +42,7 @@ const ConversationSummaryMarker = memo(function ConversationSummaryMarker({ mark
       id={`conversation-summary-${marker.id}`}
       className={`${styles.marker} entry entry--chain-item`}
       data-summary-scope={marker.scope?.id || undefined}
-      aria-label={attribution ? `Conversation summarized, ${attribution}` : 'Conversation summarized'}
+      aria-label={attribution ? `Conversation compacted, ${attribution}` : 'Conversation compacted'}
     >
       <div className="entry__gutter" aria-hidden="true">
         <span className={`entry__badge ${styles.badge}`} />
@@ -53,7 +53,7 @@ const ConversationSummaryMarker = memo(function ConversationSummaryMarker({ mark
           onToggle={(event) => setOpen(event.currentTarget.open)}
         >
           <summary className={`entry__head ${styles.summary}`}>
-            <span className="entry__role">Conversation summarized</span>
+            <span className="entry__role">Conversation compacted</span>
             {attribution && <span className={styles.attribution}>{attribution}</span>}
             <span className="msg__head-trailing">
               {timestamp && <span className="msg__time entry__time">{timestamp}</span>}

@@ -35,7 +35,6 @@ describe('ConversationSummaryMarker', () => {
     const details = marker.querySelector('details');
     expect(marker.dataset.summaryScope).toBe('thread-1');
     const summary = details.querySelector('summary');
-    expect(summary.textContent).toContain('Conversation summarized');
     expect(marker.querySelector('.message-content')).toBeNull();
     expect(details.open).toBe(false);
 

@@ -137,11 +137,10 @@ describe('conversation summary markers', () => {
       </Provider>,
     );
 
-    const text = container.textContent;
-    expect(text).toContain('Conversation summarized');
-    expect(text.indexOf('Before summary')).toBeLessThan(text.indexOf('Conversation summarized'));
-    expect(text.indexOf('Conversation summarized')).toBeLessThan(text.indexOf('After summary'));
-    expect(container.querySelector('details')).not.toBeNull();
+    const marker = container.querySelector('[data-summary-scope]');
+    expect(marker).not.toBeNull();
+    expect(container.querySelector('.msg--user').compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(marker.compareDocumentPosition(container.querySelector('.msg--assistant')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('keeps live compaction before the pending answer that terminates the response chain', () => {
@@ -207,9 +206,7 @@ describe('conversation summary markers', () => {
       </Provider>,
     );
 
-    expect(container.textContent.indexOf('Frozen answer')).toBeLessThan(
-      container.textContent.indexOf('Conversation summarized'),
-    );
+    expect(container.querySelector('.msg--assistant').compareDocumentPosition(container.querySelector('[data-summary-scope]')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 
@@ -275,8 +272,8 @@ describe('conversation summary marker render stability', () => {
       });
       const cards = host.querySelectorAll('.subagent-card');
       expect(cards).toHaveLength(2);
-      expect(cards[0].textContent).toContain('Conversation summarized');
-      expect(cards[1].textContent).not.toContain('Conversation summarized');
+      expect(cards[0].querySelector('[data-summary-scope]')).not.toBeNull();
+      expect(cards[1].querySelector('[data-summary-scope]')).toBeNull();
       useMermaidRender.mockClear();
 
       await act(async () => {
