@@ -106,7 +106,7 @@ def broadcast_ui_event(
         _ui_event_replay.append(envelope)
         del _ui_event_replay[:-_UI_EVENT_REPLAY_LIMIT]
 
-    event = {"type": "ui.event", "envelope": envelope}
+    event = {"type": events_contracts.SseEvent.UI_EVENT, "envelope": envelope}
     if client_id and interest is not None:
         event["interest"] = interest
     dead: list[asyncio.Queue] = []

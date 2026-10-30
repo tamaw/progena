@@ -1,9 +1,12 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector, useStore } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../../lib/routes';
 import { scheduleRunDetail, scheduleRunStatusTone } from './scheduleRunsModel';
 import { createUuid } from '../../lib/uuid';
+import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
+
 import {
   PaneEmptyState,
   PaneList,
@@ -438,7 +441,7 @@ function SchedulesPage() {
     const requestId = createUuid();
     trackSave(ticket, {
       requestId,
-      events: ['schedule.snapshot'],
+      events: [UI_EVENT.SCHEDULE_SNAPSHOT],
     });
     try {
       await updateWidget(
@@ -512,7 +515,7 @@ function SchedulesPage() {
     const requestId = createUuid();
     trackIntentSave(ticket, {
       requestId,
-      events: ['schedule.snapshot'],
+      events: [UI_EVENT.SCHEDULE_SNAPSHOT],
     });
     try {
       await updateWidget(
@@ -566,7 +569,7 @@ function SchedulesPage() {
     const requestId = createUuid();
     trackTriggerSave(ticket, {
       requestId,
-      events: ['schedule.snapshot'],
+      events: [UI_EVENT.SCHEDULE_SNAPSHOT],
     });
     try {
       await retriggerSchedule(target.id, text, { requestId });
@@ -592,9 +595,7 @@ function SchedulesPage() {
           onFilterChange={setActiveFilter}
           actionLabel="+ New"
           onAction={() => {
-            window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
-              detail: { mode: 'schedule-create' },
-            }));
+            dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.SCHEDULE_CREATE });
           }}
         />
         <PaneListToolbar>

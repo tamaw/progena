@@ -15,6 +15,7 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 import src.backend.alerts.routes as alerts_routes
 import src.backend.canvases.events as canvases_events
+import src.backend.events.contracts as events_contracts
 import src.backend.events.stream as events_stream
 import src.backend.monitoring.status as monitoring_status
 import src.backend.runs.events as runs_events
@@ -95,26 +96,32 @@ async def _generate_ui_stream(
             for envelope in list(events_stream._ui_event_replay):
                 if envelope.seq > replay_after:
                     yield ServerSentEvent(
-                        event="ui.event",
+                        event=events_contracts.SseEvent.UI_EVENT,
                         data=envelope.model_dump(),
                         id=envelope.id,
                     )
 
         initial_status = await monitoring_status._get_current_status()
         connected = events_stream._next_ui_envelope(
-            "connection.ready",
+            events_contracts.UiEvent.CONNECTION_READY,
             {"stream": "ui", "status": initial_status, "alerts": alerts_routes._alerts_payload()},
         )
-        yield ServerSentEvent(event="ui.event", data=connected.model_dump(), id=connected.id)
+        yield ServerSentEvent(
+            event=events_contracts.SseEvent.UI_EVENT, data=connected.model_dump(), id=connected.id
+        )
         await workflows_events.routine_events.lifecycle_snapshot(client_id)
 
         while True:
             if shutdown_event.is_set():
                 envelope = events_stream._next_ui_envelope(
-                    "connection.shutdown",
+                    events_contracts.UiEvent.CONNECTION_SHUTDOWN,
                     {"reason": "server_shutdown", "message": "Server is shutting down"},
                 )
-                yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
+                yield ServerSentEvent(
+                    event=events_contracts.SseEvent.UI_EVENT,
+                    data=envelope.model_dump(),
+                    id=envelope.id,
+                )
                 break
 
             try:
@@ -123,11 +130,13 @@ async def _generate_ui_stream(
                 )
                 if event.get("type") == "shutdown":
                     envelope = events_stream._next_ui_envelope(
-                        "connection.shutdown",
+                        events_contracts.UiEvent.CONNECTION_SHUTDOWN,
                         {"reason": "server_shutdown", "message": "Server is shutting down"},
                     )
                     yield ServerSentEvent(
-                        event="ui.event", data=envelope.model_dump(), id=envelope.id
+                        event=events_contracts.SseEvent.UI_EVENT,
+                        data=envelope.model_dump(),
+                        id=envelope.id,
                     )
                     break
                 envelope = event["envelope"]
@@ -137,12 +146,20 @@ async def _generate_ui_stream(
                     and not runs_events.runs_events.has_interest(client_id, event["interest"])
                 ):
                     continue
-                yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
+                yield ServerSentEvent(
+                    event=events_contracts.SseEvent.UI_EVENT,
+                    data=envelope.model_dump(),
+                    id=envelope.id,
+                )
             except TimeoutError:
                 envelope = events_stream._next_ui_envelope(
-                    "connection.heartbeat", {"timestamp": time.time()}
+                    events_contracts.UiEvent.CONNECTION_HEARTBEAT, {"timestamp": time.time()}
                 )
-                yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
+                yield ServerSentEvent(
+                    event=events_contracts.SseEvent.UI_EVENT,
+                    data=envelope.model_dump(),
+                    id=envelope.id,
+                )
     finally:
         events_stream._ui_stream_subscribers.pop(queue, None)
         events_stream._ui_stream_clients.pop(queue, None)

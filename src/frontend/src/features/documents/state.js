@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 /**
  * Document-types domain: the canonical registry of `store` table document
  * types (see document events contract), used to back workflow node pickers.
@@ -32,7 +33,7 @@ export const fetchDocumentTypes = createAcknowledgedThunk('uiData/fetchDocumentT
 });
 
 export const eventHandlers = {
-  'document_types.snapshot': (state, payload) => {
+  [UI_EVENT.DOCUMENT_TYPES_SNAPSHOT]: (state, payload) => {
     applyDocumentTypes(state, payload.items, payload.request_id || null);
   },
 };

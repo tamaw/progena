@@ -2,18 +2,15 @@ import { useSelector } from 'react-redux';
 import { selectAgentName } from '../settings/state/preferences';
 
 import StructuredDocumentBody from '../../components/StructuredDocumentBody';
+import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
+
 
 function openAgent(message, instruction, { draft = false, inline = false, clientId = null } = {}) {
   const prompt = `For the inbox file /inbox/${message.id}.md: ${instruction}`;
-  window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
-    detail: {
-      mode: 'inbox-edit',
-      subtitle: message.title || message.id,
-      [draft ? 'draft' : 'prompt']: prompt,
-      inline,
-      clientId,
-    },
-  }));
+  dispatchQuickChatOpen({
+    mode: QUICK_CHAT_MODE.INBOX_EDIT, subtitle: message.title || message.id,
+    [draft ? 'draft' : 'prompt']: prompt, inline, clientId,
+  });
 }
 
 export default function StructuredInboxBody({ message }) {

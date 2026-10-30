@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../../lib/routes';
+import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
+
 import PageShell from '../../components/layout/PageShell';
 import DetailPane from '../../components/layout/DetailPane';
 import DetailHeader, {
@@ -204,19 +206,12 @@ export default function InboxPage() {
   // pattern as Tasks and Schedules): the agent writes /inbox/<id>.md and the
   // new/changed message arrives here live via inbox.snapshot.
   const openCompose = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
-      detail: { mode: 'inbox-compose' },
-    }));
+    dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.INBOX_COMPOSE });
   }, []);
 
   const openEditInChat = useCallback(() => {
     if (!selectedMessageId) return;
-    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
-      detail: {
-        mode: 'inbox-edit',
-        subtitle: selectedMessageTitle,
-      },
-    }));
+    dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.INBOX_EDIT, subtitle: selectedMessageTitle });
   }, [selectedMessageId, selectedMessageTitle]);
 
   const listEmptyMessage = query.trim()

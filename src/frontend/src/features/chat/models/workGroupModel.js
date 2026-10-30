@@ -4,8 +4,9 @@
  * A turn's timeline is split three ways:
  *   - the answer (`assistant_message` items -- one per turn, plus a terminal
  *     error row when the turn failed),
- *   - delegated-agent cards (`subagent` / `a2a_call`), which stay visible as
- *     their own lines with a short summary of their latest activity,
+ *   - delegated-agent cards (`subagent` / `async_subagent` / `a2a_call`),
+ *     which stay visible as their own lines with a short summary of their
+ *     latest activity,
  *   - everything else (tool calls, reasoning, plan updates, graph steps):
  *     the turn's "work", split into groups. Every reasoning summary (a
  *     `**Heading**` section) opens a new group headed by that summary, and
@@ -24,7 +25,7 @@ import { formatToolInputSummary, prettifyLabel } from './messageRenderUtils';
 /** Latest lines shown on a subagent / A2A card before "N earlier". */
 export const CARD_SUMMARY_LINES = 3;
 
-const CARD_KINDS = new Set(['subagent', 'a2a_call']);
+const CARD_KINDS = new Set(['subagent', 'async_subagent', 'a2a_call']);
 const TOOL_EVENT_TYPES = new Set(['tool_start', 'tool_result', 'tool_error']);
 
 export function partitionTurnTimeline(timelineItems) {

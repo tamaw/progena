@@ -14,6 +14,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
 from src.backend.agents.store import object_agent_id
+from src.backend.events import contracts as events_contracts
 from src.backend.http.requests import request_correlation_id as _request_correlation_id
 from src.backend.knowledge.service import load_bases
 from src.backend.monitoring.state import get_state_reader
@@ -330,6 +331,10 @@ async def search(
             sections.append(section)
 
     events_stream.broadcast_ui_event(
-        "search.results", {"query": q, "sections": sections}, request_id=request_id
+        events_contracts.UiEvent.SEARCH_RESULTS,
+        {"query": q, "sections": sections},
+        request_id=request_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["search.results"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.SEARCH_RESULTS]
+    )

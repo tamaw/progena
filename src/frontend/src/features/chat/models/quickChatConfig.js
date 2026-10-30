@@ -1,3 +1,5 @@
+import { QUICK_CHAT_MODE } from '../../../lib/browserContracts';
+
 // Quick-chat panel configuration: per-mode title/subtitle/placeholder and
 // example prompts shown to the user. The panel is a thin front door onto the
 // same chat the agent handles everywhere else -- it sends exactly what the
@@ -24,7 +26,7 @@ export const defaultQuickChatConfig = {
 };
 const scheduleQuickChatConfig = {
   ...defaultQuickChatConfig,
-  mode: 'schedule-create',
+  mode: QUICK_CHAT_MODE.SCHEDULE_CREATE,
   prompts: scheduleQuickPrompts,
 };
 const mcpQuickPrompts = [
@@ -34,7 +36,7 @@ const mcpQuickPrompts = [
 ];
 const mcpQuickChatConfig = {
   ...defaultQuickChatConfig,
-  mode: 'mcp-create',
+  mode: QUICK_CHAT_MODE.MCP_CREATE,
   prompts: mcpQuickPrompts,
 };
 const taskQuickPrompts = [
@@ -44,7 +46,7 @@ const taskQuickPrompts = [
 ];
 const taskQuickChatConfig = {
   ...defaultQuickChatConfig,
-  mode: 'task-create',
+  mode: QUICK_CHAT_MODE.TASK_CREATE,
   prompts: taskQuickPrompts,
 };
 const knowledgeQuickPrompts = [
@@ -56,7 +58,7 @@ const knowledgeQuickPrompts = [
 // just seeded with knowledge-create example prompts.
 const knowledgeQuickChatConfig = {
   ...defaultQuickChatConfig,
-  mode: 'knowledge-create',
+  mode: QUICK_CHAT_MODE.KNOWLEDGE_CREATE,
   prompts: knowledgeQuickPrompts,
 };
 
@@ -67,7 +69,7 @@ const profileQuickPrompts = [
 ];
 const profileQuickChatConfig = {
   ...defaultQuickChatConfig,
-  mode: 'profile-create',
+  mode: QUICK_CHAT_MODE.PROFILE_CREATE,
   title: 'Add a model profile',
   placeholder: 'Describe the model profile you want...',
   prompts: profileQuickPrompts,
@@ -80,7 +82,7 @@ const repositoryQuickPrompts = [
 ];
 const repositoryQuickChatConfig = {
   ...defaultQuickChatConfig,
-  mode: 'repository-create',
+  mode: QUICK_CHAT_MODE.REPOSITORY_CREATE,
   title: 'Add a repository',
   placeholder: 'Describe the repository to add...',
   prompts: repositoryQuickPrompts,
@@ -93,7 +95,7 @@ const inboxQuickPrompts = [
 ];
 const inboxQuickChatConfig = {
   ...defaultQuickChatConfig,
-  mode: 'inbox-compose',
+  mode: QUICK_CHAT_MODE.INBOX_COMPOSE,
   title: 'Compose inbox message',
   placeholder: 'What should the message cover?',
   prompts: inboxQuickPrompts,
@@ -105,7 +107,7 @@ const inboxEditQuickPrompts = [
 ];
 const inboxEditQuickChatConfig = {
   ...defaultQuickChatConfig,
-  mode: 'inbox-edit',
+  mode: QUICK_CHAT_MODE.INBOX_EDIT,
   title: 'Edit inbox message',
   placeholder: 'How should this message change?',
   prompts: inboxEditQuickPrompts,
@@ -118,7 +120,7 @@ const workflowQuickPrompts = [
 ];
 const workflowQuickChatConfig = {
   ...defaultQuickChatConfig,
-  mode: 'workflow-create',
+  mode: QUICK_CHAT_MODE.WORKFLOW_CREATE,
   title: 'Build a workflow',
   placeholder: 'Describe the workflow you want...',
   prompts: workflowQuickPrompts,
@@ -132,7 +134,7 @@ const routineQuickPrompts = [
 ];
 const routineQuickChatConfig = {
   ...defaultQuickChatConfig,
-  mode: 'routine-create',
+  mode: QUICK_CHAT_MODE.ROUTINE_CREATE,
   title: 'Build a routine',
   placeholder: 'Describe the routine you want...',
   prompts: routineQuickPrompts,
@@ -145,24 +147,24 @@ const instructionQuickPrompts = [
 ];
 const instructionQuickChatConfig = {
   ...defaultQuickChatConfig,
-  mode: 'instruction-create',
+  mode: QUICK_CHAT_MODE.INSTRUCTION_CREATE,
   title: 'Create an instruction',
   placeholder: 'Describe the instruction you want...',
   prompts: instructionQuickPrompts,
 };
 
 const QUICK_CHAT_CONFIGS_BY_MODE = {
-  'schedule-create': scheduleQuickChatConfig,
-  'mcp-create': mcpQuickChatConfig,
-  'task-create': taskQuickChatConfig,
-  'knowledge-create': knowledgeQuickChatConfig,
-  'profile-create': profileQuickChatConfig,
-  'repository-create': repositoryQuickChatConfig,
-  'inbox-compose': inboxQuickChatConfig,
-  'inbox-edit': inboxEditQuickChatConfig,
-  'workflow-create': workflowQuickChatConfig,
-  'routine-create': routineQuickChatConfig,
-  'instruction-create': instructionQuickChatConfig,
+  [QUICK_CHAT_MODE.SCHEDULE_CREATE]: scheduleQuickChatConfig,
+  [QUICK_CHAT_MODE.MCP_CREATE]: mcpQuickChatConfig,
+  [QUICK_CHAT_MODE.TASK_CREATE]: taskQuickChatConfig,
+  [QUICK_CHAT_MODE.KNOWLEDGE_CREATE]: knowledgeQuickChatConfig,
+  [QUICK_CHAT_MODE.PROFILE_CREATE]: profileQuickChatConfig,
+  [QUICK_CHAT_MODE.REPOSITORY_CREATE]: repositoryQuickChatConfig,
+  [QUICK_CHAT_MODE.INBOX_COMPOSE]: inboxQuickChatConfig,
+  [QUICK_CHAT_MODE.INBOX_EDIT]: inboxEditQuickChatConfig,
+  [QUICK_CHAT_MODE.WORKFLOW_CREATE]: workflowQuickChatConfig,
+  [QUICK_CHAT_MODE.ROUTINE_CREATE]: routineQuickChatConfig,
+  [QUICK_CHAT_MODE.INSTRUCTION_CREATE]: instructionQuickChatConfig,
 };
 
 export function normalizeQuickChatConfig(config) {

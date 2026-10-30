@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../../realtime/eventVocabulary';
 /**
  * Workflows domain: backend-backed workflow definitions plus recent run state,
  * kept live by `workflows.snapshot`, `workflow.updated`, `workflow.deleted`,
@@ -195,28 +196,28 @@ export const fetchWorkflowRuns = createAcknowledgedThunk('uiData/fetchWorkflowRu
 });
 
 export const eventHandlers = {
-  'workflows.snapshot': (state, payload) => {
+  [UI_EVENT.WORKFLOWS_SNAPSHOT]: (state, payload) => {
     applyWorkflowItems(state, payload);
   },
-  'workflow.updated': (state, payload) => {
+  [UI_EVENT.WORKFLOW_UPDATED]: (state, payload) => {
     upsertWorkflowDetail(state, payload);
   },
-  'workflow.deleted': (state, payload) => {
+  [UI_EVENT.WORKFLOW_DELETED]: (state, payload) => {
     removeWorkflow(state, payload.workflow_id);
   },
-  'workflow.runs.snapshot': (state, payload) => {
+  [UI_EVENT.WORKFLOW_RUNS_SNAPSHOT]: (state, payload) => {
     applyWorkflowRuns(state, payload);
   },
-  'workflow.run.started': (state, payload) => {
+  [UI_EVENT.WORKFLOW_RUN_STARTED]: (state, payload) => {
     upsertWorkflowRun(state, payload);
   },
-  'workflow.run.updated': (state, payload) => {
+  [UI_EVENT.WORKFLOW_RUN_UPDATED]: (state, payload) => {
     upsertWorkflowRun(state, payload);
   },
-  'workflow.run.completed': (state, payload) => {
+  [UI_EVENT.WORKFLOW_RUN_COMPLETED]: (state, payload) => {
     upsertWorkflowRun(state, payload);
   },
-  'workflow.run.failed': (state, payload) => {
+  [UI_EVENT.WORKFLOW_RUN_FAILED]: (state, payload) => {
     upsertWorkflowRun(state, payload);
   },
 };

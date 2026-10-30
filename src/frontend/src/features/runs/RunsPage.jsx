@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { shallowEqual, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
@@ -154,7 +155,7 @@ export default function RunsPage() {
     runsUrl: getApiUrl('runs'), ...baseQuery, cursor: activeCursor,
   });
   useEffect(() => subscribeUiEvent((event) => {
-    if (event.type !== 'connection.ready') return;
+    if (event.type !== UI_EVENT.CONNECTION_READY) return;
     // Cursor values describe the former page boundary. A ready event starts a
     // fresh authoritative window, while URL selection and per-run inspection
     // state deliberately remain independent from its records.

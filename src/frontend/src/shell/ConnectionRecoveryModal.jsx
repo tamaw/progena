@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../realtime/eventVocabulary';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useDispatch } from 'react-redux';
 import { useConfig } from '../context/ConfigContext';
@@ -68,7 +69,7 @@ export default function ConnectionRecoveryModal() {
     const unsubscribe = subscribeUiEvent((event) => {
       // Headers, connection.ready and unrelated events do not prove that the
       // backend's periodic status publisher is running again.
-      if (event.type !== 'status.updated') return;
+      if (event.type !== UI_EVENT.STATUS_UPDATED) return;
       timing.lastStatusAt = Date.now();
       timing.retryAt = null;
       setCountdown(null);

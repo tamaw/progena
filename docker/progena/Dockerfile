@@ -65,8 +65,8 @@ ENV PROGENA_SHELL_HOME=/app/agent-home
 ENV PROGENA_SHELL_WORKSPACE_DIR=/app/shell-workspaces
 ENV PROGENA_SHELL_SHIM_BIN=/app/data/shims/bin
 ENV PYTHONDONTWRITEBYTECODE=1
-# Expose chat server port
-EXPOSE 8000
+# Runtime HTTP server; the separate backend serves port 8000.
+EXPOSE 9501
 
 # Health check for container orchestration.
 # Progena is not the HTTP backend; it serves its own HTTP /health endpoint

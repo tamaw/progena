@@ -10,6 +10,7 @@ from typing import Any
 
 import src.backend.events.stream as events_stream
 from src.backend.checkpoint_state import read_latest_checkpoint, read_thread_checkpoint_state
+from src.backend.events import contracts as events_contracts
 from src.backend.runtime_liveness import live_runtime, owner_is_gone
 from src.backend.storage.documents import (
     PROGENA_STATE_PREFIX,
@@ -20,6 +21,10 @@ from src.backend.storage.documents import (
 from src.backend.storage.documents import get_default_document_store as get_document_store
 from src.progena.routines.approvals import decision_key, pending_approvals
 from src.progena.routines.events import CHECKPOINT_CHANNEL, RUN_EVENT_PREFIX
+from src.progena.routines.lifecycle import (
+    ROUTINE_RUN_ACTIVE_STATUSES,
+    ROUTINE_RUN_RESUMABLE_STATUSES,
+)
 from src.progena.runtime.ownership import EXECUTING_ROUTINE_STATUSES
 
 
@@ -101,9 +106,7 @@ _lifecycle_index = _LifecycleIndex()
 
 logger = logging.getLogger(__name__)
 
-_RETAINED_LIFECYCLE_STATUSES = frozenset(
-    {"enqueued", "started", "paused", "stopping", "cancelling", "stopped"}
-)
+_RETAINED_LIFECYCLE_STATUSES = ROUTINE_RUN_ACTIVE_STATUSES | ROUTINE_RUN_RESUMABLE_STATUSES
 
 
 async def read_run_state(agent_id: str, thread_id: str, doc_store=None) -> dict[str, Any]:
@@ -250,7 +253,9 @@ class RoutineEvents:
         _lifecycle_index.apply(payload)
 
         if self.claim_lifecycle(payload):
-            events_stream.broadcast_ui_event(f"agent.routine.run.{payload['status']}", payload)
+            events_stream.broadcast_ui_event(
+                events_contracts.routine_run_status_event(payload["status"]), payload
+            )
         agent_id = payload["agent_id"]
         if any(i["agent_id"] == agent_id for i in self.interests.values()):
             self.schedule(agent_id)
@@ -297,7 +302,7 @@ class RoutineEvents:
                 lifecycle["next"] = state["next"]
             for client_id, interest in watchers.items():
                 events_stream.broadcast_ui_event(
-                    "agent.routine.run.interrupted",
+                    events_contracts.routine_run_status_event("interrupted"),
                     lifecycle,
                     client_id=client_id,
                     interest=interest,
@@ -313,7 +318,7 @@ class RoutineEvents:
             if self.interests.get(client_id) is not interest:
                 continue
             events_stream.broadcast_ui_event(
-                "agent.routine.runs.loaded",
+                events_contracts.UiEvent.AGENT_ROUTINE_RUNS_LOADED,
                 {
                     "agent_id": agent_id,
                     "before": None,
@@ -334,7 +339,7 @@ class RoutineEvents:
                     states[thread_id] = await read_run_state(agent_id, thread_id)
                 if self.interests.get(client_id) is interest:
                     events_stream.broadcast_ui_event(
-                        "agent.routine.run_state.loaded",
+                        events_contracts.UiEvent.AGENT_ROUTINE_RUN_STATE_LOADED,
                         states[thread_id],
                         client_id=client_id,
                         interest=interest,
@@ -363,7 +368,7 @@ class RoutineEvents:
                 await _attach_inputs(store, payload)
         if runs:
             events_stream.broadcast_ui_event(
-                "agent.routine.lifecycle.snapshot",
+                events_contracts.UiEvent.AGENT_ROUTINE_LIFECYCLE_SNAPSHOT,
                 {"runs": runs},
                 client_id=client_id,
             )

@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 /** Knowledge catalog and markdown pages, kept live by UI stream events. */
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle, addKeyedRequestLifecycle, completeKeyedRequest, selectKeyedRequest } from '../../store/async';
 
@@ -43,19 +44,19 @@ function patchBaseIndexStatus(state, payload) {
 }
 
 export const eventHandlers = {
-  'knowledge.snapshot': (state, payload) => applyKnowledgeBases(state, payload),
-  'knowledge.pages.snapshot': (state, payload) => { state.knowledge.pagesByBaseId[payload.base_id] = Array.isArray(payload.pages) ? payload.pages : []; },
-  'knowledge.page.loaded': (state, payload) => {
+  [UI_EVENT.KNOWLEDGE_SNAPSHOT]: (state, payload) => applyKnowledgeBases(state, payload),
+  [UI_EVENT.KNOWLEDGE_PAGES_SNAPSHOT]: (state, payload) => { state.knowledge.pagesByBaseId[payload.base_id] = Array.isArray(payload.pages) ? payload.pages : []; },
+  [UI_EVENT.KNOWLEDGE_PAGE_LOADED]: (state, payload) => {
     const key = pageKey(payload.base_id, payload.path);
     state.knowledge.pageByKey[key] = payload;
     completeKeyedRequest(state.knowledge.pageRequestByKey, key, payload.request_id);
   },
-  'knowledge.page.revisions.loaded': (state, payload) => {
+  [UI_EVENT.KNOWLEDGE_PAGE_REVISIONS_LOADED]: (state, payload) => {
     const key = pageKey(payload.base_id, payload.path);
     state.knowledge.revisionsByKey[key] = Array.isArray(payload.revisions) ? payload.revisions : [];
     completeKeyedRequest(state.knowledge.revisionsRequestByKey, key, payload.request_id);
   },
-  'knowledge.page.revision.loaded': (state, payload) => {
+  [UI_EVENT.KNOWLEDGE_PAGE_REVISION_LOADED]: (state, payload) => {
     const key = revisionKey(payload.base_id, payload.path, payload.revision_id);
     state.knowledge.revisionByKey[key] = {
       content: payload.content,
@@ -63,10 +64,10 @@ export const eventHandlers = {
     };
     completeKeyedRequest(state.knowledge.revisionRequestByKey, key, payload.request_id);
   },
-  'knowledge.index.started': patchBaseIndexStatus,
-  'knowledge.index.progress': patchBaseIndexStatus,
-  'knowledge.index.completed': patchBaseIndexStatus,
-  'knowledge.index.failed': patchBaseIndexStatus,
+  [UI_EVENT.KNOWLEDGE_INDEX_STARTED]: patchBaseIndexStatus,
+  [UI_EVENT.KNOWLEDGE_INDEX_PROGRESS]: patchBaseIndexStatus,
+  [UI_EVENT.KNOWLEDGE_INDEX_COMPLETED]: patchBaseIndexStatus,
+  [UI_EVENT.KNOWLEDGE_INDEX_FAILED]: patchBaseIndexStatus,
 };
 
 export function buildExtraReducers(builder) {

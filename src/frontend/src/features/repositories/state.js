@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 /**
  * Repos domain: declared repositories (repo:<id> documents) merged with the
  * heartbeat-derived git scan, kept live by `repositories.snapshot` and
@@ -60,7 +61,7 @@ export const fetchRepoUpstream = createAcknowledgedThunk('uiData/fetchRepoUpstre
 });
 
 export const eventHandlers = {
-  'repositories.snapshot': (state, payload) => {
+  [UI_EVENT.REPOSITORIES_SNAPSHOT]: (state, payload) => {
     state.repos.items = Array.isArray(payload.items) ? payload.items : [];
     state.repos.workspaceSignal = payload.workspace_signal && typeof payload.workspace_signal === 'object'
       ? payload.workspace_signal
@@ -72,7 +73,7 @@ export const eventHandlers = {
       state.repos.requestId = null;
     }
   },
-  'repo.detail.updated': (state, payload) => {
+  [UI_EVENT.REPO_DETAIL_UPDATED]: (state, payload) => {
     if (typeof payload?.id === 'string' && payload.id) {
       state.repos.detailById[payload.id] = payload;
     }

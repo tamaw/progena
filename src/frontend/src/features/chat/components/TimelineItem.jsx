@@ -9,6 +9,7 @@
  *     are consumed into the richer card below instead of rendering their own
  *     row (see applyAssistantStreamEvent in liveAssistantTurnModel.js).
  *   - `{ kind: 'subagent', ... }` — a nested `task` tool delegation card
+ *   - `{ kind: 'async_subagent', ... }` — a tracked background delegation
  *   - `{ kind: 'a2a_call', ... }` — the remote agent's own submitted/
  *     working/completed self-reporting for an A2A tool invocation, alongside
  *     (not instead of) its plain lifecycle rows above
@@ -44,7 +45,7 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate,
 // one reads the agent name from the store.
 function TimelineRow({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities }) {
   const agentName = useSelector(selectAgentName);
-  if (item.kind === 'subagent') {
+  if (item.kind === 'subagent' || item.kind === 'async_subagent') {
     const matchingMarkers = (summaryMarkers || []).filter((marker) => (
       marker.scope?.kind === 'subagent' && marker.scope.id === item.toolCallId
     ));

@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 from urllib.parse import quote, urljoin, urlparse
 
@@ -50,8 +51,40 @@ _MAX_FILE_BYTES = 1_048_576  # 1 MiB
 _MAX_FILES_PER_PLUGIN = 50
 
 
-class PluginFetchError(Exception):
-    """Raised when a marketplace or plugin fetch fails in an actionable way."""
+class PluginFetchErrorCode(StrEnum):
+    """Stable codes for plugin source failures."""
+
+    FETCH_FAILED = "plugin_fetch_failed"
+    GITHUB_HTTP_ERROR = "github_http_error"
+    GITHUB_RATE_LIMITED = "github_rate_limited"
+    COMMIT_NOT_FOUND = "commit_not_found"
+    SKILL_NOT_FOUND = "skill_not_found"
+
+
+class PluginFetchErrorKind(StrEnum):
+    """Categories used by route handlers to choose an HTTP response."""
+
+    FETCH = "fetch"
+    HTTP = "http"
+    RATE_LIMIT = "rate_limit"
+    NOT_FOUND = "not_found"
+
+
+class PluginFetchError(RuntimeError):
+    """An actionable plugin fetch failure with machine-readable HTTP context."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: PluginFetchErrorCode = PluginFetchErrorCode.FETCH_FAILED,
+        kind: PluginFetchErrorKind = PluginFetchErrorKind.FETCH,
+        status: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.kind = kind
+        self.status = status
 
 
 @dataclass
@@ -89,6 +122,43 @@ def _is_private_hostname(hostname: str) -> bool:
             if pat.search(hostname_lower):
                 return True
     return False
+
+
+def _response_header(headers: Any, name: str) -> str | None:
+    """Return a response header without assuming a particular header mapping."""
+    if headers is None:
+        return None
+    for key, value in headers.items():
+        if str(key).lower() == name.lower():
+            return str(value)
+    return None
+
+
+def _http_fetch_error(error: aiohttp.ClientResponseError, url: str) -> PluginFetchError:
+    """Classify a GitHub HTTP failure without inspecting its human message."""
+    status = error.status
+    is_github = urlparse(url).hostname in {"api.github.com", "raw.githubusercontent.com"}
+    rate_limited = status == 429 or (
+        is_github
+        and status == 403
+        and (
+            _response_header(error.headers, "x-ratelimit-remaining") == "0"
+            or _response_header(error.headers, "retry-after") is not None
+        )
+    )
+    if rate_limited:
+        return PluginFetchError(
+            "GitHub API rate limit exceeded; configure GITHUB_TOKEN or retry later",
+            code=PluginFetchErrorCode.GITHUB_RATE_LIMITED,
+            kind=PluginFetchErrorKind.RATE_LIMIT,
+            status=status,
+        )
+    return PluginFetchError(
+        f"GitHub request failed (HTTP {status})",
+        code=PluginFetchErrorCode.GITHUB_HTTP_ERROR,
+        kind=PluginFetchErrorKind.HTTP,
+        status=status,
+    )
 
 
 def _parse_github_source(source: str) -> tuple[str, str, str | None]:
@@ -180,20 +250,16 @@ async def _fetch_url(url: str) -> bytes:
                 if _is_private_hostname(str(rp.hostname or "").lower()):
                     raise PluginFetchError("Redirect to private address is not allowed")
                 continue
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except aiohttp.ClientResponseError as exc:
+                raise _http_fetch_error(exc, current_url) from exc
             return bytes(await response.read())
     raise PluginFetchError("Too many redirects while fetching URL")
 
 
 async def _fetch_json_url(url: str) -> dict[str, Any]:
-    try:
-        raw = await _fetch_url(url)
-    except aiohttp.ClientResponseError as exc:
-        if exc.status == 403:
-            raise PluginFetchError(
-                "GitHub API rate limit exceeded; configure GITHUB_TOKEN or retry later"
-            ) from exc
-        raise PluginFetchError(f"GitHub API request failed ({exc.status})") from exc
+    raw = await _fetch_url(url)
     try:
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -207,8 +273,15 @@ async def _resolve_commit_sha(owner: str, repo: str, ref: str) -> str:
     url = f"https://api.github.com/repos/{quote(owner)}/{quote(repo)}/commits/{quote(ref, safe='')}"
     try:
         payload = await _fetch_json_url(url)
-    except aiohttp.ClientResponseError as exc:
-        raise PluginFetchError(f"GitHub commit not found (404): {owner}/{repo}@{ref}") from exc
+    except PluginFetchError as exc:
+        if exc.status != 404:
+            raise
+        raise PluginFetchError(
+            f"GitHub commit not found (404): {owner}/{repo}@{ref}",
+            code=PluginFetchErrorCode.COMMIT_NOT_FOUND,
+            kind=PluginFetchErrorKind.NOT_FOUND,
+            status=404,
+        ) from exc
     sha = payload.get("sha")
     if not isinstance(sha, str) or not sha:
         raise PluginFetchError(f"GitHub commit response missing sha for {owner}/{repo}@{ref}")
@@ -285,9 +358,9 @@ async def fetch_marketplace(
             raw = await _fetch_url(_raw_github_url(owner, repo, manifest_ref, manifest_path))
             data = json.loads(raw.decode("utf-8"))
             break
-        except aiohttp.ClientResponseError as exc:
+        except PluginFetchError as exc:
             if exc.status != 404:
-                raise PluginFetchError(f"failed to fetch marketplace manifest: {exc}") from exc
+                raise
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise PluginFetchError(f"marketplace.json is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
@@ -409,12 +482,15 @@ async def fetch_plugin_skill_content(
     )
     try:
         raw = await _fetch_url(_raw_github_url(owner, repo, sha, path))
-    except aiohttp.ClientResponseError as exc:
-        if exc.status == 404:
-            raise PluginFetchError(
-                f"skill '{skill_name}' not found for plugin '{plugin_name}'"
-            ) from exc
-        raise
+    except PluginFetchError as exc:
+        if exc.status != 404:
+            raise
+        raise PluginFetchError(
+            f"skill '{skill_name}' not found for plugin '{plugin_name}'",
+            code=PluginFetchErrorCode.SKILL_NOT_FOUND,
+            kind=PluginFetchErrorKind.NOT_FOUND,
+            status=404,
+        ) from exc
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:

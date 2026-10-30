@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
+import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
+
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import useEntityDraft from '../../hooks/useEntityDraft';
 import InlineFailure from '../../components/InlineFailure';
@@ -88,9 +90,7 @@ export default function RoutinesPage() {
   const deleteAction = useConfirmAction(effectiveAgentId);
 
   const handleNewAgent = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
-      detail: { mode: 'routine-create' },
-    }));
+    dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.ROUTINE_CREATE });
   }, []);
 
   const requestDeleteAgent = useCallback(() => {

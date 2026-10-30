@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from src.progena.sessions.history import _commit_times
@@ -38,6 +39,26 @@ def _lines(root: ThreadMessages, subagents: dict[str, ThreadMessages] | None = N
 
 def _call(name: str, call_id: str, **args: object) -> dict[str, object]:
     return {"name": name, "args": args, "id": call_id, "type": "tool_call"}
+
+
+@pytest.mark.parametrize(
+    ("tool", "text", "artifact", "failed"),
+    [
+        ("execute", "stderr\n[Command failed with exit code 1]", None, True),
+        ("javascript", '<error type="TypeError">bad input</error>', None, True),
+        ("execute", "output was truncated", {"exit_code": 2}, True),
+        ("execute", "[Command succeeded with exit code 0]", None, False),
+        ("javascript", 'Printed example: <error type="TypeError">', None, False),
+    ],
+)
+def test_tool_failure_formats_rewrite_the_transcript_action(tool, text, artifact, failed):
+    lines = _lines(
+        _thread(
+            AIMessage("", tool_calls=[_call(tool, "result", command="build")]),
+            ToolMessage(text, tool_call_id="result", name=tool, artifact=artifact),
+        )
+    )
+    assert lines[0].startswith("* progena can't ") is failed
 
 
 def test_direct_agent_turns_join_before_the_address_and_part_when_the_user_moves_on() -> None:
@@ -152,31 +173,6 @@ def test_task_subagent_is_inlined_between_join_and_part_without_repeating_its_re
         "<@repo-manager> No repos configured.",
         "-!- repo-manager [subagent] has left #abcd1234",
         "<@progena> None are configured.",
-    ]
-
-
-def test_tool_failures_rewrite_the_action_and_nonzero_exits_are_flagged() -> None:
-    lines = _lines(
-        _thread(
-            HumanMessage("check"),
-            AIMessage(
-                "",
-                tool_calls=[
-                    _call("ls", "c1", path="/routines"),
-                    _call("execute", "c2", command="git status"),
-                    _call("execute", "c3", command="false"),
-                ],
-                response_metadata=MODEL,
-            ),
-            ToolMessage("[]", tool_call_id="c1"),
-            ToolMessage("clean\n[Command succeeded with exit code 0]", tool_call_id="c2"),
-            ToolMessage("\n[Command failed with exit code 1]", tool_call_id="c3"),
-        )
-    )
-    assert lines[1:] == [
-        "* progena lists /routines",
-        "* progena runs `git status`",
-        "* progena runs `false` (exit 1)",
     ]
 
 

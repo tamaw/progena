@@ -13,6 +13,7 @@ import src.backend.alerts.relay as alerts_relay
 import src.backend.alerts.routes as alerts_routes
 import src.backend.attachments.store as attachments_store
 import src.backend.chat.responses as chat_responses
+import src.backend.events.contracts as events_contracts
 import src.backend.events.documents as events_documents
 import src.backend.events.routes as events_routes
 import src.backend.events.stream as events_stream
@@ -200,9 +201,9 @@ async def lifespan(app: FastAPI):
             # Only send actual message content to Telegram
             # Skip status updates, heartbeats, etc.
             telegram_event_types = {
-                "scheduled_response",  # Scheduled task responses
-                "agent_message",  # Direct agent messages
-                "agent_question",  # Questions that should reach the user directly
+                events_contracts.UiEvent.SCHEDULED_RESPONSE,
+                events_contracts.UiEvent.AGENT_MESSAGE,
+                events_contracts.UiEvent.AGENT_QUESTION,
             }
 
             if event_type in telegram_event_types:

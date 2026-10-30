@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../realtime/eventVocabulary';
 import { memo, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { selectUiEventQueue } from '../realtime/realtimeSlice';
@@ -31,7 +32,7 @@ export default function EventDebugPanel() {
   const query = filter.trim().toLowerCase();
   const retained = queue.filter(({ sequence }) => sequence > clearedThrough);
   const events = retained.filter(({ event }) => (
-    (!hideStatusUpdates || event.type !== 'status.updated')
+    (!hideStatusUpdates || event.type !== UI_EVENT.STATUS_UPDATED)
     && (!query || [event.type, event.id, event.payload?.request_id]
       .some((value) => String(value ?? '').toLowerCase().includes(query)))
   )).reverse();

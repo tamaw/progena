@@ -1,7 +1,10 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../../lib/routes';
+import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
+
 import {
   PaneEmptyState, PaneList, PaneListFilters, PaneListFooter, PaneListSearch,
   PaneListSortButton, PaneListToolbar, PaneListRows,
@@ -51,7 +54,7 @@ const GPT_5_MINI_GLOBAL_STANDARD_PRICING = Object.freeze({
 });
 
 const EMPTY_PROFILE_EDIT = Object.freeze({ draft: null, baseline: null, validationError: null });
-const PROFILE_SNAPSHOT_EVENTS = Object.freeze(['profiles.snapshot']);
+const PROFILE_SNAPSHOT_EVENTS = Object.freeze([UI_EVENT.PROFILES_SNAPSHOT]);
 
 const emptyPricing = () => Object.fromEntries(PRICING_FIELDS.map((field) => [field, '']));
 const isCustomized = (profile) => Boolean(profile.pricing)
@@ -406,9 +409,7 @@ export default function ProfilesPage() {
   });
 
   const openCreateProfileChat = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
-      detail: { mode: 'profile-create' },
-    }));
+    dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.PROFILE_CREATE });
   }, []);
   const loadingMessage = !connected ? 'Waiting for the live connection…'
     : !catalogue.loaded ? 'Loading model profiles…' : 'No model profiles configured.';

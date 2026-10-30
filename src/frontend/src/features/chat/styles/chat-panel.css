@@ -782,6 +782,10 @@
     background-color: color-mix(in srgb, var(--color-error) 6%, transparent);
 }
 
+.subagent-card--interrupted .subagent-card__body {
+    background-color: color-mix(in srgb, var(--color-warning) 6%, transparent);
+}
+
 .a2a-call-card__body {
     background-color: color-mix(in srgb, var(--color-accent-secondary) 6%, transparent);
 }
@@ -838,6 +842,10 @@
 
 .entry__badge.subagent-card__badge--error {
     color: var(--color-error);
+}
+
+.entry__badge.subagent-card__badge--interrupted {
+    color: var(--color-warning);
 }
 
 @keyframes subagent-pulse {

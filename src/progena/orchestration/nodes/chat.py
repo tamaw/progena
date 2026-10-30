@@ -13,6 +13,7 @@ from src.progena.orchestration.nodes.context import HeartbeatContext
 from src.progena.orchestration.state import ProgenaState
 from src.progena.runtime.conversation_gate import ConversationTurnGate
 from src.progena.runtime.instance import RUNTIME_INSTANCE_ID
+from src.progena.threads import MAIN_THREAD_ID
 
 
 async def chat_node(
@@ -23,7 +24,7 @@ async def chat_node(
     if not current_input:
         return {}
 
-    thread_id = str(state.get("thread_id") or "progena_main")
+    thread_id = str(state.get("thread_id") or MAIN_THREAD_ID)
     input_metadata = state.get("current_input_metadata")
     additional_kwargs: dict[str, Any] = {"created_at": time.time()}
     if isinstance(input_metadata, dict) and isinstance(input_metadata.get("attachments"), list):

@@ -91,8 +91,12 @@ const __routineStringify = JSON.stringify;
 const __routineIsFinite = Number.isFinite;
 const __routineTypeError = TypeError;
 const __routineRangeError = RangeError;
-const __routineCharCodeAt = Function.prototype.call.bind(String.prototype.charCodeAt);
-const __routineRegExpExec = Function.prototype.call.bind(RegExp.prototype.exec);
+const __routineRegExpReplace = Function.prototype.call.bind(RegExp.prototype[Symbol.replace]);
+const __routineNonAscii = /[\\u0000-\\u007F]+/g;
+const __routineThreeByte = /[\\u0000-\\u07FF\\uD800-\\uDFFF]+/g;
+// Pin exec before guest code can mutate RegExp.prototype.
+Object.defineProperty(__routineNonAscii, "exec", { value: RegExp.prototype.exec });
+Object.defineProperty(__routineThreeByte, "exec", { value: RegExp.prototype.exec });
 const __routineResult = await (async function(input) {
 """
 
@@ -110,26 +114,22 @@ const __routineSerialized = __routineStringify(__routineResult, (key, value) => 
 const __routineMaxBytes = """
     + str(_CODE_MAX_RESULT_BYTES)
     + """;
-// UTF-16 length is a lower bound on JSON's UTF-8 size. Reject it first, then
-// scan runs of equally wide non-ASCII code points in native code instead of
-// spending the guest CPU budget counting every byte. JSON.stringify escapes
-// lone surrogates, so only the astral branch can contain surrogate pairs.
+// UTF-16 length is a lower bound. Native replacement counts the extra bytes
+// without a guest-JS iteration for each alternating encoding width.
+// JSON.stringify escapes lone surrogates: pairs need one extra byte per unit,
+// and non-surrogate three-byte BMP points need one further byte.
 let __routineResultBytes = __routineSerialized.length;
 if (__routineResultBytes > __routineMaxBytes) {
   throw new __routineRangeError("code result exceeds the maximum size");
 }
-const __routineNonAsciiPattern = /[\\u0080-\\u07FF]+|[\\u0800-\\uFFFF]+|[\\u{10000}-\\u{10FFFF}]+/gu;
-let __routineNonAscii;
-while ((__routineNonAscii = __routineRegExpExec(
-    __routineNonAsciiPattern, __routineSerialized)) !== null) {
-  const unit = __routineCharCodeAt(__routineNonAscii[0], 0);
-  // Two-byte points and surrogate pairs each need one extra byte per UTF-16
-  // unit; three-byte BMP points need two. Every match has a single width.
-  const extraBytesPerUnit = unit < 0x800 || (unit >= 0xD800 && unit <= 0xDBFF) ? 1 : 2;
-  __routineResultBytes += __routineNonAscii[0].length * extraBytesPerUnit;
-  if (__routineResultBytes > __routineMaxBytes) {
-    throw new __routineRangeError("code result exceeds the maximum size");
-  }
+__routineResultBytes += __routineRegExpReplace(
+  __routineNonAscii, __routineSerialized, "").length;
+if (__routineResultBytes <= __routineMaxBytes) {
+  __routineResultBytes += __routineRegExpReplace(
+    __routineThreeByte, __routineSerialized, "").length;
+}
+if (__routineResultBytes > __routineMaxBytes) {
+  throw new __routineRangeError("code result exceeds the maximum size");
 }
 __routineSerialized;
 """

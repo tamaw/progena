@@ -6,6 +6,8 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY src/frontend/ ./src/frontend/
+COPY src/shared/ ./src/shared/
+COPY data/schemas/graph.routine.schema.v1.json ./data/schemas/graph.routine.schema.v1.json
 RUN npm run build
 
 FROM nginx:alpine

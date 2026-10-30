@@ -499,7 +499,9 @@ class TestPatchSessionDocument:
 
         result = patch_session_document(store, "thread_p", ChatPatchRequest())
 
-        assert result["title"] == "Old"
+        assert result is not None
+        assert result.payload["title"] == "Old"
+        assert result.changed is False
 
     def test_returns_none_when_session_missing(self):
         store = InMemoryDocumentStore()

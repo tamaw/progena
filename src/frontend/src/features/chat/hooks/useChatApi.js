@@ -3,6 +3,8 @@ import { useConfig } from '../../../context/ConfigContext';
 import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
 import { requestAcknowledged, withQuery } from '../../../store/http';
 import { createUuid } from '../../../lib/uuid';
+import { CHAT_CONTENT_EVENT, UI_EVENT } from '../../../realtime/eventVocabulary';
+
 
 function normalizeInputContent(content) {
   if (typeof content === 'string') {
@@ -149,17 +151,17 @@ export function useChatApi() {
       activeStreamRequestIdRef.current = null;
     }
 
-    if (terminalType === 'chat.response.failed') {
+    if (terminalType === UI_EVENT.CHAT_RESPONSE_FAILED) {
       const message = typeof payload.error === 'string' && payload.error
         ? payload.error
         : 'Response generation failed';
       pending.onError?.(new Error(message));
       setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
-    } else if (terminalType === 'chat.response.completed' && pending.desynced && !pending.allowDesyncedCompletion) {
+    } else if (terminalType === UI_EVENT.CHAT_RESPONSE_COMPLETED && pending.desynced && !pending.allowDesyncedCompletion) {
       pending.onError?.(buildDesyncCompletionError(pending.desyncReason));
       setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
     } else {
-      pending.onComplete?.(terminalType === 'chat.response.cancelled' ? 'cancelled' : '');
+      pending.onComplete?.(terminalType === UI_EVENT.CHAT_RESPONSE_CANCELLED ? 'cancelled' : '');
       setConnectionState(deriveConnectionState(pendingStreamsRef.current));
     }
 
@@ -263,7 +265,7 @@ export function useChatApi() {
         pending.connectAttempts = 0;
         setConnectionState(deriveConnectionState(pendingStreamsRef.current));
 
-        if (responseType === 'chat.response.delta') {
+        if (responseType === CHAT_CONTENT_EVENT.DELTA) {
           const delta = typeof payload.delta === 'string' ? payload.delta : '';
           if (delta) {
             pending.onChunk?.(delta);
@@ -283,19 +285,19 @@ export function useChatApi() {
         }
         pending.lastEventAt = Date.now();
       };
-      source.addEventListener('chat.response.delta', (event) => {
-        handleContentFrame('chat.response.delta', event);
+      source.addEventListener(CHAT_CONTENT_EVENT.DELTA, (event) => {
+        handleContentFrame(CHAT_CONTENT_EVENT.DELTA, event);
       });
-      source.addEventListener('chat.response.event', (event) => {
-        handleContentFrame('chat.response.event', event);
+      source.addEventListener(CHAT_CONTENT_EVENT.EVENT, (event) => {
+        handleContentFrame(CHAT_CONTENT_EVENT.EVENT, event);
       });
-      source.addEventListener('chat.response.heartbeat', () => {
+      source.addEventListener(CHAT_CONTENT_EVENT.HEARTBEAT, () => {
         if (!isCurrent() || pending.eventSource !== source || pending.finalized) {
           return;
         }
         pending.lastEventAt = Date.now();
       });
-      source.addEventListener('chat.response.resync_required', (event) => {
+      source.addEventListener(CHAT_CONTENT_EVENT.RESYNC_REQUIRED, (event) => {
         if (!isCurrent() || pending.eventSource !== source || pending.finalized) {
           return;
         }
@@ -347,10 +349,10 @@ export function useChatApi() {
   const consumeStreamEvent = useCallback((event) => {
     const type = event?.type;
     const payload = event?.payload || event?.data;
-    if (type === 'chat.response.cancel_requested') {
+    if (type === UI_EVENT.CHAT_RESPONSE_CANCEL_REQUESTED) {
       return;
     }
-    if (!['chat.response.started', 'chat.response.completed', 'chat.response.cancelled', 'chat.response.failed'].includes(type) || !payload) {
+    if (![UI_EVENT.CHAT_RESPONSE_STARTED, UI_EVENT.CHAT_RESPONSE_COMPLETED, UI_EVENT.CHAT_RESPONSE_CANCELLED, UI_EVENT.CHAT_RESPONSE_FAILED].includes(type) || !payload) {
       return;
     }
 
@@ -360,7 +362,7 @@ export function useChatApi() {
       return;
     }
 
-    if (type === 'chat.response.started') {
+    if (type === UI_EVENT.CHAT_RESPONSE_STARTED) {
       pending.streamObserved = true;
       if (!pending.cancelRequested) {
         setConnectionState(deriveConnectionState(pendingStreamsRef.current));
@@ -527,7 +529,7 @@ export function useChatApi() {
         rememberFrameId(frameId);
         connectAttempts = 0;
 
-        if (responseType === 'chat.response.delta') {
+        if (responseType === CHAT_CONTENT_EVENT.DELTA) {
           const delta = typeof payload.delta === 'string' ? payload.delta : '';
           if (delta) {
             onChunk?.(delta);
@@ -537,11 +539,11 @@ export function useChatApi() {
         }
       };
 
-      nextSource.addEventListener('chat.response.delta', (event) => {
-        handleContentFrame('chat.response.delta', event);
+      nextSource.addEventListener(CHAT_CONTENT_EVENT.DELTA, (event) => {
+        handleContentFrame(CHAT_CONTENT_EVENT.DELTA, event);
       });
-      nextSource.addEventListener('chat.response.event', (event) => {
-        handleContentFrame('chat.response.event', event);
+      nextSource.addEventListener(CHAT_CONTENT_EVENT.EVENT, (event) => {
+        handleContentFrame(CHAT_CONTENT_EVENT.EVENT, event);
       });
       nextSource.onerror = () => {
         if (source !== nextSource || stopped) return;

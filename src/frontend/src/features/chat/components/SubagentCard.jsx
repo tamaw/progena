@@ -1,10 +1,9 @@
 /**
- * Renders a `{ kind: 'subagent', ... }` timeline item -- one card per `task`
- * tool delegation, live-updated as the subagent's own reply streams and its
- * own tool calls start/finish. Multiple subagents can be running
- * concurrently within one turn; each card is independent (keyed by the
- * dispatching tool_call_id in liveAssistantTurnModel.js) and needs no
- * special handling here beyond rendering whatever `item` it's given.
+ * Renders a `{ kind: 'subagent' | 'async_subagent', ... }` timeline item.
+ * Nested `task` delegates stream their own reply and tools, while tracked
+ * async delegates report state transitions only. Both use a single card per
+ * stable task identity, so concurrent delegates stay independent and an
+ * approval pause can resume the same card.
  *
  * The body shows only the latest CARD_SUMMARY_LINES chain lines (task
  * summary, streamed text, nested tool calls) with an "N earlier" toggle for
@@ -168,6 +167,9 @@ const SubagentCard = memo(function SubagentCard({ item, summaryMarkers = [], sum
   const formattedTime = formatTimestamp(item.finishedAt || item.startedAt);
   const [showAll, setShowAll] = useState(false);
   const { open, toggle } = useRunningDisclosure(item.status === 'running');
+  const statusLabel = item.status === 'interrupted'
+    ? 'Awaiting approval'
+    : (item.status === 'cancelled' ? 'Cancelled' : '');
   const lines = item.taskSummary
     ? [{ kind: 'task_summary', id: 'task-summary' }, ...entries]
     : entries;
@@ -184,6 +186,7 @@ const SubagentCard = memo(function SubagentCard({ item, summaryMarkers = [], sum
       <div className="entry__main">
         <button type="button" className="entry__head entry-toggle" aria-expanded={open} onClick={toggle}>
           <span className="entry__role">{item.subagentName || 'subagent'}</span>
+          {statusLabel && <span className="muted">{statusLabel}</span>}
           {failedToolCount > 0 && <span className="work-group__failed">{failedToolCount} failed</span>}
           <span className="msg__head-trailing">
             {toolCount > 0 && (

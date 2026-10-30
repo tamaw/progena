@@ -363,7 +363,7 @@ def broadcast_workflows_snapshot(
         )
     payload = [item.model_dump(mode="json") for item in items]
     return events_stream.broadcast_ui_event(
-        "workflows.snapshot", {"items": payload}, request_id=request_id
+        events_contracts.UiEvent.WORKFLOWS_SNAPSHOT, {"items": payload}, request_id=request_id
     )
 
 
@@ -374,9 +374,11 @@ def broadcast_workflow_detail(workflow_id: str) -> events_contracts.UiEventEnvel
         storage_documents.get_default_document_store(), workflow_id
     )
     if definition is None:
-        return events_stream.broadcast_ui_event("workflow.deleted", {"workflow_id": workflow_id})
+        return events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.WORKFLOW_DELETED, {"workflow_id": workflow_id}
+        )
     payload = _workflow_content_response(definition).model_dump(mode="json", by_alias=True)
-    return events_stream.broadcast_ui_event("workflow.updated", payload)
+    return events_stream.broadcast_ui_event(events_contracts.UiEvent.WORKFLOW_UPDATED, payload)
 
 
 def broadcast_workflow_runs_snapshot(
@@ -388,5 +390,5 @@ def broadcast_workflow_runs_snapshot(
         runs = workflows_service.list_workflow_runs(storage_documents.get_default_document_store())
     payload = [item.model_dump(mode="json") for item in runs]
     return events_stream.broadcast_ui_event(
-        "workflow.runs.snapshot", {"items": payload}, request_id=request_id
+        events_contracts.UiEvent.WORKFLOW_RUNS_SNAPSHOT, {"items": payload}, request_id=request_id
     )

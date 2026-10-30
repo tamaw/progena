@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../../realtime/eventVocabulary';
 import { createAcknowledgedThunk, requestAcknowledged } from '../../../store/async';
 import { failureMessage, isCancellation } from '../../../lib/failures';
 
@@ -92,7 +93,7 @@ function completeRequest(state, requestId) {
 }
 
 export const eventHandlers = {
-  'providers.snapshot': (state, payload) => {
+  [UI_EVENT.PROVIDERS_SNAPSHOT]: (state, payload) => {
     state.providers.items = Array.isArray(payload.providers) ? payload.providers : [];
     state.providers.goModels = Array.isArray(payload.go_models) ? payload.go_models : [];
     state.providers.chatgptModelsByProviderId = payload.chatgpt_models
@@ -113,7 +114,7 @@ export const eventHandlers = {
     }
     completeRequest(state, payload.request_id);
   },
-  'providers.tested': (state, payload) => {
+  [UI_EVENT.PROVIDERS_TESTED]: (state, payload) => {
     const providerId = payload.provider_id;
     if (typeof providerId === 'string' && providerId) {
       state.providers.testsByProviderId[providerId] = {

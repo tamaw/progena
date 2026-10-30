@@ -8,6 +8,7 @@ the runtime reader.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -229,6 +230,12 @@ class ChatPatchRequest(BaseModel):
     title: str | None = None
     pinned: bool | None = None
     archived: bool | None = None
+
+
+@dataclass(frozen=True)
+class ChatSessionPatchResult:
+    payload: dict[str, Any]
+    changed: bool
 
 
 def _message_text(value: Any) -> str:
@@ -904,7 +911,7 @@ def patch_session_document(
     store: BackendDocumentStore,
     thread_id: str,
     request: ChatPatchRequest,
-) -> dict[str, Any] | None:
+) -> ChatSessionPatchResult | None:
     payload = _session_payload(store, thread_id)
     if payload is None:
         return None
@@ -918,10 +925,13 @@ def patch_session_document(
     if request.archived is not None:
         updates["archived"] = request.archived
     if not updates:
-        return payload
-    if not store.merge_document(PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}", updates):
-        return None
-    return {**payload, **updates}
+        return ChatSessionPatchResult(payload=payload, changed=False)
+    if not store.merge_document_if_changed(
+        PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}", updates
+    ):
+        current = _session_payload(store, thread_id)
+        return None if current is None else ChatSessionPatchResult(payload=current, changed=False)
+    return ChatSessionPatchResult(payload={**payload, **updates}, changed=True)
 
 
 def delete_session_document(store: BackendDocumentStore, thread_id: str) -> bool:

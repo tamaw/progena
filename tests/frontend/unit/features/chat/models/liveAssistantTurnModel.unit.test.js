@@ -4,6 +4,7 @@ import {
   applyAssistantMetadata,
   applyAssistantStreamEvent,
   applySubagentEvent,
+  applyAsyncSubagentEvent,
   applyA2ACallEvent,
   applyAssistantChunk,
   buildDefaultAssistantTimeline,
@@ -1083,6 +1084,76 @@ describe('applySubagentEvent', () => {
   });
 });
 
+// ─── applyAsyncSubagentEvent ─────────────────────────────────────────────
+
+describe('applyAsyncSubagentEvent', () => {
+  function asyncEvent(type, metadata = {}) {
+    return {
+      id: `evt-${type}`,
+      eventType: type,
+      content: 'researcher',
+      timestamp: NOW,
+      metadata,
+    };
+  }
+
+  it.each(['success', 'error'])('retains an observed %s result when its start was not streamed', (status) => {
+    const items = applyAsyncSubagentEvent([], asyncEvent('async_subagent_result', {
+      task_id: 'existing-task',
+      status,
+      result_preview: 'Existing task result',
+      error: 'Existing task failure',
+    }));
+    expect(items[0]).toMatchObject({
+      kind: 'async_subagent',
+      status,
+      resultPreview: 'Existing task result',
+      error: status === 'error' ? 'Existing task failure' : null,
+      startedAt: null,
+      finishedAt: NOW,
+    });
+  });
+
+  it('keeps one task card through pause, resume, and final result while concurrent work stays separate', () => {
+    let items = applyAsyncSubagentEvent([], asyncEvent('async_subagent_start', {
+      task_id: 'task-a', tool_call_id: 'start-a', subagent_name: 'alpha', status: 'running',
+    }));
+    items = applyAsyncSubagentEvent(items, asyncEvent('async_subagent_start', {
+      task_id: 'task-b', tool_call_id: 'start-b', subagent_name: 'beta', status: 'running',
+    }));
+    items = applyAsyncSubagentEvent(items, asyncEvent('async_subagent_pause', {
+      task_id: 'task-a', tool_call_id: 'check-a', subagent_name: 'alpha', status: 'interrupted',
+    }));
+    expect(items.find((item) => item.taskId === 'task-a')).toMatchObject({
+      status: 'interrupted',
+      finishedAt: null,
+    });
+    items = applyAsyncSubagentEvent(items, asyncEvent('async_subagent_update', {
+      task_id: 'task-a', tool_call_id: 'resume-a', subagent_name: 'alpha', status: 'running',
+    }));
+    expect(items.find((item) => item.taskId === 'task-a')).toMatchObject({
+      status: 'running',
+      finishedAt: null,
+    });
+    items = applyAsyncSubagentEvent(items, asyncEvent('async_subagent_result', {
+      task_id: 'task-a', tool_call_id: 'check-a', subagent_name: 'alpha', status: 'success',
+      result_preview: 'Completed result',
+    }));
+
+    expect(items).toHaveLength(2);
+    expect(items.find((item) => item.taskId === 'task-a')).toMatchObject({
+      id: 'async-subagent-task-a',
+      toolCallId: 'start-a',
+      status: 'success',
+      resultPreview: 'Completed result',
+    });
+    expect(items.find((item) => item.taskId === 'task-b')).toMatchObject({
+      status: 'running',
+      subagentName: 'beta',
+    });
+  });
+});
+
 // ─── applyA2ACallEvent ───────────────────────────────────────────────────
 
 describe('applyA2ACallEvent', () => {
@@ -1364,6 +1435,57 @@ describe('applyAssistantChunk', () => {
 // ─── buildDefaultAssistantTimeline ───────────────────────────────────────
 
 describe('buildDefaultAssistantTimeline', () => {
+  it('replays one async delegation card through approval pause, resume, and completion', () => {
+    const items = buildDefaultAssistantTimeline({
+      role: 'assistant',
+      id: 'msg_async',
+      timestamp: NOW + 1000,
+      streamEvents: [
+        {
+          id: 'start',
+          eventType: 'async_subagent_start',
+          timestamp: NOW,
+          content: 'researcher',
+          metadata: { task_id: 'task-1', tool_call_id: 'call-start', status: 'running' },
+        },
+        {
+          id: 'pause',
+          eventType: 'async_subagent_pause',
+          timestamp: NOW + 10,
+          content: 'researcher',
+          metadata: { task_id: 'task-1', tool_call_id: 'call-check', status: 'interrupted' },
+        },
+        {
+          id: 'resume',
+          eventType: 'async_subagent_update',
+          timestamp: NOW + 20,
+          content: 'researcher',
+          metadata: { task_id: 'task-1', tool_call_id: 'call-resume', status: 'running' },
+        },
+        {
+          id: 'result',
+          eventType: 'async_subagent_result',
+          timestamp: NOW + 30,
+          content: 'researcher',
+          metadata: {
+            task_id: 'task-1',
+            tool_call_id: 'call-check',
+            status: 'success',
+            result_preview: 'Completed result',
+          },
+        },
+      ],
+    });
+
+    const cards = items.filter((item) => item.kind === 'async_subagent');
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      id: 'async-subagent-task-1',
+      toolCallId: 'call-start',
+      status: 'success',
+      resultPreview: 'Completed result',
+    });
+  });
   it('returns undefined for non-assistant messages', () => {
     expect(buildDefaultAssistantTimeline({ role: 'user', content: 'hi' })).toBeUndefined();
   });

@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 import src.backend.http.contracts as http_contracts
+from src.backend.events import contracts as events_contracts
 from src.backend.http.requests import BroadcastUiEvent, request_correlation_id
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
 from src.progena.settings.policies import POLICY_KEY_PREFIX, validate_policy
@@ -30,8 +31,12 @@ def create_policy_router(
     async def list_policies(request: Request):
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         items = await asyncio.to_thread(policy_catalog, get_store())
-        broadcast("policies.snapshot", {"items": items}, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["policies.snapshot"])
+        broadcast(
+            events_contracts.UiEvent.POLICIES_SNAPSHOT, {"items": items}, request_id=request_id
+        )
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.POLICIES_SNAPSHOT]
+        )
 
     @router.put("/policies/{policy_id}", status_code=202)
     async def save_policy(policy_id: str, request: Request):
@@ -50,10 +55,12 @@ def create_policy_router(
         )
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         broadcast(
-            "policies.snapshot",
+            events_contracts.UiEvent.POLICIES_SNAPSHOT,
             {"items": await asyncio.to_thread(policy_catalog, store)},
             request_id=request_id,
         )
-        return http_contracts.acknowledgement_response(request_id, ["policies.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.POLICIES_SNAPSHOT]
+        )
 
     return router

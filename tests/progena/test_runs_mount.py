@@ -128,6 +128,31 @@ async def test_each_attempt_on_a_continued_thread_shows_only_its_own_steps(runs:
     assert "status: completed" in resumed
 
 
+async def test_near_workflow_prefix_routine_session_remains_a_top_level_run(runs: _Runs) -> None:
+    request_id = "prefix-boundary"
+    await runs.event(
+        request_id,
+        "started",
+        "2026-10-28T04:00:00Z",
+        agent_id="smoke",
+        thread_id="routine:smoke:rev1:prefix-boundary",
+        session_id="workflow_runaway_0123456789ab_deadbeef",
+    )
+    await runs.event(
+        request_id,
+        "completed",
+        "2026-10-28T04:00:01Z",
+        agent_id="smoke",
+        thread_id="routine:smoke:rev1:prefix-boundary",
+        session_id="workflow_runaway_0123456789ab_deadbeef",
+        output={"message": "Done."},
+    )
+
+    assert await runs.names("routines") == [
+        "/runs/routines/2026-10-28_smoke-interrupt_prefix-boundary.md"
+    ]
+
+
 @pytest.mark.parametrize(
     ("owner", "status"),
     [("gone-runtime", "interrupted"), (RUNTIME_INSTANCE_ID, "started")],

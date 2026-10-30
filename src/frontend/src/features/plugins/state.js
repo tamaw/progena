@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 /**
  * Marketplaces + plugins domain: registered marketplace sources and installed
  * plugins, kept live by SSE snapshots and seeded via REST on page mount.
@@ -102,19 +103,19 @@ export const fetchPluginSkillContent = createAcknowledgedThunk('uiData/fetchPlug
 });
 
 export const eventHandlers = {
-  'marketplaces.snapshot': (state, payload) => {
+  [UI_EVENT.MARKETPLACES_SNAPSHOT]: (state, payload) => {
     applyMarketplaces(state, payload, payload.request_id || null);
   },
-  'plugins.snapshot': (state, payload) => {
+  [UI_EVENT.PLUGINS_SNAPSHOT]: (state, payload) => {
     applyPlugins(state, payload, payload.request_id || null);
   },
-  'plugin.catalog.snapshot': (state, payload) => {
+  [UI_EVENT.PLUGIN_CATALOG_SNAPSHOT]: (state, payload) => {
     if (typeof payload?.name === 'string' && payload.name) {
       state.catalogByMarketplace[payload.name] = payload.catalog || {};
       completeKeyedRequest(state.catalogRequestByMarketplace, payload.name, payload.request_id);
     }
   },
-  'plugin.skill.content.updated': (state, payload) => {
+  [UI_EVENT.PLUGIN_SKILL_CONTENT_UPDATED]: (state, payload) => {
     if (typeof payload?.marketplace === 'string' && typeof payload?.plugin === 'string' && typeof payload?.skill === 'string') {
       const key = `${payload.marketplace}/${payload.plugin}/${payload.skill}`;
       state.skillContentByKey[key] = payload;

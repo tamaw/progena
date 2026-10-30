@@ -37,6 +37,7 @@ export function categoryForEventType(eventType, metadata) {
   if (eventType === 'tool_error') return 'errors';
   if (eventType.startsWith('tool_')) return 'tools';
   if (eventType === 'todos_update') return 'plan';
+  if (eventType.startsWith('async_subagent_')) return 'subagents';
   if (eventType.startsWith('subagent_')) return 'subagents';
   return 'debug';
 }
@@ -88,12 +89,14 @@ export function filterTimelineItems(items, filter) {
   const filterEvent = turnEventFilter(events, filter);
   return items.filter((item) => {
     if (item.kind === 'stream_event') return filterEvent(item.event);
-    if (item.kind !== 'subagent' && item.kind !== 'a2a_call') return true;
+    if (item.kind !== 'subagent' && item.kind !== 'async_subagent' && item.kind !== 'a2a_call') return true;
     const failed = item.status === 'error' || Boolean(item.error)
       || item.entries?.some((entry) => entry.status === 'error')
       || item.messages?.some((entry) => entry.state === 'failed' || entry.state === 'rejected');
     return filter({
-      eventType: item.kind === 'subagent' ? 'subagent_start' : 'tool_start',
+      eventType: item.kind === 'subagent' ? 'subagent_start' : (
+        item.kind === 'async_subagent' ? 'async_subagent_start' : 'tool_start'
+      ),
       metadata: {
         tool_name: item.kind === 'a2a_call' ? A2A_PRIMARY_TOOL_NAME : 'task',
         success: !failed,
@@ -114,6 +117,10 @@ const CONTINUATION_EVENT_TYPES = new Set([
   'subagent_tool_result',
   'subagent_tool_error',
   'subagent_message_delta',
+  'async_subagent_update',
+  'async_subagent_pause',
+  'async_subagent_result',
+  'async_subagent_cancel',
   'tool_error',
   'a2a_call_progress',
 ]);

@@ -1,11 +1,12 @@
 import { normalizeConversationSummaryMarkers } from './conversationSummaryModel';
+import { BROWSER_STORAGE_KEY } from '../../../lib/browserContracts';
 
 // localStorage plumbing for the conversation page. All chat-local preferences
 // flow through readJson/writeJsonOrRemove so the parse/validate/remove pattern
 // lives in exactly one place.
 
-export const ARCHIVED_CHAT_SESSIONS_KEY = 'progena:archived-chat-sessions';
-export const PINNED_CHAT_SESSIONS_KEY = 'progena:pinned-chat-sessions';
+export const ARCHIVED_CHAT_SESSIONS_KEY = BROWSER_STORAGE_KEY.ARCHIVED_CHAT_SESSIONS;
+export const PINNED_CHAT_SESSIONS_KEY = BROWSER_STORAGE_KEY.PINNED_CHAT_SESSIONS;
 
 export function readJson(key, fallback = null, warnLabel = null) {
   let saved;

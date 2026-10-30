@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { createAcknowledgedThunk, requestAcknowledged } from '../../store/async';
 import { arrayPayload } from '../../lib/eventPayload';
 
@@ -31,19 +32,19 @@ export const initialState = {
 };
 
 export const eventHandlers = {
-  'connection.ready': (state, payload) => {
+  [UI_EVENT.CONNECTION_READY]: (state, payload) => {
     const widgets = widgetsFrom(payload.status) || widgetsFrom(payload);
     if (widgets) {
       state.widgets = widgets;
     }
   },
-  'status.updated': (state, payload) => {
+  [UI_EVENT.STATUS_UPDATED]: (state, payload) => {
     const widgets = widgetsFrom(payload);
     if (widgets) {
       state.widgets = widgets;
     }
   },
-  'widgets.updated': (state, payload) => {
+  [UI_EVENT.WIDGETS_UPDATED]: (state, payload) => {
     state.widgets = widgetsFrom(payload) || [];
   }
 };

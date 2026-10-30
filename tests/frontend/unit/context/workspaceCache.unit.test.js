@@ -1,29 +1,19 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { clearWorkspaceScopedCaches } from '@frontend/context/workspaceCache';
 import {
-  ARCHIVED_CHAT_SESSIONS_KEY,
-  PINNED_CHAT_SESSIONS_KEY,
-} from '@frontend/features/chat/models/chatStorage';
-import { SOLUTIONS_STORAGE_KEY } from '@frontend/features/projects/solutions';
+  BROWSER_STORAGE_KEY,
+  GLOBAL_PREFERENCE_STORAGE_KEYS,
+  WORKSPACE_LOCAL_STORAGE_KEYS,
+} from '@frontend/lib/browserContracts';
 
-const WORKSPACE_SCOPED_KEYS = [
-  ARCHIVED_CHAT_SESSIONS_KEY,
-  PINNED_CHAT_SESSIONS_KEY,
-  SOLUTIONS_STORAGE_KEY,
-  'progena_chat_history',
-  'progena_quick_chat_handoff',
-  'progena_input_history',
-  'progena_stream_filters',
-];
+const WORKSPACE_SCOPED_KEYS = WORKSPACE_LOCAL_STORAGE_KEYS;
 
-// Preferences that must survive a workspace switch -- they describe the
-// browser/UI, not data belonging to a particular backend.
+// Preferences and workspace routing state must survive a workspace switch --
+// they describe the browser rather than data belonging to a particular backend.
 const PRESERVED_KEYS = [
-  'progena_theme',
-  'progena_notifications',
-  'progena_sounds',
-  'progena_sidebar_collapsed',
-  'progena_workspaces',
+  ...GLOBAL_PREFERENCE_STORAGE_KEYS,
+  BROWSER_STORAGE_KEY.WORKSPACE_REGISTRY,
+  BROWSER_STORAGE_KEY.DEFAULT_WORKSPACE,
 ];
 
 beforeEach(() => {

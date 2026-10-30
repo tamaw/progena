@@ -1,3 +1,4 @@
+import { UI_EVENT } from './eventVocabulary';
 import { createSlice, original } from '@reduxjs/toolkit';
 
 const MAX_RECEIVED_EVENTS_PER_REQUEST = 100;
@@ -97,7 +98,7 @@ const realtimeSlice = createSlice({
       }
       state.lastEventId = event.id;
       state.lastEventAt = event.timestamp || new Date().toISOString();
-      if (event.type !== 'connection.heartbeat' && event.type !== 'status.heartbeat') {
+      if (event.type !== UI_EVENT.CONNECTION_HEARTBEAT && event.type !== UI_EVENT.STATUS_HEARTBEAT) {
         state.lastEvent = event;
       }
       state.receivedIds = [...knownIds.slice(-(MAX_RECEIVED_IDS - 1)), event.id];

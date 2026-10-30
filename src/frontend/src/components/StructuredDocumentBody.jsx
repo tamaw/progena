@@ -5,6 +5,8 @@ import { renderMarkdownToHtml } from '../lib/markdown';
 import { parseStructuredContent } from '../lib/structuredContent';
 import { OpenChatIcon, ProgenaAiIcon, QuickChatIcon } from './navIcons';
 import { DeleteActionIcon } from './layout/DetailHeader';
+import { BROWSER_EVENT } from '../lib/browserContracts';
+
 
 function Markdown({ content }) {
   const ref = useRef(null);
@@ -112,8 +114,8 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
           : { ...current, phase: 'error', error: event.detail.error || 'The quick-chat response did not complete.' };
       });
     };
-    window.addEventListener('progena:quick-chat-inline-status', handleStatus);
-    return () => window.removeEventListener('progena:quick-chat-inline-status', handleStatus);
+    window.addEventListener(BROWSER_EVENT.QUICK_CHAT_INLINE_STATUS, handleStatus);
+    return () => window.removeEventListener(BROWSER_EVENT.QUICK_CHAT_INLINE_STATUS, handleStatus);
   }, []);
 
   function select(node) {

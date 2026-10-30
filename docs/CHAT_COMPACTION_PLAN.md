@@ -130,8 +130,8 @@ churn from equivalent summary arrays.
 
 The sandbox fix leaves the one-second deadline and 1 MiB cap unchanged. It
 rejects impossible UTF-16 lengths immediately, then counts additional UTF-8 bytes
-using native runs grouped by encoding width rather than scanning each ASCII byte
-in JavaScript. Captured native helpers resist guest prototype mutation. A real
+using captured native regex replacement passes rather than guest-JS byte/width
+loops. Captured native helpers resist guest prototype mutation. A real
 routine smoke executed ASCII/BMP near-limit successes concurrently with
 oversized-result rejections; both rejections surfaced the size-limit `JSError`.
 Exact-limit and one-byte-over boundary coverage includes ASCII, two-byte,
@@ -163,3 +163,22 @@ does not currently summarize. Enabling it would exceed the visibility-only scope
 - Quick Chat regression coverage exercises own-turn terminal reconciliation,
   stale successor protection, cancelled/failed terminals, persisted promotion
   boundaries and unrelated historical-row render stability.
+
+## Main alignment after PR #463
+
+- Merged `origin/main` at `cb2ee32f`, retaining the consolidated browser event,
+  storage and canonical SSE contracts without changing their persisted/wire values.
+- Resolved chat overlaps by preserving summary reconciliation and handoff markers
+  alongside async delegation cards and resumable approval pauses.
+- Summary callback names remain inner runtime custom events, consistent with
+  existing tool/subagent events; they are not new canonical UI event types.
+- Integration verification exposed a sandbox deadline regression for alternating
+  Unicode widths. Replaced the remaining per-width guest loop with captured
+  native replacement passes; the one-second deadline and 1 MiB cap are unchanged.
+- Browser smoke verified nested marker isolation, keyboard disclosure with a
+  234 px scroll region, async approval presentation and canonical history dispatch.
+  The mixed-Unicode sandbox smoke accepted exactly 1 MiB of serialized UTF-8.
+- Integrated checks: **2,414 Python tests passed, eight knowledge-indexer tests
+  skipped** for the existing missing `PROGENA_DATABASE_URL` prerequisite;
+  **1,348 frontend tests passed**. Ruff, pinned Pyright, formatting, ESLint and
+  production frontend build passed; existing dependency/chunk-size warnings remain.

@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../../realtime/eventVocabulary';
 import { usePaneCollapse } from '../../../hooks/usePaneCollapse';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
@@ -36,6 +37,7 @@ import { useConversationAttachments } from '../hooks/useConversationAttachments'
 import { latestContextUsage, resolveComposerCacheExpiry, resolveComposerContextUsage } from '../models/contextWindowModel';
 import { quickChatMemory } from '../models/quickChatMemory';
 import { mergeConversationSummaryMarkers, normalizeConversationSummaryMarkers } from '../models/conversationSummaryModel';
+import { BROWSER_EVENT } from '../../../lib/browserContracts';
 
 function alignSummaryMarkerAnchors(markers, canonicalMessages, renderedMessages) {
   if (!Array.isArray(markers) || !Array.isArray(canonicalMessages) || !Array.isArray(renderedMessages)) {
@@ -145,7 +147,7 @@ function ConversationPage() {
       }));
       trackSave(ticket, {
         requestId: operation.requestId,
-        events: ['chat.session.metadata.updated', 'chat.sessions.snapshot'],
+        events: [UI_EVENT.CHAT_SESSION_METADATA_UPDATED, UI_EVENT.CHAT_SESSIONS_SNAPSHOT],
       });
       try {
         return await operation.unwrap();
@@ -576,10 +578,8 @@ function ConversationPage() {
       quickChatMemory.handoff = null;
     };
 
-    window.addEventListener('progena:load-chat-history', handlePromotedQuickChat);
-    return () => {
-      window.removeEventListener('progena:load-chat-history', handlePromotedQuickChat);
-    };
+    window.addEventListener(BROWSER_EVENT.LOAD_CHAT_HISTORY, handlePromotedQuickChat);
+    return () => window.removeEventListener(BROWSER_EVENT.LOAD_CHAT_HISTORY, handlePromotedQuickChat);
   }, [activeStreamIdRef, config.storage.quickChatHandoff, setIsGenerating, setLiveAssistantTurn, setSummaryMarkers]);
 
   // Save chat history to localStorage only for locally-owned sessions.
@@ -844,13 +844,13 @@ function ConversationPage() {
     // Handle scheduled/background messages from the agent.
     // Prefer agent_message/agent_question over scheduled_response as they have cleaner content.
     if (
-      event.type === 'agent_message'
-      || event.type === 'agent_question'
-      || event.type === 'scheduled_response'
+      event.type === UI_EVENT.AGENT_MESSAGE
+      || event.type === UI_EVENT.AGENT_QUESTION
+      || event.type === UI_EVENT.SCHEDULED_RESPONSE
     ) {
       const content = event.data?.content || '';
       const metadata = event.data?.metadata || {};
-      const isQuestion = event.type === 'agent_question';
+      const isQuestion = event.type === UI_EVENT.AGENT_QUESTION;
 
       // Clean up the content (remove "SAY: " prefix if present)
       let cleanContent = content;

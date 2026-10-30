@@ -104,6 +104,9 @@ where = ["."]
 include = ["src", "src.*"]
 namespaces = false
 
+[tool.setuptools.package-data]
+"src.shared" = ["*.json"]
+
 # Ruff configuration (linting + formatting)
 [tool.ruff]
 target-version = "py311"

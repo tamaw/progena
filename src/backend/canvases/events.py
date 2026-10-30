@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+import src.backend.events.contracts as events_contracts
 import src.backend.events.stream as events_stream
 from src.backend.events.documents import TypedDocumentEvent
 
@@ -46,7 +47,7 @@ class CanvasEvents:
         for (client_id, name), patterns in list(self.interests.items()):
             if patterns.intersection(matching):
                 events_stream.broadcast_ui_event(
-                    "canvas.document.event",
+                    events_contracts.UiEvent.CANVAS_DOCUMENT_EVENT,
                     {"name": name, "event": payload},
                     client_id=client_id,
                 )

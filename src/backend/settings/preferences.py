@@ -39,7 +39,9 @@ async def get_preferences(
     # event loop for the Postgres round-trip.
     snapshot = await asyncio.to_thread(load_preferences)
     broadcast_preferences_snapshot(snapshot, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["preferences.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.PREFERENCES_SNAPSHOT]
+    )
 
 
 @router.put("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
@@ -61,7 +63,9 @@ async def replace_preferences(
 
     saved = await asyncio.to_thread(save_preferences, normalized)
     broadcast_preferences_snapshot(saved, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["preferences.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.PREFERENCES_SNAPSHOT]
+    )
 
 
 def broadcast_preferences_snapshot(
@@ -78,4 +82,6 @@ def broadcast_preferences_snapshot(
     document read and keep the event consistent with the HTTP response.
     """
     payload = settings_preferences_store.load_preferences() if preferences is None else preferences
-    return events_stream.broadcast_ui_event("preferences.snapshot", payload, request_id=request_id)
+    return events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.PREFERENCES_SNAPSHOT, payload, request_id=request_id
+    )

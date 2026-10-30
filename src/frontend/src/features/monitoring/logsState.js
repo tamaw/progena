@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 /**
  * Logs domain: result pages, source metadata, and export chunks are hydrated
  * exclusively from canonical `/api/ui/stream` events.
@@ -118,7 +119,7 @@ function shouldApplyLogsPage(currentPage, nextPage) {
 }
 
 export const eventHandlers = {
-  'logs.page.loaded': (state, payload) => {
+  [UI_EVENT.LOGS_PAGE_LOADED]: (state, payload) => {
     if (!shouldApplyLogsPage(state.logs.page, payload)) {
       return;
     }
@@ -137,11 +138,11 @@ export const eventHandlers = {
       state.logs.folders = payload.folders;
     }
   },
-  'logs.sources.loaded': (state, payload) => {
+  [UI_EVENT.LOGS_SOURCES_LOADED]: (state, payload) => {
     state.logs.sourceGroups = Array.isArray(payload.source_groups) ? payload.source_groups : [];
     state.logs.folders = Array.isArray(payload.folders) ? payload.folders : [];
   },
-  'logs.export.started': (state, payload) => {
+  [UI_EVENT.LOGS_EXPORT_STARTED]: (state, payload) => {
     const requestId = payload.request_id;
     if (!requestId) {
       return;
@@ -153,14 +154,14 @@ export const eventHandlers = {
       completed: false,
     };
   },
-  'logs.export.chunk': (state, payload) => {
+  [UI_EVENT.LOGS_EXPORT_CHUNK]: (state, payload) => {
     const exportState = exportStateFor(state, payload.request_id, payload);
     if (!exportState || !Number.isInteger(payload.index) || payload.index < 0) {
       return;
     }
     exportState.chunks[payload.index] = Array.isArray(payload.entries) ? payload.entries : [];
   },
-  'logs.export.completed': (state, payload) => {
+  [UI_EVENT.LOGS_EXPORT_COMPLETED]: (state, payload) => {
     const exportState = exportStateFor(state, payload.request_id, payload);
     if (exportState) {
       exportState.completed = true;

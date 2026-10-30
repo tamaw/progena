@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 /** Global search slice — replaces the old knowledge-only search. */
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from '../../store/async';
 
@@ -14,7 +15,7 @@ export const searchAll = createAcknowledgedThunk(
 );
 
 export const eventHandlers = {
-  'search.results': (state, payload) => {
+  [UI_EVENT.SEARCH_RESULTS]: (state, payload) => {
     state.search.resultsByQuery[payload.query] = {
       query: payload.query,
       sections: Array.isArray(payload.sections) ? payload.sections : [],

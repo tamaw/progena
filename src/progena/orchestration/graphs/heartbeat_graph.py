@@ -97,6 +97,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
 
+from src.progena.orchestration.background import ROUTINE_RUN_TASK_KIND
 from src.progena.orchestration.nodes.a2a import (
     apply_completed_tasks_node,
     notify_completed_tasks_node,
@@ -364,7 +365,7 @@ def _route_after_setup(state: ProgenaState) -> SetupRoute:
     if not state.get("current_input"):
         return "end"
     metadata = state.get("current_input_metadata") or {}
-    if metadata.get("kind") == "routine_run":
+    if metadata.get("kind") == ROUTINE_RUN_TASK_KIND:
         return "routine_run"
     if state.get("is_isolated_thread"):
         return "isolated_cycle"

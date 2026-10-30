@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { createOperationRequestId, requestAcknowledged } from '../../store/http';
 import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
 import { subscribeUiEvent } from '../../realtime/realtimeEvents';
@@ -31,7 +32,7 @@ function subscribe(watch, force = false) {
 }
 
 subscribeUiEvent((event) => {
-  if (event.type === 'connection.ready' && activeWatch) {
+  if (event.type === UI_EVENT.CONNECTION_READY && activeWatch) {
     void subscribe(activeWatch, true).catch(() => {});
   }
 });

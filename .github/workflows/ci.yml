@@ -140,7 +140,7 @@ jobs:
           PYTHON_COMMON=(src ':!src/frontend' pyproject.toml README.md data/schemas data/canvases .dockerignore)
           PROGENA="$(changed "${PYTHON_COMMON[@]}" docker/progena data/instructions data/skills data/agents data/shims)"
           BACKEND="$(changed "${PYTHON_COMMON[@]}" docker/backend data/agents/objects)"
-          FRONTEND="$(changed src/frontend docker/frontend package.json package-lock.json)"
+          FRONTEND="$(changed src/frontend src/shared data/schemas/graph.routine.schema.v1.json docker/frontend package.json package-lock.json)"
           CLAUDE="$(changed docker/claude)"
           # The stack also restarts for compose/deploy-step changes.
           STACK="$(changed docker/docker-compose.progena.yml .github/workflows/ci.yml)"

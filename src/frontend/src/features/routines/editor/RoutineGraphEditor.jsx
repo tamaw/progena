@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../../realtime/eventVocabulary';
 import { useDispatch, useSelector, useStore } from 'react-redux';
 import { draftDiscarded, draftSaveStarted, entityDraftKey } from '../../../store/editorDraftsSlice';
 import { createUuid } from '../../../lib/uuid';
@@ -684,7 +685,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       if (routineId !== agent.id || !nodeIds.has(nodeId)) continue;
       const ticket = { key, revision: entry.revision, token: createUuid() };
       store.dispatch(draftSaveStarted(ticket));
-      trackGraphSave(ticket, { requestId, events: ['agent.graph.updated'] });
+      trackGraphSave(ticket, { requestId, events: [UI_EVENT.AGENT_GRAPH_UPDATED] });
     }
   }, [agent.id, store, trackGraphSave]);
 
@@ -728,7 +729,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     }
     trackGraphSave(ticket, {
       requestId: operation.requestId,
-      events: ['agent.graph.updated'],
+      events: [UI_EVENT.AGENT_GRAPH_UPDATED],
     });
     bindBufferedFieldSaves(operation.requestId, payload);
     const request = operation.unwrap().catch((error) => {
@@ -2144,7 +2145,7 @@ function RoutineJsonEditor({ routineId, graph, onSave, onClose }) {
     try {
       await onSave(parsed, (requestId) => controls.trackSave(ticket, {
         requestId,
-        events: ['agent.graph.updated'],
+        events: [UI_EVENT.AGENT_GRAPH_UPDATED],
       }));
     } catch (saveError) {
       controls.failSave(ticket, saveError);

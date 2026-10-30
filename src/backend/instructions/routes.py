@@ -40,7 +40,9 @@ async def list_instructions(
     request_id = _request_correlation_id(request, x_request_id)
     instructions = await asyncio.to_thread(instruction_service.list_instructions)
     broadcast_instructions_snapshot(instructions, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["instructions.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.INSTRUCTIONS_SNAPSHOT]
+    )
 
 
 @router.get("/content", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
@@ -55,8 +57,12 @@ async def get_instruction(
         raise _not_found(path) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    events_stream.broadcast_ui_event("instruction.loaded", instruction, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["instruction.loaded"])
+    events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.INSTRUCTION_LOADED, instruction, request_id=request_id
+    )
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.INSTRUCTION_LOADED]
+    )
 
 
 @router.put("/content", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
@@ -77,10 +83,16 @@ async def update_instruction(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    events_stream.broadcast_ui_event("instruction.loaded", saved, request_id=request_id)
+    events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.INSTRUCTION_LOADED, saved, request_id=request_id
+    )
     broadcast_instructions_snapshot(request_id=request_id)
     return http_contracts.acknowledgement_response(
-        request_id, ["instruction.loaded", "instructions.snapshot"]
+        request_id,
+        [
+            events_contracts.UiEvent.INSTRUCTION_LOADED,
+            events_contracts.UiEvent.INSTRUCTIONS_SNAPSHOT,
+        ],
     )
 
 
@@ -97,11 +109,13 @@ async def list_instruction_revisions(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     events_stream.broadcast_ui_event(
-        "instruction.revisions.loaded",
+        events_contracts.UiEvent.INSTRUCTION_REVISIONS_LOADED,
         {"path": path, "revisions": revisions},
         request_id=request_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["instruction.revisions.loaded"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.INSTRUCTION_REVISIONS_LOADED]
+    )
 
 
 @router.get(
@@ -121,8 +135,12 @@ async def get_instruction_revision(
         revision = await asyncio.to_thread(instruction_service.get_revision, path, revision_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Instruction revision not found.") from exc
-    events_stream.broadcast_ui_event("instruction.revision.loaded", revision, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["instruction.revision.loaded"])
+    events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.INSTRUCTION_REVISION_LOADED, revision, request_id=request_id
+    )
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.INSTRUCTION_REVISION_LOADED]
+    )
 
 
 @router.post(
@@ -146,10 +164,16 @@ async def restore_instruction_revision(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    events_stream.broadcast_ui_event("instruction.loaded", restored, request_id=request_id)
+    events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.INSTRUCTION_LOADED, restored, request_id=request_id
+    )
     broadcast_instructions_snapshot(request_id=request_id)
     return http_contracts.acknowledgement_response(
-        request_id, ["instruction.loaded", "instructions.snapshot"]
+        request_id,
+        [
+            events_contracts.UiEvent.INSTRUCTION_LOADED,
+            events_contracts.UiEvent.INSTRUCTIONS_SNAPSHOT,
+        ],
     )
 
 
@@ -164,5 +188,7 @@ def broadcast_instructions_snapshot(
     """
     payload = instruction_service.list_instructions() if instructions is None else instructions
     return events_stream.broadcast_ui_event(
-        "instructions.snapshot", {"instructions": payload}, request_id=request_id
+        events_contracts.UiEvent.INSTRUCTIONS_SNAPSHOT,
+        {"instructions": payload},
+        request_id=request_id,
     )

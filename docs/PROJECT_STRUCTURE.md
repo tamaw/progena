@@ -32,6 +32,7 @@ metadata points at the current tree.
 
 ```text
 src/
+├── shared/    # Packaged JSON contracts shared by Python and the browser
 ├── progena/   # Long-running runtime service
 │   ├── agent/    # DeepAgent setup and runtime integration
 │   ├── orchestration/ # Graphs, nodes and composed loop state
@@ -109,6 +110,54 @@ rather than physical `data/state/`, `data/config/`, `data/sessions/`,
 `data/attachments/`, or `data/prompts/` directories. Uploaded attachments are
 stored in the Postgres attachment table. See
 [`STATE_DOCUMENTS.md`](STATE_DOCUMENTS.md) for the virtual-document layout.
+
+### Behavioural string contracts
+
+- `src/shared/ui_event_vocabulary.json` owns app SSE names and routine lifecycle
+  categories. Python consumes it through `backend/events/contracts.py` and
+  `progena/routines/lifecycle.py`; the browser uses
+  `frontend/src/realtime/eventVocabulary.js`. Feature models still own event
+  payloads; the vocabulary does not replace payload validation. Canonical UI
+  lifecycle traffic and request-scoped chat content remain separate streams.
+  CI's frontend change filter includes both this shared directory and the
+  imported routine schema, so contract-only changes rebuild the browser image.
+- Routine statuses retain their persisted spellings. A paused attempt is
+  terminal for display but resumable through approval; generic stop/cancel
+  admission deliberately excludes it from its settled-control category.
+  `interrupted` remains a derived display state. ACP, workflow and Kanban
+  statuses are separate domains, not aliases for routine statuses.
+- `progena/documents/kinds.py` owns durable document prefixes;
+  `progena/orchestration/background.py` owns the background queue key and task
+  discriminator. `progena/threads.py` owns checkpoint identity
+  construction and existing routine control parsing. Preserve serialized forms:
+  changing a key or thread format requires a persistence migration.
+- `progena/workflows/documents.py` owns workflow-run ID generation and prefix
+  predicates. The broad workflow-owned session predicate and strict invocation
+  ID validator intentionally have different acceptance rules.
+- `frontend/src/lib/browserContracts.js` owns window event names, quick-chat
+  modes and browser storage keys. Workspace cache clearing consumes its scoped
+  key registry; global preferences and workspace routing records survive.
+- The routine editor derives reserved node IDs from
+  `data/schemas/graph.routine.schema.v1.json`, rejecting compiler/framework IDs
+  before a save instead of maintaining a separate browser list.
+- `frontend/src/features/canvases/canvasProtocol.js` owns the canvas iframe
+  channel, message types and methods. The generated sandbox bootstrap embeds
+  those definitions; both sides still check message source and channel.
+- Async-subagent `interrupted` means waiting for human approval, not completion.
+  `async_subagent_pause` preserves that state in the stream, alongside stable
+  task IDs used to update one delegation card across checks, resume and result.
+- Chat metadata/deletion acknowledgements carry their request ID in the durable
+  document-event origin. The publisher correlates snapshot and per-session
+  events. Empty/unchanged PATCHes remain successful and acknowledge only a
+  directly correlated snapshot because they produce no durable change.
+- Plugin fetch failures expose typed kind, code and upstream HTTP status.
+  Routes never infer rate limiting from human-readable wording; a GitHub 403
+  needs rate-limit response evidence to become 429.
+
+Add new app-owned values to the owning contract and migrate producers and
+consumers together. Keep vendor protocol fields at their adapter boundary;
+do not rename externally required strings or collapse unrelated status domains.
+
 
 ## Docker assets
 

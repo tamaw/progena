@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from psycopg.errors import UniqueViolation
 
 import src.backend.http.contracts as http_contracts
+from src.backend.events import contracts as events_contracts
 from src.backend.http.requests import BroadcastUiEvent, request_correlation_id
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
 from src.progena.settings.chatgpt_oauth import ChatGPTOAuthError
@@ -74,7 +75,7 @@ async def broadcast_provider_snapshot(
     request_id: str | None = None,
 ) -> None:
     payload = await _snapshot(repository)
-    broadcast("providers.snapshot", payload, request_id=request_id)
+    broadcast(events_contracts.UiEvent.PROVIDERS_SNAPSHOT, payload, request_id=request_id)
 
 
 def _profile_references_provider(store: BackendDocumentStore, provider_id: str) -> bool:
@@ -151,7 +152,9 @@ def create_provider_router(
             raise HTTPException(
                 status_code=503, detail="Provider settings are unavailable"
             ) from exc
-        return http_contracts.acknowledgement_response(request_id, ["providers.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.PROVIDERS_SNAPSHOT]
+        )
 
     @router.post(
         "/providers", status_code=202, response_model=http_contracts.UiRequestAcknowledgement
@@ -166,7 +169,9 @@ def create_provider_router(
             await broadcast_provider_snapshot(repository, broadcast, request_id=request_id)
         except Exception as exc:
             raise _repository_error(exc) from exc
-        return http_contracts.acknowledgement_response(request_id, ["providers.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.PROVIDERS_SNAPSHOT]
+        )
 
     @router.patch(
         "/providers/{provider_id}",
@@ -201,7 +206,9 @@ def create_provider_router(
             await broadcast_provider_snapshot(repository, broadcast, request_id=request_id)
         except Exception as exc:
             raise _repository_error(exc) from exc
-        return http_contracts.acknowledgement_response(request_id, ["providers.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.PROVIDERS_SNAPSHOT]
+        )
 
     @router.delete(
         "/providers/{provider_id}",
@@ -226,7 +233,9 @@ def create_provider_router(
             raise HTTPException(
                 status_code=503, detail="Provider settings are unavailable"
             ) from exc
-        return http_contracts.acknowledgement_response(request_id, ["providers.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.PROVIDERS_SNAPSHOT]
+        )
 
     @router.post(
         "/providers/{provider_id}/test",
@@ -252,8 +261,10 @@ def create_provider_router(
         payload: dict[str, Any] = {"provider_id": provider_id, "ok": ok}
         if error is not None:
             payload["error"] = error
-        broadcast("providers.tested", payload, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["providers.tested"])
+        broadcast(events_contracts.UiEvent.PROVIDERS_TESTED, payload, request_id=request_id)
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.PROVIDERS_TESTED]
+        )
 
     @router.post(
         "/providers/{provider_id}/disconnect",
@@ -280,6 +291,8 @@ def create_provider_router(
             await broadcast_provider_snapshot(repository, broadcast, request_id=request_id)
         except Exception as exc:
             raise _repository_error(exc) from exc
-        return http_contracts.acknowledgement_response(request_id, ["providers.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.PROVIDERS_SNAPSHOT]
+        )
 
     return router

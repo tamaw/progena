@@ -35,6 +35,7 @@ def test_allowed_event_types_cover_async_subagent_lifecycle():
     for name in (
         "async_subagent_start",
         "async_subagent_update",
+        "async_subagent_pause",
         "async_subagent_result",
         "async_subagent_cancel",
     ):

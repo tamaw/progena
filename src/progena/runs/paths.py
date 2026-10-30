@@ -6,6 +6,8 @@ import re
 from datetime import datetime, tzinfo
 from typing import Literal
 
+from src.progena.workflows.documents import WORKFLOW_RUN_ID_PREFIX
+
 RunKind = Literal["routine", "workflow", "schedule"]
 
 RUN_DIRECTORIES: dict[RunKind, str] = {
@@ -13,7 +15,7 @@ RUN_DIRECTORIES: dict[RunKind, str] = {
     "workflow": "workflows",
     "schedule": "schedules",
 }
-_ID_PREFIXES = ("workflow_run_", "schedrun_")
+_ID_PREFIXES = (WORKFLOW_RUN_ID_PREFIX, "schedrun_")
 _SLUG_CHARS = 40
 
 

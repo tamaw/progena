@@ -13,6 +13,7 @@ from src.progena.llm.structured import validate_against_schema
 from src.progena.runs.paths import run_file_path
 from src.progena.sessions.context import get_current_thread_id
 from src.progena.workflows.constants import MAX_WORKFLOW_INVOKE_DEPTH
+from src.progena.workflows.documents import new_workflow_run_id
 
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
@@ -118,7 +119,7 @@ class RunWorkflowTool(BaseSystemTool):
             )
 
         request_id = f"wfinvoke_{uuid.uuid4().hex[:12]}"
-        run_id = f"workflow_run_{uuid.uuid4().hex[:12]}"
+        run_id = new_workflow_run_id()
         await context.state_manager.request_workflow_run(
             request_id=request_id,
             run_id=run_id,

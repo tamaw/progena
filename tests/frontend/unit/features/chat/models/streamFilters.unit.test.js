@@ -25,6 +25,7 @@ describe('categoryForEventType', () => {
     expect(categoryForEventType('tool_start')).toBe('tools');
     expect(categoryForEventType('tool_result')).toBe('tools');
     expect(categoryForEventType('todos_update')).toBe('plan');
+    expect(categoryForEventType('async_subagent_pause')).toBe('subagents');
     expect(categoryForEventType('something_else')).toBe('debug');
     expect(categoryForEventType(123)).toBe('debug');
   });
@@ -121,6 +122,19 @@ describe('countCategorizedEvents', () => {
     expect(counts.delegations).toBe(1);
   });
 
+  it('counts one async delegation across pause, resume, and result events', () => {
+    const counts = countCategorizedEvents(
+      [
+        { eventType: 'async_subagent_start', metadata: { task_id: 'task-1' } },
+        { eventType: 'async_subagent_pause', metadata: { task_id: 'task-1' } },
+        { eventType: 'async_subagent_update', metadata: { task_id: 'task-1' } },
+        { eventType: 'async_subagent_result', metadata: { task_id: 'task-1' } },
+      ],
+      emptyCounts(),
+    );
+    expect(counts.delegations).toBe(1);
+  });
+
   it('keeps tool and delegation invocation counts independent of lifecycle updates', () => {
     const events = [
       { eventType: 'tool_start', metadata: { tool_name: 'list_agents' } },
@@ -175,6 +189,16 @@ describe('isEventVisible', () => {
     expect(isEventVisible({ eventType: 'subagent_start' }, filters)).toBe(false);
     expect(isEventVisible({ eventType: 'tool_start', metadata: { tool_name: 'a2a_send' } }, filters)).toBe(false);
     expect(isEventVisible({ eventType: 'tool_start', metadata: { tool_name: 'read_file' } }, filters)).toBe(true);
+  });
+
+  it('filters async delegation cards with the Delegations control', () => {
+    const items = [{
+      kind: 'async_subagent',
+      status: 'interrupted',
+      entries: [],
+      error: null,
+    }];
+    expect(filterTimelineItems(items, (event) => isEventVisible(event, { delegations: false }))).toEqual([]);
   });
   it.each([
     { eventType: 'tool_error', metadata: { tool_name: 'read_file' } },

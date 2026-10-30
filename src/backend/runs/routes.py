@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 
+from src.backend.events import contracts as events_contracts
 from src.backend.events import stream
 from src.backend.http import contracts as http_contracts
 from src.backend.http.requests import request_correlation_id
@@ -43,11 +44,13 @@ async def get_runs(
         cursor=cursor,
     )
     stream.broadcast_ui_event(
-        "runs.snapshot",
+        events_contracts.UiEvent.RUNS_SNAPSHOT,
         {"runs": [row.model_dump(mode="json") for row in runs], "next_cursor": next_cursor},
         request_id=request_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["runs.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.RUNS_SNAPSHOT]
+    )
 
 
 @router.get(
@@ -66,12 +69,14 @@ async def get_run_trace(
     request_id = request_correlation_id(request, x_request_id)
     trace, _threads = await runs_events.read_trace(get_default_document_store(), kind, run_id)
     stream.broadcast_ui_event(
-        "run.trace.loaded",
+        events_contracts.UiEvent.RUN_TRACE_LOADED,
         {"trace": trace.model_dump(mode="json")},
         request_id=request_id,
         client_id=client_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["run.trace.loaded"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.RUN_TRACE_LOADED]
+    )
 
 
 @router.put(
@@ -86,7 +91,7 @@ async def put_runs_subscription(
     request_id = request_correlation_id(request, x_request_id)
     if (body.kind is None) != (body.run_id is None):
         raise HTTPException(status_code=422, detail="kind and run_id must be supplied together")
-    event_types = ["run.subscription.updated"]
+    event_types: list[str] = [events_contracts.UiEvent.RUN_SUBSCRIPTION_UPDATED]
     payload = {"kind": body.kind, "run_id": body.run_id}
     if body.selected():
         assert body.kind is not None and body.run_id is not None
@@ -94,21 +99,27 @@ async def put_runs_subscription(
             get_default_document_store(), body.client_id, body.kind, body.run_id
         )
         stream.broadcast_ui_event(
-            "run.subscription.updated", payload, request_id=request_id, client_id=body.client_id
+            events_contracts.UiEvent.RUN_SUBSCRIPTION_UPDATED,
+            payload,
+            request_id=request_id,
+            client_id=body.client_id,
         )
         if selected is not None:
             trace, token = selected
             stream.broadcast_ui_event(
-                "run.trace.updated",
+                events_contracts.UiEvent.RUN_TRACE_UPDATED,
                 {"trace": trace.model_dump(mode="json")},
                 request_id=request_id,
                 client_id=body.client_id,
                 interest=token,
             )
-            event_types.append("run.trace.updated")
+            event_types.append(events_contracts.UiEvent.RUN_TRACE_UPDATED)
     else:
         runs_events.unsubscribe(body.client_id)
         stream.broadcast_ui_event(
-            "run.subscription.updated", payload, request_id=request_id, client_id=body.client_id
+            events_contracts.UiEvent.RUN_SUBSCRIPTION_UPDATED,
+            payload,
+            request_id=request_id,
+            client_id=body.client_id,
         )
     return http_contracts.acknowledgement_response(request_id, event_types)

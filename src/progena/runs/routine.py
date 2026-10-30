@@ -11,8 +11,11 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
+from src.progena.routines.lifecycle import ROUTINE_RUN_TERMINAL_STATUSES, RoutineRunStatus
 from src.progena.runtime.ownership import routine_attempt_interrupted
 from src.progena.sessions.transcript import Line
+from src.progena.threads import routine_agent_thread_id
+from src.progena.workflows.documents import is_workflow_owned_routine_session
 
 from ._render import (
     MAX_CHILD_DEPTH,
@@ -29,7 +32,7 @@ from ._render import (
 from .paths import short_id, slug
 from .values import describe_value, head_tail, one_line
 
-TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "stopped"})
+TERMINAL_STATUSES = ROUTINE_RUN_TERMINAL_STATUSES - {RoutineRunStatus.PAUSED}
 
 _VERBS = {
     "eval": "evaluates",
@@ -292,7 +295,7 @@ async def routine_log(
             if when is not None and await agent_transcript(
                 ctx,
                 log,
-                f"routine-agent:{thread_id}:{node_id}",
+                routine_agent_thread_id(thread_id, node_id),
                 agent=agent,
                 channel=channel,
                 when=when,
@@ -391,7 +394,7 @@ def _notice(when: datetime | None, nick: str, question: str, choices: str) -> Li
 
 def _trigger(started: dict[str, Any]) -> str | None:
     session_id = str(started.get("session_id") or "")
-    if session_id.startswith("workflow_run_"):
+    if is_workflow_owned_routine_session(session_id):
         return f"workflow {session_id.rsplit('_', 1)[0]}"
     parent = started.get("parent")
     if isinstance(parent, dict) and parent.get("thread_id"):
