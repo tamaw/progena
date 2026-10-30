@@ -128,10 +128,11 @@ provider counts. This does not authorize storing backend transcripts locally.
 
 All assistant rendering uses the same timeline path. Root work is one outer
 keyboard-operable disclosure using the existing work-summary row styling.
-Completed work starts collapsed; the detailed reasoning sections/tool rows stay
-inside. Delegated-agent cards, the answer and conversation-summary markers remain
-outside this disclosure. Native reasoning headings remain verbatim inside;
-they are not rewritten as evidence that an action succeeded.
+Completed work starts collapsed; expanding it reveals tool rows directly rather
+than repeating a generic work-summary disclosure. Distinct reasoning sections
+retain their own headings and details. Delegated-agent cards, the answer and
+conversation-summary markers remain outside this disclosure. Native reasoning
+headings remain verbatim; they are not rewritten as evidence that an action succeeded.
 
 Work state comes from actual response/provider/native interrupt evidence:
 completed, failed, cancelled, interrupted, or neutral unknown. A failed tool is
@@ -168,11 +169,12 @@ rewritten. Old summaries without recorded comparable footprints do not acquire
 invented savings figures.
 
 Message token labels omit model names. Token, context and cache metric details
-use `ChatInfoTooltip`, a portal reusing the shared `chat-info-tooltip` styling,
-fixed 8px from the viewport top and horizontally clamped. Details are compact
-label/value rows; observed input reductions and cache estimates remain labelled.
-Hover does not introduce a help cursor. Focus exposes the same information;
-Escape, blur/pointer exit and scrolling dismiss it without moving focus.
+use `ChatInfoTooltip`, a portal reusing the shared `chat-info-tooltip` styling.
+Hovered details follow the pointer; keyboard focus anchors them beside the
+trigger. Bubbles flip and clamp inside the viewport instead of appearing at the
+page top. Details are compact label/value rows; observed input reductions and
+cache estimates remain labelled. Hover keeps the default cursor. Escape,
+blur/pointer exit and scrolling dismiss details without moving focus.
 
 
 

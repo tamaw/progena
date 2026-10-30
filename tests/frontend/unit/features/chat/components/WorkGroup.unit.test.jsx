@@ -58,31 +58,21 @@ const items = [
 ];
 
 describe('WorkGroup', () => {
-  it('collapses finished work to a summary line with no individual rows', () => {
+  it('renders headless work as actual timeline rows without a second work disclosure', () => {
     const html = renderToStaticMarkup(React.createElement(WorkGroup, { items, active: false, endedAt: 9_000 }));
-    expect(html).toContain('Worked for 8s');
-    expect(html).toContain('5 tools');
-    expect(html).toContain('1 failed');
-    expect(html).not.toContain('/a');
-    expect(html).not.toContain('work-step');
+    expect(html).not.toContain('Worked for 8s');
+    expect(html).not.toContain('work-group__toggle');
+    expect(html).toContain('/a');
+    expect(html).toContain('/e');
   });
 
-  it('shows every call while active, collapses on completion, and can reopen the full history', async () => {
+  it('keeps headless tool rows visible when the turn changes from active to complete', async () => {
     await act(async () => root.render(<WorkGroup items={items} active />));
-    expect(host.querySelector('.work-group__toggle').getAttribute('aria-expanded')).toBe('true');
-    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(5);
-    for (const id of ['a', 'b', 'c', 'd', 'e']) {
-      expect(host.textContent).toContain(`/${id}`);
-    }
-    await act(async () => host.querySelector('.work-group__toggle').click());
-    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(0);
-    await act(async () => host.querySelector('.work-group__toggle').click());
+    expect(host.querySelector('.work-group__toggle')).toBeNull();
     expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(5);
 
     await act(async () => root.render(<WorkGroup items={items} active={false} endedAt={9_000} />));
-    expect(host.querySelector('.work-group__toggle').getAttribute('aria-expanded')).toBe('false');
-    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(0);
-    await act(async () => host.querySelector('.work-group__toggle').click());
+    expect(host.querySelector('.work-group__toggle')).toBeNull();
     expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(5);
   });
 
@@ -200,8 +190,6 @@ describe('WorkGroup', () => {
     await act(async () => root.render(
       <WorkGroup items={writeTodosItems} active={false} endedAt={1_000} />,
     ));
-
-    await act(async () => host.querySelector('.work-group__toggle').click());
 
     expect(host.querySelector('.tool-call-entry--error')).not.toBeNull();
     expect(host.querySelector('.entry__badge--err')).not.toBeNull();

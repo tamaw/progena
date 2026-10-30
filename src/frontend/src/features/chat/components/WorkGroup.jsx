@@ -1,12 +1,10 @@
 /**
- * One collapsible work line of an assistant turn (see workGroupModel.js):
- * headed by its reasoning summary when it has one, else the typed "-ing"
- * word (TypingWord, as the pending cursor uses) while
- * live / "Worked for 17s" once done. Seconds tick and the tool count grows
- * while it is live.
+ * A headed reasoning group inside an assistant turn. The turn owns the one
+ * generic work disclosure; headless groups render their timeline rows directly
+ * so a tool is never hidden behind a second, identical work summary.
  *
- * While the agent works in this group (`active`), all rows are expanded.
- * Finished groups collapse by default; the header can toggle either state.
+ * Headed groups retain their reasoning summary and their own optional detail
+ * disclosure. While a group is active, its rows are expanded.
  */
 
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -76,7 +74,32 @@ const ReasoningBody = memo(function ReasoningBody({ event }) {
   );
 });
 
-const WorkGroup = memo(function WorkGroup({ heading, items, active, endedAt, onRegenerate, summaryMarkers, summaryActivities }) {
+const WorkEntries = memo(function WorkEntries({
+  items,
+  onRegenerate,
+  summaryMarkers,
+  summaryActivities,
+}) {
+  return mergeToolCallItems(items).map((item, index) => (
+    <TimelineItem
+      key={timelineItemKey(item, index)}
+      item={item}
+      itemIndex={index}
+      onRegenerate={onRegenerate}
+      summaryMarkers={summaryMarkers}
+      summaryActivities={summaryActivities}
+    />
+  ));
+});
+
+const WorkGroup = memo(function WorkGroup(props) {
+  if (!props.heading) {
+    return <WorkEntries {...props} />;
+  }
+  return <HeadedWorkGroup {...props} />;
+});
+
+const HeadedWorkGroup = memo(function HeadedWorkGroup({ heading, items, active, endedAt, onRegenerate, summaryMarkers, summaryActivities }) {
   // A manual choice applies only to this phase. Finishing work must collapse
   // it even if the user reopened it while it was active.
   const [disclosure, setDisclosure] = useState(null);
@@ -133,16 +156,14 @@ const WorkGroup = memo(function WorkGroup({ heading, items, active, endedAt, onR
           {expanded && reasoningItem && <ReasoningBody event={reasoningItem.event} />}
         </div>
       </div>
-      {expanded && mergeToolCallItems(rest).map((item, index) => (
-        <TimelineItem
-          key={timelineItemKey(item, index)}
-          item={item}
-          itemIndex={index}
+      {expanded && (
+        <WorkEntries
+          items={rest}
           onRegenerate={onRegenerate}
           summaryMarkers={summaryMarkers}
           summaryActivities={summaryActivities}
         />
-      ))}
+      )}
     </>
   );
 });

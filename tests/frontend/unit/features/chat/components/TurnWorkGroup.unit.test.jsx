@@ -64,6 +64,21 @@ describe('TurnWorkGroup', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
   });
 
+  it('shows headless tool rows directly after opening the turn disclosure', async () => {
+    const headlessGroups = [{
+      id: 'headless', heading: null, startedAt: 1_000,
+      items: [tool('start', 'tool_start', 'read', 1_000), tool('result', 'tool_result', 'read', 2_000)],
+    }];
+    await render({ groups: headlessGroups, workItems: headlessGroups[0].items });
+
+    const toggle = host.querySelector('button[aria-expanded]');
+    await act(async () => toggle.click());
+
+    expect(host.querySelector('.work-group__toggle')).toBeNull();
+    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(1);
+    expect(host.textContent.match(/Worked for 4s/g)).toHaveLength(1);
+  });
+
   it.each([
     ['completed', 'Worked for 4s'],
     ['failed', 'Work failed'],
