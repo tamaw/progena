@@ -27,6 +27,7 @@ from src.backend.agents.store import (
     a2a_profiles_from_registry,
     acp_profiles_from_registry,
 )
+from src.backend.events import contracts as events_contracts
 from src.backend.http.requests import BroadcastUiEvent
 from src.backend.http.requests import request_correlation_id as _request_correlation_id
 from src.backend.integrations.runtime import RuntimeControlError
@@ -42,12 +43,19 @@ from src.backend.workflows.routine_runs import (
 )
 from src.progena.documents.catalog import load_schema
 from src.progena.llm.structured import validate_against_schema
-from src.progena.routines.controls import routine_run_control_key, routine_session_from_thread
+from src.progena.orchestration.background import ROUTINE_RUN_TASK_KIND
+from src.progena.routines.controls import routine_run_control_key
 from src.progena.routines.graph import (
     ROUTINE_GRAPH_VERSION,
     validate_routine_graph,
     validate_routine_graph_payload,
 )
+from src.progena.routines.lifecycle import (
+    ROUTINE_RUN_CONTROL_PENDING_STATUSES,
+    ROUTINE_RUN_CONTROL_STATUSES,
+    RoutineRunStatus,
+)
+from src.progena.threads import routine_session_from_thread
 from src.progena.utils import utcnow_isoformat
 
 
@@ -205,7 +213,7 @@ def _is_cancelled_routine_session(
         control
         and control.get("agent_id") == agent_id
         and control.get("session_id") == session_id
-        and control.get("status") == "cancelled"
+        and control.get("status") == RoutineRunStatus.CANCELLED
     )
 
 
@@ -342,7 +350,11 @@ async def broadcast_agent_profiles_snapshot(
     if store is None:
         return None
     response = await asyncio.to_thread(build_agent_profiles, store)
-    broadcast_ui_event("agents.snapshot", response.model_dump(by_alias=True), request_id=request_id)
+    broadcast_ui_event(
+        events_contracts.UiEvent.AGENTS_SNAPSHOT,
+        response.model_dump(by_alias=True),
+        request_id=request_id,
+    )
     return response
 
 
@@ -408,9 +420,13 @@ def create_agent_profile_router(
         request_id = _request_correlation_id(request, x_request_id)
         response = await asyncio.to_thread(build_agent_profiles, get_agent_store())
         broadcast_ui_event(
-            "agents.snapshot", response.model_dump(by_alias=True), request_id=request_id
+            events_contracts.UiEvent.AGENTS_SNAPSHOT,
+            response.model_dump(by_alias=True),
+            request_id=request_id,
         )
-        return http_contracts.acknowledgement_response(request_id, ["agents.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.AGENTS_SNAPSHOT]
+        )
 
     @router.post(
         "/agent-profiles/object",
@@ -434,11 +450,13 @@ def create_agent_profile_router(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         response = await asyncio.to_thread(build_agent_profiles, store)
         broadcast_ui_event(
-            "agents.snapshot",
+            events_contracts.UiEvent.AGENTS_SNAPSHOT,
             response.model_dump(by_alias=True),
             request_id=request_id,
         )
-        return http_contracts.acknowledgement_response(request_id, ["agents.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.AGENTS_SNAPSHOT]
+        )
 
     @router.patch(
         "/agent-profiles/object/{agent_id}",
@@ -473,11 +491,13 @@ def create_agent_profile_router(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         response = await asyncio.to_thread(build_agent_profiles, store)
         broadcast_ui_event(
-            "agents.snapshot",
+            events_contracts.UiEvent.AGENTS_SNAPSHOT,
             response.model_dump(by_alias=True),
             request_id=request_id,
         )
-        return http_contracts.acknowledgement_response(request_id, ["agents.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.AGENTS_SNAPSHOT]
+        )
 
     @router.get(
         "/agent-profiles/skills",
@@ -502,8 +522,12 @@ def create_agent_profile_router(
         skill = await asyncio.to_thread(store.resolve_skill, path)
         if skill is None:
             raise HTTPException(status_code=404, detail=f"skill {path!r} not found")
-        broadcast_ui_event("agent.skill.content.updated", skill, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["agent.skill.content.updated"])
+        broadcast_ui_event(
+            events_contracts.UiEvent.AGENT_SKILL_CONTENT_UPDATED, skill, request_id=request_id
+        )
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.AGENT_SKILL_CONTENT_UPDATED]
+        )
 
     @router.patch(
         "/agent-profiles/skills",
@@ -531,8 +555,12 @@ def create_agent_profile_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        broadcast_ui_event("agent.skill.content.updated", skill, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["agent.skill.content.updated"])
+        broadcast_ui_event(
+            events_contracts.UiEvent.AGENT_SKILL_CONTENT_UPDATED, skill, request_id=request_id
+        )
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.AGENT_SKILL_CONTENT_UPDATED]
+        )
 
     @router.get(
         "/agent-profiles/{agent_id}",
@@ -552,15 +580,18 @@ def create_agent_profile_router(
             raise HTTPException(status_code=404, detail="Agent not found")
         profile = AgentProfile(**agent)
         broadcast_ui_event(
-            "agent.upserted", {"agent": profile.model_dump(by_alias=True)}, request_id=request_id
+            events_contracts.UiEvent.AGENT_UPSERTED,
+            {"agent": profile.model_dump(by_alias=True)},
+            request_id=request_id,
         )
         broadcast_ui_event(
-            "agent.selected",
+            events_contracts.UiEvent.AGENT_SELECTED,
             {"agent": profile.model_dump(by_alias=True)},
             request_id=request_id,
         )
         return http_contracts.acknowledgement_response(
-            request_id, ["agent.upserted", "agent.selected"]
+            request_id,
+            [events_contracts.UiEvent.AGENT_UPSERTED, events_contracts.UiEvent.AGENT_SELECTED],
         )
 
     @router.patch(
@@ -628,11 +659,13 @@ def create_agent_profile_router(
 
         graph = AgentGraphModel(**updated)
         broadcast_ui_event(
-            "agent.graph.updated",
+            events_contracts.UiEvent.AGENT_GRAPH_UPDATED,
             {"agent_id": agent_id, "graph": graph.model_dump(by_alias=True)},
             request_id=request_id,
         )
-        return http_contracts.acknowledgement_response(request_id, ["agent.graph.updated"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.AGENT_GRAPH_UPDATED]
+        )
 
     @router.put(
         "/agent-profiles/{agent_id}/run-subscription",
@@ -665,7 +698,7 @@ def create_agent_profile_router(
         elif routine_events.interests.get(body.client_id, {}).get("agent_id") == agent_id:
             routine_events.interests.pop(body.client_id, None)
         broadcast_ui_event(
-            "agent.routine.subscription.updated",
+            events_contracts.UiEvent.AGENT_ROUTINE_SUBSCRIPTION_UPDATED,
             {
                 "agent_id": agent_id,
                 "subscribed": body.subscribed,
@@ -676,7 +709,7 @@ def create_agent_profile_router(
         if body.subscribed:
             routine_events.schedule(agent_id)
         return http_contracts.acknowledgement_response(
-            request_id, ["agent.routine.subscription.updated"]
+            request_id, [events_contracts.UiEvent.AGENT_ROUTINE_SUBSCRIPTION_UPDATED]
         )
 
     @router.post(
@@ -709,8 +742,14 @@ def create_agent_profile_router(
         from src.backend.workflows.events import routine_events
 
         if routine_events.claim_lifecycle(lifecycle):
-            broadcast_ui_event("agent.routine.run.enqueued", lifecycle, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["agent.routine.run.enqueued"])
+            broadcast_ui_event(
+                events_contracts.UiEvent.AGENT_ROUTINE_RUN_ENQUEUED,
+                lifecycle,
+                request_id=request_id,
+            )
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.AGENT_ROUTINE_RUN_ENQUEUED]
+        )
 
     async def _admit_routine_run(
         agent_id: str,
@@ -757,7 +796,7 @@ def create_agent_profile_router(
                 or control.get("agent_id") != agent_id
                 or control.get("session_id") != body.session_id
                 or control.get("thread_id") != body.resume_thread_id
-                or control.get("status") != "stopped"
+                or control.get("status") != RoutineRunStatus.STOPPED
                 or not isinstance(control.get("request_id"), str)
                 or not control["request_id"]
             ):
@@ -788,7 +827,7 @@ def create_agent_profile_router(
             if (
                 control.get("agent_id") == agent_id
                 and control.get("session_id") == body.session_id
-                and control.get("status") == "stopped"
+                and control.get("status") == RoutineRunStatus.STOPPED
             ):
                 raise HTTPException(
                     status_code=409,
@@ -797,7 +836,7 @@ def create_agent_profile_router(
             if (
                 control.get("agent_id") == agent_id
                 and control.get("session_id") == body.session_id
-                and control.get("status") in {"stopping", "cancelling", "resuming"}
+                and control.get("status") in {*ROUTINE_RUN_CONTROL_PENDING_STATUSES, "resuming"}
             ):
                 raise HTTPException(status_code=409, detail="Routine control is still pending")
 
@@ -883,8 +922,14 @@ def create_agent_profile_router(
         from src.backend.workflows.events import routine_events
 
         if routine_events.claim_lifecycle(enqueued):
-            broadcast_ui_event("agent.routine.run.enqueued", enqueued, request_id=operation_id)
-        return http_contracts.acknowledgement_response(operation_id, ["agent.routine.run.enqueued"])
+            broadcast_ui_event(
+                events_contracts.UiEvent.AGENT_ROUTINE_RUN_ENQUEUED,
+                enqueued,
+                request_id=operation_id,
+            )
+        return http_contracts.acknowledgement_response(
+            operation_id, [events_contracts.UiEvent.AGENT_ROUTINE_RUN_ENQUEUED]
+        )
 
     @router.post(
         "/agent-profiles/{agent_id}/run-control",
@@ -924,7 +969,7 @@ def create_agent_profile_router(
             or lifecycle.get("agent_id") != agent_id
             or lifecycle.get("thread_id") != body.thread_id
             or lifecycle.get("request_id") != body.request_id
-            or lifecycle.get("status") not in {"stopping", "cancelling", "stopped", "cancelled"}
+            or lifecycle.get("status") not in ROUTINE_RUN_CONTROL_STATUSES
             or not isinstance(lifecycle.get("session_id"), str)
             or not lifecycle["session_id"]
             or not isinstance(lifecycle.get("timestamp"), str)
@@ -937,12 +982,12 @@ def create_agent_profile_router(
         # The envelope's request_id is the control operation; the targeted
         # attempt keeps its own request_id inside ``run``.
         broadcast_ui_event(
-            "agent.routine.control.updated",
+            events_contracts.UiEvent.AGENT_ROUTINE_CONTROL_UPDATED,
             {"run": lifecycle},
             request_id=operation_id,
         )
         return http_contracts.acknowledgement_response(
-            operation_id, ["agent.routine.control.updated"]
+            operation_id, [events_contracts.UiEvent.AGENT_ROUTINE_CONTROL_UPDATED]
         )
 
     @router.post(
@@ -983,7 +1028,7 @@ def create_agent_profile_router(
                 if doc_store.get_document(PROGENA_STATE_PREFIX, claim_key) is not None:
                     raise ValueError("An answer for this approval has already been submitted")
                 metadata = {
-                    "kind": "routine_run",
+                    "kind": ROUTINE_RUN_TASK_KIND,
                     "operation": "resume",
                     "routine_id": agent_id,
                     "thread_id": body.thread_id,
@@ -1012,7 +1057,7 @@ def create_agent_profile_router(
                     "thread_id": body.thread_id,
                     "session_id": metadata["session_id"],
                     "request_id": request_id,
-                    "status": "enqueued",
+                    "status": RoutineRunStatus.ENQUEUED,
                     "timestamp": queued_at,
                 }
                 doc_store.save_document(
@@ -1021,9 +1066,15 @@ def create_agent_profile_router(
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if routine_events.claim_lifecycle(lifecycle):
-            broadcast_ui_event("agent.routine.run.enqueued", lifecycle, request_id=request_id)
+            broadcast_ui_event(
+                events_contracts.UiEvent.AGENT_ROUTINE_RUN_ENQUEUED,
+                lifecycle,
+                request_id=request_id,
+            )
         routine_events.schedule(agent_id)
-        return http_contracts.acknowledgement_response(request_id, ["agent.routine.run.enqueued"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.AGENT_ROUTINE_RUN_ENQUEUED]
+        )
 
     @router.get(
         "/agent-profiles/{agent_id}/run-state",
@@ -1056,12 +1107,12 @@ def create_agent_profile_router(
         payload = await read_run_state(agent_id, thread_id, get_document_store())
 
         broadcast_ui_event(
-            "agent.routine.run_state.loaded",
+            events_contracts.UiEvent.AGENT_ROUTINE_RUN_STATE_LOADED,
             payload,
             request_id=request_id,
         )
         return http_contracts.acknowledgement_response(
-            request_id, ["agent.routine.run_state.loaded"]
+            request_id, [events_contracts.UiEvent.AGENT_ROUTINE_RUN_STATE_LOADED]
         )
 
     @router.get(
@@ -1129,8 +1180,12 @@ def create_agent_profile_router(
                 for run in runs
             ],
         }
-        broadcast_ui_event("agent.routine.runs.loaded", payload, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["agent.routine.runs.loaded"])
+        broadcast_ui_event(
+            events_contracts.UiEvent.AGENT_ROUTINE_RUNS_LOADED, payload, request_id=request_id
+        )
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.AGENT_ROUTINE_RUNS_LOADED]
+        )
 
     @router.get(
         "/agent-profiles/{agent_id}/revisions",
@@ -1157,9 +1212,11 @@ def create_agent_profile_router(
                 for revision in revisions
             ],
         }
-        broadcast_ui_event("agent.routine.revisions.loaded", payload, request_id=request_id)
+        broadcast_ui_event(
+            events_contracts.UiEvent.AGENT_ROUTINE_REVISIONS_LOADED, payload, request_id=request_id
+        )
         return http_contracts.acknowledgement_response(
-            request_id, ["agent.routine.revisions.loaded"]
+            request_id, [events_contracts.UiEvent.AGENT_ROUTINE_REVISIONS_LOADED]
         )
 
     @router.get(
@@ -1181,12 +1238,12 @@ def create_agent_profile_router(
         if graph is None:
             raise HTTPException(status_code=404, detail="Revision not found")
         broadcast_ui_event(
-            "agent.routine.revision.loaded",
+            events_contracts.UiEvent.AGENT_ROUTINE_REVISION_LOADED,
             {"agent_id": agent_id, "revision_id": revision_id, "graph": graph},
             request_id=request_id,
         )
         return http_contracts.acknowledgement_response(
-            request_id, ["agent.routine.revision.loaded"]
+            request_id, [events_contracts.UiEvent.AGENT_ROUTINE_REVISION_LOADED]
         )
 
     @router.delete(
@@ -1220,15 +1277,18 @@ def create_agent_profile_router(
             if agent is None or agent.get("kind") != "routine":
                 raise HTTPException(status_code=404, detail="Agent not found")
             await asyncio.to_thread(store.delete_routine_agent, agent_id)
-        broadcast_ui_event("agent.deleted", {"agent_id": agent_id}, request_id=request_id)
+        broadcast_ui_event(
+            events_contracts.UiEvent.AGENT_DELETED, {"agent_id": agent_id}, request_id=request_id
+        )
         response = await asyncio.to_thread(build_agent_profiles, store)
         broadcast_ui_event(
-            "agents.snapshot",
+            events_contracts.UiEvent.AGENTS_SNAPSHOT,
             response.model_dump(by_alias=True),
             request_id=request_id,
         )
         return http_contracts.acknowledgement_response(
-            request_id, ["agent.deleted", "agents.snapshot"]
+            request_id,
+            [events_contracts.UiEvent.AGENT_DELETED, events_contracts.UiEvent.AGENTS_SNAPSHOT],
         )
 
     return router

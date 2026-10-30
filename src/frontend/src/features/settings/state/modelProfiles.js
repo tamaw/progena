@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../../realtime/eventVocabulary';
 /**
  * Model profiles domain: editable LLM model configurations kept live by
  * `profiles.snapshot` events on /api/ui/stream. RealtimeBridge hydrates the
@@ -45,7 +46,7 @@ export const deleteModelProfile = createAcknowledgedThunk(
 );
 
 export const eventHandlers = {
-  'profiles.snapshot': (state, payload) => {
+  [UI_EVENT.PROFILES_SNAPSHOT]: (state, payload) => {
     state.modelProfiles.profiles = Array.isArray(payload.profiles) ? payload.profiles : [];
     state.modelProfiles.loaded = true;
     state.modelProfiles.snapshotRequestId = payload.request_id || null;

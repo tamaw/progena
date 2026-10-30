@@ -14,6 +14,8 @@ import { applyUiEvent } from '../store/uiEvents';
 import { publishUiEvent } from './realtimeEvents';
 import { realtimeClientId, setRealtimeClientReady } from './realtimeClient';
 import { withQuery } from '../store/http';
+import { UI_EVENT, UI_SSE_EVENT } from './eventVocabulary';
+
 export const startRealtimeStream = createAction('realtime/startStream');
 export const stopRealtimeStream = createAction('realtime/stopStream');
 
@@ -141,7 +143,7 @@ realtimeListenerMiddleware.startListening({
       failPendingOperations(listenerApi, error);
     };
 
-    source.addEventListener('ui.event', (messageEvent) => {
+    source.addEventListener(UI_SSE_EVENT, (messageEvent) => {
       if (eventSource !== source) return;
       lastEventAt = Date.now();
       try {
@@ -158,7 +160,7 @@ realtimeListenerMiddleware.startListening({
         // `connection.ready` is emitted from inside the stream generator, so
         // by the time it lands the backend has our subscriber queue and a
         // broadcast can no longer be published into the void.
-        if (event.type === 'connection.ready') {
+        if (event.type === UI_EVENT.CONNECTION_READY) {
           setRealtimeClientReady(true);
           listenerApi.dispatch(realtimeStreamReady());
         }

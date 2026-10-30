@@ -12,6 +12,7 @@ import src.backend.http.requests as http_requests
 import src.backend.monitoring.state as monitoring_state
 import src.backend.tasks.models as tasks_models
 import src.backend.tasks.service as tasks_service
+from src.backend.events import contracts as events_contracts
 from src.progena.utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,9 @@ async def get_kanban_board(
     board = tasks_service._read_kanban_board(state_reader)
     response = tasks_service._kanban_board_response(state_reader, board)
     tasks_service.broadcast_kanban_snapshot(response, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["kanban.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.KANBAN_SNAPSHOT]
+    )
 
 
 @router.post(
@@ -74,7 +77,9 @@ async def create_kanban_card(
     tasks_service.broadcast_kanban_snapshot(
         tasks_service._kanban_board_response(state_reader, board), request_id=request_id
     )
-    return http_contracts.acknowledgement_response(request_id, ["kanban.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.KANBAN_SNAPSHOT]
+    )
 
 
 @router.patch(
@@ -174,7 +179,9 @@ async def patch_kanban_card(
     tasks_service.broadcast_kanban_snapshot(
         tasks_service._kanban_board_response(state_reader, board), request_id=request_id
     )
-    return http_contracts.acknowledgement_response(request_id, ["kanban.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.KANBAN_SNAPSHOT]
+    )
 
 
 @router.delete(
@@ -200,7 +207,9 @@ async def delete_kanban_card(
     tasks_service.broadcast_kanban_snapshot(
         tasks_service._kanban_board_response(state_reader, board), request_id=request_id
     )
-    return http_contracts.acknowledgement_response(request_id, ["kanban.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.KANBAN_SNAPSHOT]
+    )
 
 
 @router.get(
@@ -219,7 +228,9 @@ async def get_task_activity(
     tasks_service._find_kanban_card(state_reader, card_id)
     activity = tasks_service._task_activity_response(state_reader, card_id)
     tasks_service.broadcast_task_activity(card_id, activity, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["task.activity.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.TASK_ACTIVITY_UPDATED]
+    )
 
 
 @router.get(
@@ -238,7 +249,9 @@ async def get_task_content(
     card = tasks_service._find_kanban_card(state_reader, card_id)
     content = tasks_service._read_task_content(state_reader, card)
     tasks_service.broadcast_task_content(card_id, content, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["task.content.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.TASK_CONTENT_UPDATED]
+    )
 
 
 @router.put(
@@ -269,7 +282,11 @@ async def update_task_content(
     tasks_service.broadcast_task_content(card_id, result, request_id=request_id)
     tasks_service.broadcast_task_activity(card_id, request_id=request_id)
     return http_contracts.acknowledgement_response(
-        request_id, ["task.content.updated", "task.activity.updated"]
+        request_id,
+        [
+            events_contracts.UiEvent.TASK_CONTENT_UPDATED,
+            events_contracts.UiEvent.TASK_ACTIVITY_UPDATED,
+        ],
     )
 
 
@@ -298,4 +315,6 @@ async def create_task_activity(
         created_at=utcnow().isoformat(),
     )
     tasks_service.broadcast_task_activity(card_id, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["task.activity.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.TASK_ACTIVITY_UPDATED]
+    )

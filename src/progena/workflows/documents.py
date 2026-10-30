@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TypeGuard
 
 from src.progena.documents.kinds import (
     WORKFLOW_DEFINITION_KEY_PREFIX,
@@ -28,6 +29,39 @@ from src.progena.workflows.models import (
     WorkflowTriggerNode,
 )
 from src.progena.workflows.validation import validate_workflow_definition_payload
+
+WORKFLOW_RUN_ID_PREFIX = "workflow_run_"
+_WORKFLOW_RUN_ID_RE = re.compile(rf"^{re.escape(WORKFLOW_RUN_ID_PREFIX)}[0-9a-f]{{12}}$")
+_WORKFLOW_ROUTINE_SESSION_RE = re.compile(
+    rf"^({re.escape(WORKFLOW_RUN_ID_PREFIX)}[0-9a-f]{{12}})_[0-9a-f]{{8}}$"
+)
+
+
+def new_workflow_run_id() -> str:
+    """Return a newly allocated durable workflow run id."""
+
+    return f"{WORKFLOW_RUN_ID_PREFIX}{uuid.uuid4().hex[:12]}"
+
+
+def is_workflow_run_id(value: object) -> TypeGuard[str]:
+    """Return whether ``value`` has the persisted workflow run-id form."""
+
+    return isinstance(value, str) and _WORKFLOW_RUN_ID_RE.fullmatch(value) is not None
+
+
+def workflow_run_id_from_routine_session(session_id: object) -> str | None:
+    """Return the workflow run id encoded by a routine child session."""
+
+    if not isinstance(session_id, str):
+        return None
+    match = _WORKFLOW_ROUTINE_SESSION_RE.fullmatch(session_id)
+    return match.group(1) if match is not None else None
+
+
+def is_workflow_owned_routine_session(session_id: object) -> bool:
+    """Return whether a routine session belongs to a workflow by its id prefix."""
+
+    return isinstance(session_id, str) and session_id.startswith(WORKFLOW_RUN_ID_PREFIX)
 
 
 def workflow_definition_key(workflow_id: str) -> str:

@@ -1,7 +1,10 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../../lib/routes';
+import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
+
 import {
   PaneEmptyState,
   PaneList,
@@ -322,7 +325,7 @@ export default function ToolsPage() {
     const requestId = createUuid();
     trackConfigSave(ticket, {
       requestId,
-      events: ['mcp.snapshot'],
+      events: [UI_EVENT.MCP_SNAPSHOT],
     });
     try {
       await updateWidget(`mcp:${target.name}`, { url, description }, { requestId });
@@ -355,9 +358,7 @@ export default function ToolsPage() {
   const addServer = useCallback(() => {
     // Creation is a Progena change request: open quick-chat primed to add an
     // MCP server (there is no REST create — the agent owns config mutation).
-    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
-      detail: { mode: 'mcp-create' },
-    }));
+    dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.MCP_CREATE });
   }, []);
 
   // DB-backed tools surfaced by the runtime (with per-tool enabled flags),

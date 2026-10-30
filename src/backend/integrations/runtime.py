@@ -28,6 +28,7 @@ import httpx
 import src.backend.lifecycle.state as lifecycle_state
 from src.backend.chat.models import AgentResponse, normalize_token_usage
 from src.backend.config import ChatServerConfig
+from src.progena.routines.lifecycle import ROUTINE_RUN_CONTROL_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -424,7 +425,7 @@ class SSEProgenaClient:
             )
         ):
             raise RuntimeControlError(502, "Runtime returned control for a different routine run")
-        if payload.get("status") not in {"stopping", "cancelling", "stopped", "cancelled"}:
+        if payload.get("status") not in ROUTINE_RUN_CONTROL_STATUSES:
             raise RuntimeControlError(502, "Runtime returned an invalid routine control status")
         if not isinstance(payload.get("session_id"), str) or not payload["session_id"]:
             raise RuntimeControlError(502, "Runtime control response is missing session_id")

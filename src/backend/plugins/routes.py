@@ -24,6 +24,7 @@ from src.progena.documents.content import content_document_key
 from src.progena.plugins.schema import validate_plugins_payload
 from src.progena.plugins.sources import (
     PluginFetchError,
+    PluginFetchErrorKind,
     fetch_marketplace,
     fetch_plugin_skill_content,
     list_plugin_skill_names,
@@ -35,6 +36,13 @@ from src.progena.plugins.sources import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ui/plugins", tags=["plugins"])
+
+
+def _plugin_fetch_status(error: PluginFetchError, default: int) -> int:
+    """Translate a typed source failure into this endpoint's HTTP contract."""
+    if error.kind is PluginFetchErrorKind.RATE_LIMIT:
+        return 429
+    return error.status or default
 
 
 def _load_plugins_document() -> dict[str, Any]:
@@ -69,8 +77,6 @@ async def _resolve_catalog(marketplace_name: str) -> Any:
 
     source_url = _marketplace_source_url(marketplace_name)
     if not source_url:
-        from src.progena.plugins.sources import PluginFetchError
-
         raise PluginFetchError(f"marketplace '{marketplace_name}' not found")
 
     catalog = await fetch_marketplace(source_url)
@@ -87,7 +93,9 @@ async def get_plugins(
     request_id = _request_correlation_id(request, x_request_id)
     snapshot = await asyncio.to_thread(_load_plugins_document)
     broadcast_plugins_snapshot(snapshot, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["plugins.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.PLUGINS_SNAPSHOT]
+    )
 
 
 @router.post("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
@@ -110,6 +118,11 @@ async def install_plugin(
     catalog = None
     try:
         catalog = await _resolve_catalog(marketplace_name)
+    except PluginFetchError as exc:
+        raise HTTPException(
+            status_code=_plugin_fetch_status(exc, 400),
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -165,7 +178,9 @@ async def install_plugin(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     broadcast_plugins_snapshot(saved, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["plugins.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.PLUGINS_SNAPSHOT]
+    )
 
 
 @router.get("/{marketplace}/{plugin}/preview")
@@ -185,8 +200,10 @@ async def preview_plugin_skills(
             raise HTTPException(status_code=404, detail=f"plugin '{plugin}' not found")
         skills = await list_plugin_skill_names(catalog, plugin)
     except PluginFetchError as exc:
-        status_code = 429 if "rate limit exceeded" in str(exc).lower() else 400
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=_plugin_fetch_status(exc, 400),
+            detail=str(exc),
+        ) from exc
     return {"marketplace": marketplace, "plugin": plugin, "skills": skills}
 
 
@@ -218,7 +235,9 @@ async def uninstall_plugin(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     broadcast_plugins_snapshot(saved, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["plugins.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.PLUGINS_SNAPSHOT]
+    )
 
 
 @router.get(
@@ -253,8 +272,10 @@ async def get_plugin_skill_content(
             catalog = await _resolve_catalog(marketplace)
             content = await fetch_plugin_skill_content(catalog, plugin, skill_name)
         except PluginFetchError as exc:
-            status_code = 429 if "rate limit exceeded" in str(exc).lower() else 404
-            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=_plugin_fetch_status(exc, 404),
+                detail=str(exc),
+            ) from exc
         payload = {
             "marketplace": marketplace,
             "plugin": plugin,
@@ -262,9 +283,11 @@ async def get_plugin_skill_content(
             "content": content,
         }
         events_stream.broadcast_ui_event(
-            "plugin.skill.content.updated", payload, request_id=request_id
+            events_contracts.UiEvent.PLUGIN_SKILL_CONTENT_UPDATED, payload, request_id=request_id
         )
-        return http_contracts.acknowledgement_response(request_id, ["plugin.skill.content.updated"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.PLUGIN_SKILL_CONTENT_UPDATED]
+        )
 
     payload = {
         "marketplace": marketplace,
@@ -272,8 +295,12 @@ async def get_plugin_skill_content(
         "skill": skill_name,
         "content": document.payload["content"],
     }
-    events_stream.broadcast_ui_event("plugin.skill.content.updated", payload, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["plugin.skill.content.updated"])
+    events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.PLUGIN_SKILL_CONTENT_UPDATED, payload, request_id=request_id
+    )
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.PLUGIN_SKILL_CONTENT_UPDATED]
+    )
 
 
 def broadcast_plugins_snapshot(
@@ -294,4 +321,6 @@ def broadcast_plugins_snapshot(
         )
         raw = document.payload if document is not None else default
         plugins = raw if isinstance(raw, dict) else default
-    return events_stream.broadcast_ui_event("plugins.snapshot", plugins, request_id=request_id)
+    return events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.PLUGINS_SNAPSHOT, plugins, request_id=request_id
+    )

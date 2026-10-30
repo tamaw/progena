@@ -328,3 +328,77 @@ class TestPluginRoutes:
     def test_delete_unknown_plugin_returns_404(self, client, document_store):
         response = client.delete("/api/ui/plugins/acme/formatter")
         assert response.status_code == 404
+
+    def test_preview_maps_typed_rate_limit_to_429(self, client, document_store, monkeypatch):
+        from src.progena.plugins.sources import (
+            PluginFetchError,
+            PluginFetchErrorCode,
+            PluginFetchErrorKind,
+        )
+
+        document_store.save_document(
+            PROGENA_STATE_PREFIX,
+            "marketplaces",
+            {
+                "marketplaces": {
+                    "acme": {
+                        "source": "https://github.com/acme/plugins",
+                        "added_at": "2026-07-29T10:00:00Z",
+                    }
+                }
+            },
+        )
+        monkeypatch.setattr(
+            "src.backend.plugins.routes.fetch_marketplace",
+            AsyncMock(
+                side_effect=PluginFetchError(
+                    "GitHub API rate limit exceeded; configure GITHUB_TOKEN or retry later",
+                    code=PluginFetchErrorCode.GITHUB_RATE_LIMITED,
+                    kind=PluginFetchErrorKind.RATE_LIMIT,
+                    status=403,
+                )
+            ),
+        )
+
+        response = client.get("/api/ui/plugins/acme/formatter/preview")
+
+        assert response.status_code == 429
+
+    def test_skill_content_preserves_typed_not_found(self, client, document_store, monkeypatch):
+        from src.progena.plugins.sources import (
+            PluginFetchError,
+            PluginFetchErrorCode,
+            PluginFetchErrorKind,
+        )
+
+        document_store.save_document(
+            PROGENA_STATE_PREFIX,
+            "marketplaces",
+            {
+                "marketplaces": {
+                    "acme": {
+                        "source": "https://github.com/acme/plugins",
+                        "added_at": "2026-07-29T10:00:00Z",
+                    }
+                }
+            },
+        )
+        monkeypatch.setattr(
+            "src.backend.plugins.routes.fetch_marketplace",
+            AsyncMock(return_value=object()),
+        )
+        monkeypatch.setattr(
+            "src.backend.plugins.routes.fetch_plugin_skill_content",
+            AsyncMock(
+                side_effect=PluginFetchError(
+                    "skill 'missing' not found for plugin 'formatter'",
+                    code=PluginFetchErrorCode.SKILL_NOT_FOUND,
+                    kind=PluginFetchErrorKind.NOT_FOUND,
+                    status=404,
+                )
+            ),
+        )
+
+        response = client.get("/api/ui/plugins/acme/formatter/skills/missing")
+
+        assert response.status_code == 404

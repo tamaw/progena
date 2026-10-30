@@ -9,6 +9,7 @@ from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from typing import Any
 
+from src.backend.events import contracts as events_contracts
 from src.backend.events import stream
 from src.backend.events.documents import TypedDocumentEvent
 from src.backend.storage.documents import StoreChangeListener, store_database_url
@@ -248,7 +249,9 @@ class RunsEvents:
             if self.row_versions[thread_id] != version:
                 return
             for row in rows:
-                stream.broadcast_ui_event("run.updated", {"run": row.model_dump(mode="json")})
+                stream.broadcast_ui_event(
+                    events_contracts.UiEvent.RUN_UPDATED, {"run": row.model_dump(mode="json")}
+                )
         finally:
             self.row_building.discard(thread_id)
             self.row_versions.pop(thread_id, None)
@@ -290,7 +293,7 @@ class RunsEvents:
         for client_id, token in viewers:
             if self.has_interest(client_id, token):
                 stream.broadcast_ui_event(
-                    "run.trace.updated",
+                    events_contracts.UiEvent.RUN_TRACE_UPDATED,
                     {"trace": trace.model_dump(mode="json")},
                     client_id=client_id,
                     interest=token,
@@ -302,11 +305,15 @@ class RunsEvents:
         if self.store is not None:
             row = await get_run_row(self.store, kind, run_id)
             if row is not None:
-                stream.broadcast_ui_event("run.updated", {"run": row.model_dump(mode="json")})
+                stream.broadcast_ui_event(
+                    events_contracts.UiEvent.RUN_UPDATED, {"run": row.model_dump(mode="json")}
+                )
 
     def _deleted(self, key: TraceKey) -> None:
         self._invalidate(key)
-        stream.broadcast_ui_event("run.deleted", {"kind": key[0], "run_id": key[1]})
+        stream.broadcast_ui_event(
+            events_contracts.UiEvent.RUN_DELETED, {"kind": key[0], "run_id": key[1]}
+        )
         for client_id, interest in tuple(self.interests.items()):
             if (interest.kind, interest.run_id) == key:
                 self.unsubscribe(client_id)
@@ -373,7 +380,9 @@ class RunsEvents:
             if row is None:
                 self._deleted(key)
             else:
-                stream.broadcast_ui_event("run.updated", {"run": row.model_dump(mode="json")})
+                stream.broadcast_ui_event(
+                    events_contracts.UiEvent.RUN_UPDATED, {"run": row.model_dump(mode="json")}
+                )
             return
         await self._broadcast_row(*key)
 

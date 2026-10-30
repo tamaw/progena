@@ -1,8 +1,11 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { selectRealtime } from '../../realtime/realtimeSlice';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../../lib/routes';
+import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
+
 import { addEdge, applyEdgeChanges, applyNodeChanges, Background, Controls, MiniMap, ReactFlow, ReactFlowProvider, useReactFlow } from '@xyflow/react';
 import { useConfig } from '../../context/ConfigContext';
 import { useNotifications } from '../../context/NotificationContext';
@@ -620,9 +623,7 @@ function WorkflowsInner() {
   }, [navigate, workflows]);
 
   const openCreateWorkflowChat = () => {
-    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
-      detail: { mode: 'workflow-create' },
-    }));
+    dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.WORKFLOW_CREATE });
   };
 
   const handleAddNode = useCallback((kind, dropPosition) => {
@@ -807,7 +808,7 @@ function WorkflowsInner() {
       }));
       workflowDraftControls.trackSave(ticket, {
         requestId: operation.requestId,
-        events: ['workflow.updated'],
+        events: [UI_EVENT.WORKFLOW_UPDATED],
       });
       await operation.unwrap();
     } catch (error) {

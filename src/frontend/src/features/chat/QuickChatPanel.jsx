@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -22,6 +23,8 @@ import { loadQuickChatHistory, toQuickChatInputHistory } from './models/quickCha
 import { createQuickChatPromotion, persistQuickChatHandoff } from './models/quickChatPromotionModel';
 import { latestContextUsage, resolveComposerCacheExpiry, resolveComposerContextUsage } from './models/contextWindowModel';
 import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from './models/transcriptScroll';
+import { dispatchChatHistoryLoad } from '../../lib/browserContracts';
+
 
 
 export function QuickChatPanel({
@@ -134,7 +137,7 @@ export function QuickChatPanel({
         const pendingRehydrate = pendingRehydrateRef.current;
         if (
           pendingRehydrate
-          && event?.type === 'chat.messages.page.loaded'
+          && event?.type === UI_EVENT.CHAT_MESSAGES_PAGE_LOADED
           && event?.payload?.request_id === pendingRehydrate.requestId
         ) {
           pendingRehydrateRef.current = null;
@@ -535,9 +538,7 @@ export function QuickChatPanel({
       // The live destination receives the complete renderer payload. Storage is
       // only the reload fallback, so it uses the bounded persisted form.
       persistQuickChatHandoff(config.storage.quickChatHandoff, promotion.persistedHandoff);
-      window.dispatchEvent(new CustomEvent('progena:load-chat-history', {
-        detail: handoff,
-      }));
+      dispatchChatHistoryLoad(handoff);
     }
     onClose();
     if (!isOnChatPage) {

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
+
 import { useDispatch, useSelector } from 'react-redux';
 import {
   PaneList,
@@ -128,9 +130,7 @@ export default function RepositoriesPage() {
   }, [dispatch, reposUrl, selectedRepoId]);
 
   const openCreateChat = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
-      detail: { mode: 'repository-create' },
-    }));
+    dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.REPOSITORY_CREATE });
   }, []);
 
   const handleDelete = useCallback(() => {

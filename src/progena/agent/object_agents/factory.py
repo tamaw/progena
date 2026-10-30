@@ -70,6 +70,7 @@ from src.progena.llm.provider_context import (
     activate_provider_turn,
     current_provider_turn,
 )
+from src.progena.threads import object_agent_session_id
 
 logger = logging.getLogger(__name__)
 
@@ -767,7 +768,7 @@ def create_object_agent_proxy(
             session_id = str(
                 thread_id
                 or config.get("configurable", {}).get("thread_id")
-                or f"object-agent:{manifest.name}"
+                or object_agent_session_id(manifest.name)
             )
             turn = await ProviderTurn.create(
                 session_id=session_id,

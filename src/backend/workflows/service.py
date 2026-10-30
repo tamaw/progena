@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any, Literal, Protocol
 
 from src.backend.alerts.service import create_alert
+from src.backend.events import contracts as events_contracts
 from src.backend.events.documents import list_document_types
 from src.backend.storage.documents import (
     PROGENA_STATE_PREFIX,
@@ -44,9 +45,12 @@ from src.progena.workflows.documents import (
     build_workflow_list_item,
     coerce_workflow_definition,
     coerce_workflow_run,
+    is_workflow_run_id,
+    new_workflow_run_id,
     workflow_definition_key,
     workflow_id_from_path,
     workflow_queue_key,
+    workflow_run_id_from_routine_session,
     workflow_run_key,
 )
 from src.progena.workflows.events import build_cron_trigger_output, build_document_read_output
@@ -178,10 +182,6 @@ def _close_step_audit(
 
 
 _ACTIVE_RUN_STATUSES = frozenset({"queued", "running", "paused"})
-# Session id of a routine run started by a routine node: ``<run_id>_<8 hex>``,
-# so a lifecycle event names the workflow run it belongs to.
-_ROUTINE_SESSION_RE = re.compile(r"^(workflow_run_[0-9a-f]{12})_[0-9a-f]{8}$")
-_WORKFLOW_RUN_ID_RE = re.compile(r"^workflow_run_[0-9a-f]{12}$")
 
 
 @dataclass(frozen=True)
@@ -721,11 +721,7 @@ def _build_queued_run(
     ancestry = [str(item) for item in ancestry_raw] if isinstance(ancestry_raw, list) else []
     trigger_node_id = invocation.get("trigger_node_id")
     supplied_run_id = invocation.get("run_id")
-    run_id = (
-        supplied_run_id
-        if isinstance(supplied_run_id, str) and _WORKFLOW_RUN_ID_RE.fullmatch(supplied_run_id)
-        else f"workflow_run_{uuid.uuid4().hex[:12]}"
-    )
+    run_id = supplied_run_id if is_workflow_run_id(supplied_run_id) else new_workflow_run_id()
     return WorkflowRun(
         run_id=run_id,
         workflow_id=workflow_id,
@@ -1199,7 +1195,10 @@ class WorkflowExecutor:
                     }
                 )
                 save_workflow_run(store, active_run)
-                self._emit_event("workflow.run.updated", active_run.model_dump(mode="json"))
+                self._emit_event(
+                    events_contracts.UiEvent.WORKFLOW_RUN_UPDATED,
+                    active_run.model_dump(mode="json"),
+                )
             return active_run
 
     async def resume_workflow(self, workflow_id: str) -> WorkflowRun | None:
@@ -1221,7 +1220,10 @@ class WorkflowExecutor:
                         update={"status": "running", "updated_at": utcnow_isoformat()}
                     )
                     save_workflow_run(store, resumed)
-                    self._emit_event("workflow.run.updated", resumed.model_dump(mode="json"))
+                    self._emit_event(
+                        events_contracts.UiEvent.WORKFLOW_RUN_UPDATED,
+                        resumed.model_dump(mode="json"),
+                    )
                     return resumed
                 return active_run
             if (
@@ -1379,7 +1381,9 @@ class WorkflowExecutor:
             }
         )
         save_workflow_run(store, waiting)
-        self._emit_event("workflow.run.updated", waiting.model_dump(mode="json"))
+        self._emit_event(
+            events_contracts.UiEvent.WORKFLOW_RUN_UPDATED, waiting.model_dump(mode="json")
+        )
         if declared is not None:
             parameters = {
                 name: resolved_input[name]
@@ -1412,9 +1416,9 @@ class WorkflowExecutor:
         """
 
         session_id = str(event.get("session_id") or "")
-        match = _ROUTINE_SESSION_RE.match(session_id)
+        run_id = workflow_run_id_from_routine_session(session_id)
         status = event.get("status")
-        if match is None or status not in {
+        if run_id is None or status not in {
             "started",
             "paused",
             "stopped",
@@ -1424,7 +1428,7 @@ class WorkflowExecutor:
         }:
             return
         store = self._store_getter()
-        run = get_workflow_run(store, match.group(1))
+        run = get_workflow_run(store, run_id)
         if run is None:
             return
         workflow_id = run.workflow_id
@@ -1482,7 +1486,9 @@ class WorkflowExecutor:
                     }
                 )
                 save_workflow_run(store, updated)
-                self._emit_event("workflow.run.updated", updated.model_dump(mode="json"))
+                self._emit_event(
+                    events_contracts.UiEvent.WORKFLOW_RUN_UPDATED, updated.model_dump(mode="json")
+                )
                 if status == "paused":
                     self._alert_routine_pause(store, updated, event)
             else:
@@ -1530,7 +1536,10 @@ class WorkflowExecutor:
                         }
                     )
                     save_workflow_run(store, updated)
-                    self._emit_event("workflow.run.updated", updated.model_dump(mode="json"))
+                    self._emit_event(
+                        events_contracts.UiEvent.WORKFLOW_RUN_UPDATED,
+                        updated.model_dump(mode="json"),
+                    )
         if failed:
             await self._maybe_start_next_run_locked(store, workflow_id)
         elif continue_run:
@@ -1593,7 +1602,9 @@ class WorkflowExecutor:
                 }
             )
             save_workflow_run(store, started)
-            self._emit_event("workflow.run.updated", started.model_dump(mode="json"))
+            self._emit_event(
+                events_contracts.UiEvent.WORKFLOW_RUN_UPDATED, started.model_dump(mode="json")
+            )
             return started
 
     async def _record_step_thread(
@@ -1621,7 +1632,9 @@ class WorkflowExecutor:
                     update={"step_audit": audit, "updated_at": utcnow_isoformat()}
                 )
                 save_workflow_run(store, recorded)
-                self._emit_event("workflow.run.updated", recorded.model_dump(mode="json"))
+                self._emit_event(
+                    events_contracts.UiEvent.WORKFLOW_RUN_UPDATED, recorded.model_dump(mode="json")
+                )
                 return recorded
             return run
 
@@ -1650,7 +1663,9 @@ class WorkflowExecutor:
                 update={"status": "paused", "updated_at": utcnow_isoformat()}
             )
             save_workflow_run(store, paused_run)
-            self._emit_event("workflow.run.updated", paused_run.model_dump(mode="json"))
+            self._emit_event(
+                events_contracts.UiEvent.WORKFLOW_RUN_UPDATED, paused_run.model_dump(mode="json")
+            )
             return
         if run.status == "queued":
             thread_id = run.thread_id or f"workflow_thread_{uuid.uuid4().hex[:12]}"
@@ -1663,7 +1678,9 @@ class WorkflowExecutor:
                 }
             )
             save_workflow_run(store, run)
-            self._emit_event("workflow.run.started", run.model_dump(mode="json"))
+            self._emit_event(
+                events_contracts.UiEvent.WORKFLOW_RUN_STARTED, run.model_dump(mode="json")
+            )
 
         # Node-output registry: every node's typed output object, keyed by
         # node id. Data nodes are always available (refreshed from each reload
@@ -1689,7 +1706,10 @@ class WorkflowExecutor:
                     update={"status": "paused", "updated_at": utcnow_isoformat()}
                 )
                 save_workflow_run(store, paused_run)
-                self._emit_event("workflow.run.updated", paused_run.model_dump(mode="json"))
+                self._emit_event(
+                    events_contracts.UiEvent.WORKFLOW_RUN_UPDATED,
+                    paused_run.model_dump(mode="json"),
+                )
                 return
             if latest_run.pending_routine is not None:
                 # Waiting on a routine run; its lifecycle events continue the
@@ -1755,7 +1775,10 @@ class WorkflowExecutor:
                         }
                     )
                     save_workflow_run(store, paused_run)
-                    self._emit_event("workflow.run.updated", paused_run.model_dump(mode="json"))
+                    self._emit_event(
+                        events_contracts.UiEvent.WORKFLOW_RUN_UPDATED,
+                        paused_run.model_dump(mode="json"),
+                    )
                     if definition.notify_on_pause:
                         _alert_pause(
                             definition,
@@ -1979,7 +2002,9 @@ class WorkflowExecutor:
                 }
             )
             save_workflow_run(store, run)
-            self._emit_event("workflow.run.updated", run.model_dump(mode="json"))
+            self._emit_event(
+                events_contracts.UiEvent.WORKFLOW_RUN_UPDATED, run.model_dump(mode="json")
+            )
 
         final_run = get_workflow_run(store, run_id) or run
         if final_run.status != "running":
@@ -1993,7 +2018,9 @@ class WorkflowExecutor:
             }
         )
         save_workflow_run(store, run)
-        self._emit_event("workflow.run.completed", run.model_dump(mode="json"))
+        self._emit_event(
+            events_contracts.UiEvent.WORKFLOW_RUN_COMPLETED, run.model_dump(mode="json")
+        )
         await self._maybe_start_next_run_locked(store, workflow_id)
 
     async def _maybe_start_next_run_locked(
@@ -2056,7 +2083,9 @@ class WorkflowExecutor:
             updates["pending_routine"] = None
         failed = persisted.model_copy(update=updates)
         save_workflow_run(store, failed)
-        self._emit_event("workflow.run.failed", failed.model_dump(mode="json"))
+        self._emit_event(
+            events_contracts.UiEvent.WORKFLOW_RUN_FAILED, failed.model_dump(mode="json")
+        )
         return failed
 
 

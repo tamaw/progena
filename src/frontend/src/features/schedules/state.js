@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { createSelector } from '@reduxjs/toolkit';
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from '../../store/async';
 
@@ -48,7 +49,7 @@ export const initialState = {
 };
 
 export const eventHandlers = {
-  'schedule.snapshot': (state, payload) => {
+  [UI_EVENT.SCHEDULE_SNAPSHOT]: (state, payload) => {
     state.schedule = Array.isArray(payload.items) ? payload.items : [];
     state.scheduleLoaded = true;
     if (!state.scheduleLoading || payload.request_id === state.scheduleRequestId) {

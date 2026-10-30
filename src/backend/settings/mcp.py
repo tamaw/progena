@@ -69,7 +69,9 @@ def _broadcast_mcp_server_detail(widget_id: str, *, request_id: str | None = Non
         return False
     response = schedules_service._widget_to_response(widget)
     events_stream.broadcast_ui_event(
-        "mcp.server.detail.updated", response.model_dump(mode="json"), request_id=request_id
+        events_contracts.UiEvent.MCP_SERVER_DETAIL_UPDATED,
+        response.model_dump(mode="json"),
+        request_id=request_id,
     )
     return True
 
@@ -88,7 +90,9 @@ async def get_mcp_servers(
     request_id = http_requests.request_correlation_id(request, x_request_id)
     items = _mcp_widget_items()
     broadcast_mcp_snapshot(items, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["mcp.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.MCP_SNAPSHOT]
+    )
 
 
 @router.get("/mcp/content", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
@@ -106,7 +110,9 @@ async def get_mcp_server_detail(
     request_id = http_requests.request_correlation_id(request, x_request_id)
     if not _broadcast_mcp_server_detail(id, request_id=request_id):
         raise HTTPException(status_code=404, detail=f"MCP server '{id}' not found")
-    return http_contracts.acknowledgement_response(request_id, ["mcp.server.detail.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.MCP_SERVER_DETAIL_UPDATED]
+    )
 
 
 def broadcast_mcp_snapshot(
@@ -124,5 +130,5 @@ def broadcast_mcp_snapshot(
     source = _mcp_widget_items() if items is None else items
     payload = [item.model_dump(mode="json") for item in source]
     return events_stream.broadcast_ui_event(
-        "mcp.snapshot", {"items": payload}, request_id=request_id
+        events_contracts.UiEvent.MCP_SNAPSHOT, {"items": payload}, request_id=request_id
     )

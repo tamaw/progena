@@ -14,6 +14,7 @@ from src.progena.orchestration.nodes.respond import response_node
 from src.progena.orchestration.state import ProgenaState
 from src.progena.sessions.context import reset_current_thread_id, set_current_thread_id
 from src.progena.sessions.messages import get_last_ai_message, summarize_message_schema
+from src.progena.threads import MAIN_THREAD_ID
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ async def _run_cycle(
     current_input = str(state.get("current_input") or "").strip()
     input_metadata = state.get("current_input_metadata")
     requested_thread_id = str(state.get("requested_thread_id") or "").strip() or None
-    effective_thread_id = str(requested_thread_id or state.get("thread_id") or "progena_main")
+    effective_thread_id = str(requested_thread_id or state.get("thread_id") or MAIN_THREAD_ID)
 
     logger.info("Running graph cycle %d (source: %s)", cycle_num, source)
 

@@ -1,3 +1,5 @@
+import { BROWSER_STORAGE_KEY } from './browserContracts';
+
 // Multi-backend "workspace" routing. Each workspace is identified purely by
 // the backend's host[:port] -- there is no separate id/label indirection.
 // The active workspace lives in the URL itself: /w/<host>/<rest-of-app>.
@@ -22,7 +24,7 @@ const SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 // whether it actually speaks plain http, so those always resolve to https
 // like any other switched-to host.
 const LOCALHOST_RE = /^(localhost|127(\.\d{1,3}){3}|\[?::1\]?)(:\d{1,5})?$/i;
-const REGISTRY_KEY = 'progena_workspaces';
+const REGISTRY_KEY = BROWSER_STORAGE_KEY.WORKSPACE_REGISTRY;
 
 /** Parse a pathname into `{ host, rest }`, or `null` if it isn't workspace-scoped. */
 export function parseWorkspacePath(pathname) {
@@ -101,7 +103,7 @@ export function ensureWorkspaceRegistered(host) {
   }
 }
 
-const DEFAULT_WORKSPACE_KEY = 'progena_default_workspace';
+const DEFAULT_WORKSPACE_KEY = BROWSER_STORAGE_KEY.DEFAULT_WORKSPACE;
 
 /**
  * The host to land on for a bare `/` visit -- the last workspace the user

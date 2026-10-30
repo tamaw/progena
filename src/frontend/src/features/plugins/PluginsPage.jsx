@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { usePaneCollapse } from '../../hooks/usePaneCollapse';
 import { useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
@@ -342,7 +343,7 @@ export default function PluginsPage() {
   if (awaitingPluginChange
     && !awaitingPluginChange.completed
     && (realtime.receivedRequestEvents[awaitingPluginChange.requestId] || [])
-      .some((event) => event.type === 'plugins.snapshot')) {
+      .some((event) => event.type === UI_EVENT.PLUGINS_SNAPSHOT)) {
     setAwaitingPluginChange({ ...awaitingPluginChange, completed: true });
   }
   const completedPluginChange = awaitingPluginChange?.completed

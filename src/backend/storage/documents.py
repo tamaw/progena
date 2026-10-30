@@ -275,6 +275,8 @@ class BackendDocumentStore(Protocol):
 
     def merge_document(self, prefix: str, key: str, payload: Any) -> bool: ...
 
+    def merge_document_if_changed(self, prefix: str, key: str, payload: Any) -> bool: ...
+
     def delete_document(self, prefix: str, key: str) -> None: ...
 
     def pop_document(self, prefix: str, key: str) -> Any | None: ...
@@ -806,6 +808,20 @@ class InMemoryDocumentStore:
             if previous.payload != stored:
                 self._record_event(prefix, key, "updated", previous.payload, stored)
                 self._capture_canvas_revision(prefix, key, "write", stored)
+            return True
+
+    def merge_document_if_changed(self, prefix: str, key: str, payload: Any) -> bool:
+        """Merge only when an existing document would actually change."""
+        with self._lock:
+            previous = self._documents.get((prefix, key))
+            if previous is None or not isinstance(previous.payload, dict):
+                return False
+            stored = copy.deepcopy({**previous.payload, **payload})
+            if previous.payload == stored:
+                return False
+            self._documents[(prefix, key)] = StoredDocument(stored, datetime.now(UTC))
+            self._record_event(prefix, key, "updated", previous.payload, stored)
+            self._capture_canvas_revision(prefix, key, "write", stored)
             return True
 
     def add_document_event_listener(self, listener: Callable[[int], None]) -> None:
@@ -2093,6 +2109,23 @@ class PostgresDocumentStore:
             WHERE prefix = %s AND key = %s
             """,
                 (Jsonb(payload), prefix, key),
+            )
+            > 0
+        )
+
+    def merge_document_if_changed(self, prefix: str, key: str, payload: Any) -> bool:
+        """Merge only when an existing document would actually change."""
+        return (
+            self._write_with_origin(
+                """
+            UPDATE store
+            SET value = jsonb_set(value, '{payload}', (value->'payload') || %s::jsonb),
+                updated_at = now()
+            WHERE prefix = %s
+              AND key = %s
+              AND value->'payload' IS DISTINCT FROM (value->'payload') || %s::jsonb
+            """,
+                (Jsonb(payload), prefix, key, Jsonb(payload)),
             )
             > 0
         )

@@ -10,6 +10,8 @@ import { createAcknowledgedThunk, requestAcknowledged } from '../../../store/asy
 import { withQuery } from '../../../store/http';
 import { deriveChatStatus } from '../models/chatStatus';
 import { failureMessage } from '../../../lib/failures';
+import { UI_EVENT } from '../../../realtime/eventVocabulary';
+
 
 const emptyActive = () => ({
   threadId: null,
@@ -313,7 +315,7 @@ export const reducers = {
   },
 };
 export const eventHandlers = {
-  'chat.response.started': (state, payload) => {
+  [UI_EVENT.CHAT_RESPONSE_STARTED]: (state, payload) => {
     const requestId = responseRequestIdFor(payload);
     const threadId = typeof payload?.thread_id === 'string' && payload.thread_id
       ? payload.thread_id
@@ -333,7 +335,7 @@ export const eventHandlers = {
       threadId,
     );
   },
-  'chat.response.activity': (state, payload) => {
+  [UI_EVENT.CHAT_RESPONSE_ACTIVITY]: (state, payload) => {
     const requestId = responseRequestIdFor(payload);
     const threadId = typeof payload?.thread_id === 'string' && payload.thread_id
       ? payload.thread_id
@@ -350,7 +352,7 @@ export const eventHandlers = {
     }
     state.chatRuntime.activityByThreadId[threadId] = activity;
   },
-  'chat.response.completed': (state, payload) => {
+  [UI_EVENT.CHAT_RESPONSE_COMPLETED]: (state, payload) => {
     const response = terminalResponseFor(payload, state.chatRuntime);
     if (!response) {
       return;
@@ -366,7 +368,7 @@ export const eventHandlers = {
     }
     state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
   },
-  'chat.response.failed': (state, payload) => {
+  [UI_EVENT.CHAT_RESPONSE_FAILED]: (state, payload) => {
     const response = terminalResponseFor(payload, state.chatRuntime);
     if (!response) {
       return;
@@ -386,7 +388,7 @@ export const eventHandlers = {
       state.chatRuntime.erroredChatIds = addChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
     }
   },
-  'chat.response.cancelled': (state, payload) => {
+  [UI_EVENT.CHAT_RESPONSE_CANCELLED]: (state, payload) => {
     const response = terminalResponseFor(payload, state.chatRuntime);
     if (!response) {
       return;
@@ -398,7 +400,7 @@ export const eventHandlers = {
       threadId,
     );
   },
-  'chat.sessions.snapshot': (state, payload) => {
+  [UI_EVENT.CHAT_SESSIONS_SNAPSHOT]: (state, payload) => {
     replaceChatList(state.chats, payload.sessions);
     state.chats.loaded = true;
     if (!state.chats.loading || payload.request_id === state.chats.requestId) {
@@ -408,21 +410,21 @@ export const eventHandlers = {
       state.chats.requestedAt = new Date().toISOString();
     }
   },
-  'chat.session.created': (state, payload) => {
+  [UI_EVENT.CHAT_SESSION_CREATED]: (state, payload) => {
     upsertChat(state.chats, payload.session);
     mergeActiveDetail(state.chats.active, payload.session);
     state.chats.loaded = true;
   },
-  'chat.session.metadata.updated': (state, payload) => {
+  [UI_EVENT.CHAT_SESSION_METADATA_UPDATED]: (state, payload) => {
     upsertChat(state.chats, payload.session);
     mergeActiveDetail(state.chats.active, payload.session);
     state.chats.loaded = true;
   },
-  'chat.session.upserted': (state, payload) => {
+  [UI_EVENT.CHAT_SESSION_UPSERTED]: (state, payload) => {
     addChatIfMissing(state.chats, payload.session);
     state.chats.loaded = true;
   },
-  'chat.session.selected': (state, payload) => {
+  [UI_EVENT.CHAT_SESSION_SELECTED]: (state, payload) => {
     hydrateResponseTracking(state.chatRuntime, payload.session);
     if (state.chats.reconciliation.requestId === payload.request_id) {
       state.chats.reconciliation.detail = payload.session || null;
@@ -441,7 +443,7 @@ export const eventHandlers = {
     state.chats.active.hasMoreMessages = Boolean(payload.session?.has_more_messages);
     state.chats.active.pendingOlderPage = null;
   },
-  'chat.messages.page.loaded': (state, payload) => {
+  [UI_EVENT.CHAT_MESSAGES_PAGE_LOADED]: (state, payload) => {
     if (payload?.thread_id !== state.chats.active.threadId) {
       return;
     }
@@ -451,7 +453,7 @@ export const eventHandlers = {
       messages: Array.isArray(payload.messages) ? payload.messages : [],
     };
   },
-  'chat.session.deleted': (state, payload) => {
+  [UI_EVENT.CHAT_SESSION_DELETED]: (state, payload) => {
     const threadId = typeof payload?.thread_id === 'string' && payload.thread_id
       ? payload.thread_id
       : null;

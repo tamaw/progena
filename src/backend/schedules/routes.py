@@ -18,6 +18,7 @@ import src.backend.settings.mcp as settings_mcp
 import src.backend.settings.preferences_store as preferences_store
 import src.backend.storage.documents as storage_documents
 import src.backend.workflows.runtime as workflows_runtime
+from src.backend.events import contracts as events_contracts
 from src.progena.schedules.engine import Scheduler
 from src.progena.schedules.service import generate_schedule_id
 from src.progena.utils import utcnow
@@ -44,7 +45,9 @@ async def get_widgets(
         schedules_service._widget_to_response(widget) for widget in state_reader.get_widgets()
     ]
     schedules_service.broadcast_widgets_snapshot(widgets, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["widgets.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.WIDGETS_UPDATED]
+    )
 
 
 @router.post(
@@ -74,7 +77,9 @@ async def refresh_widget(
             request_id=request_id,
             refreshed_widget=refreshed,
         )
-        return http_contracts.acknowledgement_response(request_id, ["widgets.updated"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.WIDGETS_UPDATED]
+        )
 
     raise HTTPException(
         status_code=400,
@@ -168,7 +173,9 @@ async def patch_widget(
 
         schedules_service._broadcast_widget_refresh(state_reader, request_id=request_id)
         schedules_service.broadcast_schedule_snapshot(request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["widgets.updated"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.WIDGETS_UPDATED]
+        )
 
     if widget_id.startswith("event:"):
         event_id = widget_id.split(":", 1)[1]
@@ -220,7 +227,9 @@ async def patch_widget(
         )
 
         schedules_service._broadcast_widget_refresh(state_reader, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["widgets.updated"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.WIDGETS_UPDATED]
+        )
 
     if widget_id.startswith("mcp_tool:"):
         tool_name = widget_id.split(":", 1)[1]
@@ -245,12 +254,15 @@ async def patch_widget(
         state_reader.save_mcp_tools(tools_doc)
         schedules_service._broadcast_widget_refresh(state_reader, request_id=request_id)
         settings_mcp.broadcast_mcp_snapshot(request_id=request_id)
-        event_types = ["widgets.updated", "mcp.snapshot"]
+        event_types: list[str] = [
+            events_contracts.UiEvent.WIDGETS_UPDATED,
+            events_contracts.UiEvent.MCP_SNAPSHOT,
+        ]
         server_name_for_tool = str(target.get("server") or "").strip()
         if server_name_for_tool and settings_mcp._broadcast_mcp_server_detail(
             f"mcp:{server_name_for_tool}", request_id=request_id
         ):
-            event_types.append("mcp.server.detail.updated")
+            event_types.append(events_contracts.UiEvent.MCP_SERVER_DETAIL_UPDATED)
         return http_contracts.acknowledgement_response(request_id, event_types)
 
     if not widget_id.startswith("mcp:"):
@@ -307,9 +319,9 @@ async def patch_widget(
 
     schedules_service._broadcast_widget_refresh(state_reader, request_id=request_id)
     settings_mcp.broadcast_mcp_snapshot(request_id=request_id)
-    event_types = ["widgets.updated", "mcp.snapshot"]
+    event_types = [events_contracts.UiEvent.WIDGETS_UPDATED, events_contracts.UiEvent.MCP_SNAPSHOT]
     if settings_mcp._broadcast_mcp_server_detail(widget_id, request_id=request_id):
-        event_types.append("mcp.server.detail.updated")
+        event_types.append(events_contracts.UiEvent.MCP_SERVER_DETAIL_UPDATED)
     return http_contracts.acknowledgement_response(request_id, event_types)
 
 
@@ -341,12 +353,14 @@ async def delete_widget(
             schedules_service._broadcast_widget_refresh(state_reader, request_id=request_id)
             settings_mcp.broadcast_mcp_snapshot(request_id=request_id)
             return http_contracts.acknowledgement_response(
-                request_id, ["widgets.updated", "mcp.snapshot"]
+                request_id,
+                [events_contracts.UiEvent.WIDGETS_UPDATED, events_contracts.UiEvent.MCP_SNAPSHOT],
             )
         schedules_service._broadcast_widget_refresh(state_reader, request_id=request_id)
         settings_mcp.broadcast_mcp_snapshot(request_id=request_id)
         return http_contracts.acknowledgement_response(
-            request_id, ["widgets.updated", "mcp.snapshot"]
+            request_id,
+            [events_contracts.UiEvent.WIDGETS_UPDATED, events_contracts.UiEvent.MCP_SNAPSHOT],
         )
 
     if not widget_id.startswith("schedule:"):
@@ -362,13 +376,15 @@ async def delete_widget(
         schedules_service._broadcast_widget_refresh(state_reader, request_id=request_id)
         schedules_service.broadcast_schedule_snapshot(request_id=request_id)
         return http_contracts.acknowledgement_response(
-            request_id, ["widgets.updated", "schedule.snapshot"]
+            request_id,
+            [events_contracts.UiEvent.WIDGETS_UPDATED, events_contracts.UiEvent.SCHEDULE_SNAPSHOT],
         )
 
     schedules_service._broadcast_widget_refresh(state_reader, request_id=request_id)
     schedules_service.broadcast_schedule_snapshot(request_id=request_id)
     return http_contracts.acknowledgement_response(
-        request_id, ["widgets.updated", "schedule.snapshot"]
+        request_id,
+        [events_contracts.UiEvent.WIDGETS_UPDATED, events_contracts.UiEvent.SCHEDULE_SNAPSHOT],
     )
 
 
@@ -380,7 +396,9 @@ async def get_schedules(
     """Alias for schedule data using the requested plural path."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
     schedules_service.broadcast_schedule_snapshot(request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["schedule.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.SCHEDULE_SNAPSHOT]
+    )
 
 
 @router.post("/schedules", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
@@ -443,7 +461,9 @@ async def create_schedule(
 
     schedules_service._broadcast_widget_refresh(state_reader, request_id=request_id)
     schedules_service.broadcast_schedule_snapshot(request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["schedule.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.SCHEDULE_SNAPSHOT]
+    )
 
 
 @router.post(
@@ -534,7 +554,9 @@ async def retrigger_schedule(
 
     schedules_service._broadcast_widget_refresh(state_reader, request_id=request_id)
     schedules_service.broadcast_schedule_snapshot(request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["schedule.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.SCHEDULE_SNAPSHOT]
+    )
 
 
 @router.post("/events", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
@@ -585,4 +607,6 @@ async def create_event_widget(
         }
 
     schedules_service._broadcast_widget_refresh(state_reader, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["widgets.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.WIDGETS_UPDATED]
+    )

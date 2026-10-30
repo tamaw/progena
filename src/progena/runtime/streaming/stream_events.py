@@ -51,6 +51,7 @@ ALLOWED_CUSTOM_EVENT_TYPES = frozenset(
         "subagent_tool_error",
         "async_subagent_start",
         "async_subagent_update",
+        "async_subagent_pause",
         "async_subagent_result",
         "async_subagent_cancel",
         "a2a_call_progress",
@@ -418,7 +419,12 @@ def _redact_preview(value: Any) -> str:
     return truncate_text(redacted, DEFAULT_STREAM_PREVIEW_BYTES)
 
 
-_CORRELATION_METADATA_FIELDS = ("tool_call_id", "subagent_type", "task_summary")
+_CORRELATION_METADATA_FIELDS = (
+    "tool_call_id",
+    "subagent_type",
+    "task_id",
+    "task_summary",
+)
 
 
 def _normalize_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:

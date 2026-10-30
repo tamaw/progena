@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 import src.backend.http.contracts as http_contracts
+from src.backend.events import contracts as events_contracts
 from src.backend.http.requests import BroadcastUiEvent, request_correlation_id
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
 from src.progena.settings.model_profiles import (
@@ -94,7 +95,7 @@ async def broadcast_model_profiles_snapshot(
 ) -> None:
     payload = await asyncio.to_thread(_build_profiles_snapshot, store)
     # asyncio subscriber queues and replay bookkeeping belong to the event loop.
-    broadcast("profiles.snapshot", payload, request_id=request_id)
+    broadcast(events_contracts.UiEvent.PROFILES_SNAPSHOT, payload, request_id=request_id)
 
 
 def _mutate_profile(
@@ -184,7 +185,9 @@ def create_model_profile_router(
                 repository = None
         await asyncio.to_thread(_migrate_legacy_profiles, store, repository)
         await broadcast_model_profiles_snapshot(store, broadcast, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["profiles.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.PROFILES_SNAPSHOT]
+        )
 
     @router.patch(
         "/model-profiles/{name:path}",
@@ -341,7 +344,9 @@ def create_model_profile_router(
                         )
         await asyncio.to_thread(_mutate_profile, store, name, patch)
         await broadcast_model_profiles_snapshot(store, broadcast, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["profiles.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.PROFILES_SNAPSHOT]
+        )
 
     @router.delete(
         "/model-profiles/{name:path}",
@@ -362,6 +367,8 @@ def create_model_profile_router(
         await asyncio.to_thread(_migrate_legacy_profiles, store, repository)
         await asyncio.to_thread(_mutate_profile, store, name, lambda _profile: None)
         await broadcast_model_profiles_snapshot(store, broadcast, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["profiles.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.PROFILES_SNAPSHOT]
+        )
 
     return router

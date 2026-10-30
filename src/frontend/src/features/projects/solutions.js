@@ -1,4 +1,6 @@
-export const SOLUTIONS_STORAGE_KEY = 'progena:solutions';
+import { BROWSER_STORAGE_KEY } from '../../lib/browserContracts';
+
+export const SOLUTIONS_STORAGE_KEY = BROWSER_STORAGE_KEY.SOLUTIONS;
 
 export const DEFAULT_SOLUTIONS = [
   {

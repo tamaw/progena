@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../realtime/eventVocabulary';
 /**
  * Assemble feature-owned state into the stable state.uiData tree.
  * Features export initialState, reducers, eventHandlers and optional
@@ -60,33 +61,33 @@ const domainReducers = domains.reduce(
 // owns it; only pages with a real live-update signal are tracked (Chat/Inbox
 // already have their own precise unread tracking).
 const NAV_ACTIVITY_EVENT_ROUTES = {
-  'widgets.updated': '/dashboard',
-  'kanban.snapshot': '/tasks',
-  'task.content.updated': '/tasks',
-  'task.activity.updated': '/tasks',
-  'agents.snapshot': '/agents',
-  'instructions.snapshot': '/instructions',
-  'agent.upserted': '/agents',
+  [UI_EVENT.WIDGETS_UPDATED]: '/dashboard',
+  [UI_EVENT.KANBAN_SNAPSHOT]: '/tasks',
+  [UI_EVENT.TASK_CONTENT_UPDATED]: '/tasks',
+  [UI_EVENT.TASK_ACTIVITY_UPDATED]: '/tasks',
+  [UI_EVENT.AGENTS_SNAPSHOT]: '/agents',
+  [UI_EVENT.INSTRUCTIONS_SNAPSHOT]: '/instructions',
+  [UI_EVENT.AGENT_UPSERTED]: '/agents',
   'agent.routine.run.started': '/routines',
   'agent.routine.run.completed': '/routines',
   'agent.routine.run.failed': '/routines',
-  'plugins.snapshot': '/plugins',
-  'mcp.snapshot': '/tools',
-  'knowledge.snapshot': '/knowledge',
-  'schedule.snapshot': '/schedules',
-  'workflows.snapshot': '/workflows',
-  'workflow.updated': '/workflows',
-  'workflow.deleted': '/workflows',
-  'workflow.runs.snapshot': '/workflows',
-  'workflow.run.started': '/workflows',
-  'workflow.run.updated': '/workflows',
-  'workflow.run.completed': '/workflows',
-  'workflow.run.failed': '/workflows',
-  'repositories.snapshot': '/repositories',
-  'profiles.snapshot': '/profiles',
-  'canvases.snapshot': '/canvases',
-  'run.updated': '/runs',
-  'run.deleted': '/runs',
+  [UI_EVENT.PLUGINS_SNAPSHOT]: '/plugins',
+  [UI_EVENT.MCP_SNAPSHOT]: '/tools',
+  [UI_EVENT.KNOWLEDGE_SNAPSHOT]: '/knowledge',
+  [UI_EVENT.SCHEDULE_SNAPSHOT]: '/schedules',
+  [UI_EVENT.WORKFLOWS_SNAPSHOT]: '/workflows',
+  [UI_EVENT.WORKFLOW_UPDATED]: '/workflows',
+  [UI_EVENT.WORKFLOW_DELETED]: '/workflows',
+  [UI_EVENT.WORKFLOW_RUNS_SNAPSHOT]: '/workflows',
+  [UI_EVENT.WORKFLOW_RUN_STARTED]: '/workflows',
+  [UI_EVENT.WORKFLOW_RUN_UPDATED]: '/workflows',
+  [UI_EVENT.WORKFLOW_RUN_COMPLETED]: '/workflows',
+  [UI_EVENT.WORKFLOW_RUN_FAILED]: '/workflows',
+  [UI_EVENT.REPOSITORIES_SNAPSHOT]: '/repositories',
+  [UI_EVENT.PROFILES_SNAPSHOT]: '/profiles',
+  [UI_EVENT.CANVASES_SNAPSHOT]: '/canvases',
+  [UI_EVENT.RUN_UPDATED]: '/runs',
+  [UI_EVENT.RUN_DELETED]: '/runs',
 };
 
 const navActivityInitialState = {
@@ -109,7 +110,7 @@ const uiDataSlice = createSlice({
       const event = action.payload;
       // Reconnect and other tabs hydrate this shared catalogue globally.
       // Identical snapshots are not new profile activity.
-      const profileChanged = event?.type !== 'profiles.snapshot'
+      const profileChanged = event?.type !== UI_EVENT.PROFILES_SNAPSHOT
         || JSON.stringify(state.modelProfiles.profiles) !== JSON.stringify(event?.payload?.profiles || []);
       for (const handler of eventHandlers.get(event?.type) || []) {
         handler(state, event?.payload || {}, event);

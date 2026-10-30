@@ -1,4 +1,9 @@
 import { routerTargets, edgeSourceIds, isFlowEdge, reachableFrom } from './graphTopology';
+import routineGraphSchema from '../../../../../../data/schemas/graph.routine.schema.v1.json';
+
+// Use the persisted contract so the editor rejects compiler/framework IDs
+// before attempting a save, including any future additions to that contract.
+const RESERVED_NODE_IDS = new Set(routineGraphSchema.$defs.nodeId.not.enum);
 
 // What each kind must carry before the backend will accept it, mirroring the
 // `required`/`oneOf` blocks of the *Config defs in graph.routine.schema.v1.json.
@@ -89,7 +94,7 @@ export function validateWorkingGraph(nodes, edges, entry, runtimeProfiles = null
   if (!entry || !ids.has(entry)) errors.push('Entry must reference an existing node.');
   nodes.forEach((node) => {
     if (!node.id) errors.push('Every node needs an id.');
-    if (node.id === '__seed__') errors.push('__seed__ is reserved.');
+    if (RESERVED_NODE_IDS.has(node.id)) errors.push(`${node.id} is reserved.`);
   });
   edges.forEach((edge) => {
     const targets = edge.router ? routerTargets(edge) : [edge.to];

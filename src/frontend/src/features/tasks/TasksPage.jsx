@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { usePaneCollapse } from '../../hooks/usePaneCollapse';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
@@ -6,6 +7,8 @@ import { buildEntityPath, useEntityUrlSync } from '../../lib/routes';
 import { formatCompactRelativeAge } from '../../lib/displayTime';
 import { createUuid } from '../../lib/uuid';
 import { reportFailure } from '../../lib/failures';
+import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
+
 import DetailHeader, { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, DetailStatus, PlayActionIcon, SaveActionIcon } from '../../components/layout/DetailHeader';
 import { PaneCollapseSeam, PaneEmptyState, PaneExpandRail, PaneListFilters, PaneListFooter, PaneListSearch, PaneListSortButton, PaneListToolbar, PaneListRows, PaneSection } from '../../components/layout/PaneList';
 import PageShell from '../../components/layout/PageShell';
@@ -185,9 +188,7 @@ export default function TasksPage({ context = null }) {
   // Schedules): there is no local create form. The agent writes `/tasks/`
   // entries and the new card arrives here live via the kanban.snapshot event.
   const openCreateTask = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
-      detail: { mode: 'task-create' },
-    }));
+    dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.TASK_CREATE });
   }, []);
   const selectTaskCard = useCallback((cardId, title = cardId) => {
     if (!cardId) {
@@ -224,7 +225,7 @@ export default function TasksPage({ context = null }) {
     const requestId = createUuid();
     trackSave(ticket, {
       requestId,
-      events: ['kanban.snapshot'],
+      events: [UI_EVENT.KANBAN_SNAPSHOT],
     });
     let dispatched = false;
     return runTitleAction('Rename task', async () => {
@@ -324,7 +325,7 @@ export default function TasksPage({ context = null }) {
     if (draftSave) {
       draftSave.trackSave(draftSave.ticket, {
         requestId,
-        events: ['kanban.snapshot'],
+        events: [UI_EVENT.KANBAN_SNAPSHOT],
       });
     }
     let dispatched = false;
@@ -384,7 +385,7 @@ export default function TasksPage({ context = null }) {
     if (draftSave) {
       draftSave.trackSave(draftSave.ticket, {
         requestId,
-        events: ['kanban.snapshot'],
+        events: [UI_EVENT.KANBAN_SNAPSHOT],
       });
     }
     let dispatched = false;

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -11,13 +11,17 @@ from src.progena.plugins.sources import (
     _MAX_FILE_BYTES,
     MarketplaceCatalog,
     PluginFetchError,
+    PluginFetchErrorCode,
+    PluginFetchErrorKind,
     _extract_skills_from_files,
     _fetch_url,
     _parse_github_source,
+    _resolve_commit_sha,
     compute_digest,
     fetch_marketplace,
     fetch_plugin_content_files_with_report,
     fetch_plugin_files_with_report,
+    fetch_plugin_skill_content,
     resolve_plugin_version,
 )
 
@@ -107,8 +111,10 @@ def test_parse_github_source_tree_url() -> None:
 
 
 def test_parse_github_source_invalid() -> None:
-    with pytest.raises(PluginFetchError, match="must be a GitHub repo reference"):
+    with pytest.raises(PluginFetchError) as error:
         _parse_github_source("not-a-repo")
+    assert error.value.code is PluginFetchErrorCode.FETCH_FAILED
+    assert error.value.kind is PluginFetchErrorKind.FETCH
 
 
 # ---------------------------------------------------------------------------
@@ -118,14 +124,18 @@ def test_parse_github_source_invalid() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_url_rejects_non_http_scheme() -> None:
-    with pytest.raises(PluginFetchError, match="Only http:// and https://"):
+    with pytest.raises(PluginFetchError) as error:
         await _fetch_url("ftp://example.com/file")
+    assert error.value.code is PluginFetchErrorCode.FETCH_FAILED
+    assert error.value.kind is PluginFetchErrorKind.FETCH
 
 
 @pytest.mark.asyncio
 async def test_fetch_url_rejects_private_host() -> None:
-    with pytest.raises(PluginFetchError, match="public hostname"):
+    with pytest.raises(PluginFetchError) as error:
         await _fetch_url("http://localhost/file")
+    assert error.value.code is PluginFetchErrorCode.FETCH_FAILED
+    assert error.value.kind is PluginFetchErrorKind.FETCH
 
 
 @pytest.mark.asyncio
@@ -149,9 +159,87 @@ async def test_fetch_url_rejects_redirect_to_private() -> None:
 
     with (
         patch("aiohttp.ClientSession", return_value=mock_session),
-        pytest.raises(PluginFetchError, match="Redirect to private"),
+        pytest.raises(PluginFetchError) as error,
     ):
         await _fetch_url("http://example.com/file")
+    assert error.value.code is PluginFetchErrorCode.FETCH_FAILED
+    assert error.value.kind is PluginFetchErrorKind.FETCH
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "headers", "code", "kind"),
+    [
+        (
+            403,
+            {"X-RateLimit-Remaining": "0"},
+            PluginFetchErrorCode.GITHUB_RATE_LIMITED,
+            PluginFetchErrorKind.RATE_LIMIT,
+        ),
+        (403, {}, PluginFetchErrorCode.GITHUB_HTTP_ERROR, PluginFetchErrorKind.HTTP),
+        (429, {}, PluginFetchErrorCode.GITHUB_RATE_LIMITED, PluginFetchErrorKind.RATE_LIMIT),
+    ],
+)
+async def test_fetch_url_classifies_github_http_failures(
+    status: int,
+    headers: dict[str, str],
+    code: PluginFetchErrorCode,
+    kind: PluginFetchErrorKind,
+) -> None:
+    """GitHub quota signals, rather than a 403 message, drive classification."""
+    from aiohttp import ClientResponseError
+
+    mock_response = AsyncMock()
+    mock_response.status = status
+    mock_response.headers = headers
+    mock_response.raise_for_status = Mock(
+        side_effect=ClientResponseError(AsyncMock(), (), status=status, headers=headers)
+    )
+
+    class _FakeContext:
+        async def __aenter__(self):
+            return mock_response
+
+        async def __aexit__(self, *args):
+            return False
+
+    mock_session = AsyncMock()
+    mock_session.get = lambda *_a, **_kw: _FakeContext()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch("aiohttp.ClientSession", return_value=mock_session),
+        pytest.raises(PluginFetchError) as error,
+    ):
+        await _fetch_url("https://api.github.com/repos/acme/plugin")
+
+    assert error.value.code == code
+    assert error.value.kind == kind
+    assert error.value.status == status
+
+
+@pytest.mark.asyncio
+async def test_resolve_commit_sha_preserves_missing_commit_status() -> None:
+    missing_commit = PluginFetchError(
+        "GitHub request failed (HTTP 404)",
+        code=PluginFetchErrorCode.GITHUB_HTTP_ERROR,
+        kind=PluginFetchErrorKind.HTTP,
+        status=404,
+    )
+
+    with (
+        patch(
+            "src.progena.plugins.sources._fetch_json_url",
+            new=AsyncMock(side_effect=missing_commit),
+        ),
+        pytest.raises(PluginFetchError) as error,
+    ):
+        await _resolve_commit_sha("acme", "plugin", "missing")
+
+    assert error.value.code is PluginFetchErrorCode.COMMIT_NOT_FOUND
+    assert error.value.kind is PluginFetchErrorKind.NOT_FOUND
+    assert error.value.status == 404
 
 
 # ---------------------------------------------------------------------------
@@ -170,9 +258,12 @@ async def test_fetch_marketplace_reads_manifest_over_http() -> None:
 
     async def fetch(url: str) -> bytes:
         if url.endswith(".claude-plugin/marketplace.json"):
-            from aiohttp import ClientResponseError
-
-            raise ClientResponseError(AsyncMock(), (), status=404)
+            raise PluginFetchError(
+                "GitHub request failed (HTTP 404)",
+                code=PluginFetchErrorCode.GITHUB_HTTP_ERROR,
+                kind=PluginFetchErrorKind.HTTP,
+                status=404,
+            )
         return json.dumps(manifest).encode()
 
     with (
@@ -186,6 +277,36 @@ async def test_fetch_marketplace_reads_manifest_over_http() -> None:
     assert catalog.commit_sha == "abc123"
     assert catalog.repository == "github/awesome-copilot"
     assert catalog.plugins[0]["source"] == "plugins/demo"
+
+
+@pytest.mark.asyncio
+async def test_fetch_plugin_skill_content_preserves_missing_skill_status() -> None:
+    catalog = MarketplaceCatalog(
+        name="Acme",
+        owner={"name": "Acme"},
+        plugins=[{"name": "demo", "source": "plugins/demo"}],
+        repository="acme/tools",
+        commit_sha="abc123",
+    )
+    missing_skill = PluginFetchError(
+        "GitHub request failed (HTTP 404)",
+        code=PluginFetchErrorCode.GITHUB_HTTP_ERROR,
+        kind=PluginFetchErrorKind.HTTP,
+        status=404,
+    )
+
+    with (
+        patch(
+            "src.progena.plugins.sources._fetch_url",
+            new=AsyncMock(side_effect=missing_skill),
+        ),
+        pytest.raises(PluginFetchError) as error,
+    ):
+        await fetch_plugin_skill_content(catalog, "demo", "missing")
+
+    assert error.value.code is PluginFetchErrorCode.SKILL_NOT_FOUND
+    assert error.value.kind is PluginFetchErrorKind.NOT_FOUND
+    assert error.value.status == 404
 
 
 @pytest.mark.asyncio

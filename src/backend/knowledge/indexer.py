@@ -19,6 +19,7 @@ from typing import Any
 import psycopg
 
 import src.backend.events.stream as events_stream
+from src.backend.events import contracts as events_contracts
 from src.backend.knowledge.service import load_bases
 from src.backend.storage.documents import (
     PROGENA_STATE_PREFIX,
@@ -330,7 +331,7 @@ class KnowledgeIndexer:
             "started_at": utcnow_isoformat(),
             "indexed_at": previous.get("indexed_at"),
         }
-        await self._write(base_id, record, "knowledge.index.started")
+        await self._write(base_id, record, events_contracts.UiEvent.KNOWLEDGE_INDEX_STARTED)
         try:
             embedder = await self._embedder_factory(target)
             for path in pending:
@@ -347,7 +348,9 @@ class KnowledgeIndexer:
                 )
                 record["indexed_pages"] += 1
                 record["pending"] = [p for p in record["pending"] if p != path]
-                await self._write(base_id, record, "knowledge.index.progress")
+                await self._write(
+                    base_id, record, events_contracts.UiEvent.KNOWLEDGE_INDEX_PROGRESS
+                )
             chunks_total = await asyncio.to_thread(self._finish_base, base_id, removed)
         except Exception as exc:
             logger.warning("Knowledge indexing failed for %s: %s", base_id, exc, exc_info=True)
@@ -431,9 +434,9 @@ class KnowledgeIndexer:
         ):
             return  # unchanged failure (e.g. still unconfigured): no event storm
         event_type = (
-            "knowledge.index.completed"
+            events_contracts.UiEvent.KNOWLEDGE_INDEX_COMPLETED
             if record["status"] == "indexed"
-            else "knowledge.index.failed"
+            else events_contracts.UiEvent.KNOWLEDGE_INDEX_FAILED
         )
         await self._write(base_id, record, event_type)
 

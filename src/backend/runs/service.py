@@ -27,7 +27,12 @@ from src.progena.runtime.ownership import (
     routine_attempt_interrupted,
     schedule_run_interrupted,
 )
-from src.progena.workflows.documents import workflow_definition_key, workflow_run_key
+from src.progena.threads import routine_agent_thread_id
+from src.progena.workflows.documents import (
+    is_workflow_owned_routine_session,
+    workflow_definition_key,
+    workflow_run_key,
+)
 
 from .models import RunKind, RunPeriod, RunRow, RunSort, RunTrace, Span, SpanKind
 
@@ -582,7 +587,7 @@ def _routine_metadata_rows(
         if (
             not isinstance(payload, dict)
             or payload.get("parent")
-            or _text(payload.get("session_id")).startswith("workflow_run_")
+            or is_workflow_owned_routine_session(_text(payload.get("session_id")))
         ):
             continue
         request_id = _text(payload.get("request_id"))
@@ -1311,7 +1316,7 @@ async def _routine_children(
                 latest = max(children, key=lambda event: _text(event.get("timestamp")))
                 child_thread = _text(latest.get("thread_id"))
         if not child_thread and node_kind == "agent":
-            child_thread = f"routine-agent:{thread_id}:{node_id}"
+            child_thread = routine_agent_thread_id(thread_id, node_id)
         if child_thread:
             threads.add(child_thread)
             child_start, child_end = _intersect_windows(start, end, window_start, window_end)

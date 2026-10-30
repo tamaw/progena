@@ -10,6 +10,8 @@ import {
 import { withQuery, createOperationRequestId } from '../../store/http';
 import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
 import { subscribeUiEvent } from '../../realtime/realtimeEvents';
+import { UI_EVENT } from '../../realtime/eventVocabulary';
+
 
 export const initialState = {
   canvases: {
@@ -69,10 +71,10 @@ export async function requestCanvasEvent({ canvasesUrl, name, suffix, method = '
   });
 }
 
-export const requestCanvasDocuments = (args) => requestCanvasEvent({ ...args, suffix: '/documents', eventType: 'canvas.documents.loaded' });
-export const requestCanvasData = (args) => requestCanvasEvent({ ...args, suffix: '/data', eventType: 'canvas.data.loaded' });
-export const updateCanvasSubscription = (args) => requestCanvasEvent({ ...args, suffix: '/subscription', method: 'PUT', eventType: 'canvas.subscription.updated' });
-export const clearCanvasSubscription = (args) => requestCanvasEvent({ ...args, suffix: '/subscription', method: 'DELETE', eventType: 'canvas.subscription.updated' });
+export const requestCanvasDocuments = (args) => requestCanvasEvent({ ...args, suffix: '/documents', eventType: UI_EVENT.CANVAS_DOCUMENTS_LOADED });
+export const requestCanvasData = (args) => requestCanvasEvent({ ...args, suffix: '/data', eventType: UI_EVENT.CANVAS_DATA_LOADED });
+export const updateCanvasSubscription = (args) => requestCanvasEvent({ ...args, suffix: '/subscription', method: 'PUT', eventType: UI_EVENT.CANVAS_SUBSCRIPTION_UPDATED });
+export const clearCanvasSubscription = (args) => requestCanvasEvent({ ...args, suffix: '/subscription', method: 'DELETE', eventType: UI_EVENT.CANVAS_SUBSCRIPTION_UPDATED });
 
 function applySnapshot(state, payload) {
   state.canvases.items = Array.isArray(payload.items) ? payload.items : [];
@@ -85,12 +87,12 @@ function applySnapshot(state, payload) {
 }
 
 export const eventHandlers = {
-  'canvases.snapshot': applySnapshot,
-  'canvas.deleted': (state, payload) => {
+  [UI_EVENT.CANVASES_SNAPSHOT]: applySnapshot,
+  [UI_EVENT.CANVAS_DELETED]: (state, payload) => {
     state.canvases.items = state.canvases.items.filter((item) => item.name !== payload.name);
     delete state.canvases.filesByName[payload.name];
   },
-  'canvas.files.loaded': (state, payload) => {
+  [UI_EVENT.CANVAS_FILES_LOADED]: (state, payload) => {
     state.canvases.filesByName[payload.name] = { revision: payload.revision, files: payload.files || {} };
     completeKeyedRequest(state.canvases.filesRequestByName, payload.name, payload.request_id);
   },

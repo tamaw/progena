@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useConfig } from '../../context/ConfigContext';
+import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
+
 import MarkdownContent from '../../components/MarkdownContent';
 import { renderSafeMarkdown } from '../../lib/safeMarkdown';
 import { selectRealtime } from '../../realtime/realtimeSlice';
@@ -229,9 +231,7 @@ export default function InstructionsPage() {
               activeFilter={filter}
               onFilterChange={setFilter}
               actionLabel="+ New"
-              onAction={() => window.dispatchEvent(
-                new CustomEvent('progena:open-quick-chat', { detail: { mode: 'instruction-create' } }),
-              )}
+              onAction={() => dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.INSTRUCTION_CREATE })}
             />
             <PaneListToolbar>
               <PaneListSearch value={query} placeholder="Search instructions" onChange={setQuery} />

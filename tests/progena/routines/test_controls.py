@@ -74,6 +74,25 @@ def _execution(request_id: str = "attempt-1") -> dict[str, str]:
     }
 
 
+def test_paused_lifecycle_is_terminal_and_resumable_without_becoming_interrupted():
+    from src.progena.routines.lifecycle import (
+        is_routine_run_active,
+        is_routine_run_resumable,
+        is_routine_run_terminal,
+    )
+
+    assert is_routine_run_active("started")
+    assert not is_routine_run_terminal("started")
+    assert is_routine_run_terminal("paused")
+    assert is_routine_run_resumable("paused")
+    assert is_routine_run_terminal("stopped")
+    assert is_routine_run_resumable("stopped")
+    assert is_routine_run_terminal("completed")
+    assert not is_routine_run_resumable("completed")
+    assert not is_routine_run_terminal("interrupted")
+    assert not is_routine_run_resumable("cancelled")
+
+
 @pytest.mark.asyncio
 async def test_stop_is_pending_until_native_task_terminates_then_exact_thread_can_resume():
     manager = _StateManager()

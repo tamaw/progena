@@ -30,11 +30,12 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 
 from src.progena.a2a.mentions import _DIRECT_A2A_EMPTY_RE, _DIRECT_A2A_RE
 from src.progena.security.redaction import redact_secrets
+from src.progena.sessions.messages import tool_result_failed
 from src.progena.sessions.status import CANCELLED_STATUS
 from src.progena.utils import parse_provider_timestamp
 
 # Bump whenever rendered output changes, so cached transcripts re-render.
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 DEFAULT_USER_NICK = "user"
 DEFAULT_AGENT_NICK = "progena"
@@ -296,7 +297,7 @@ class _Renderer:
         call, nick = entry.call, entry.nick
         name, args = call["name"], call.get("args") or {}
         text = _message_text(message)
-        failed = message.status == "error" or text.startswith("Error")
+        failed = tool_result_failed(name, message, text) or text.startswith("Error")
         if name in _DELEGATION_TOOLS:
             if entry.line is not None:  # inlined task subagent: transcript and part already out
                 if failed:

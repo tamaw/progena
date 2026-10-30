@@ -18,6 +18,11 @@ from src.backend.storage.documents import (
     BackendDocumentStore,
     store_database_url,
 )
+from src.progena.orchestration.background import (
+    BACKGROUND_TASKS_ADVISORY_LOCK_KEY,
+    BACKGROUND_TASKS_DOCUMENT_KEY,
+    ROUTINE_RUN_TASK_KIND,
+)
 from src.progena.routines.events import RUN_EVENT_PREFIX
 from src.progena.utils import utcnow_isoformat
 
@@ -30,23 +35,31 @@ def append_background_task(doc_store: BackendDocumentStore, task: dict[str, Any]
     """
     url = store_database_url(doc_store)
     if not url:
-        existing = doc_store.get_document(PROGENA_STATE_PREFIX, "background_tasks", [])
+        existing = doc_store.get_document(PROGENA_STATE_PREFIX, BACKGROUND_TASKS_DOCUMENT_KEY, [])
         tasks = list(existing.payload) if existing is not None else []
         tasks.append(task)
-        doc_store.save_document(PROGENA_STATE_PREFIX, "background_tasks", tasks)
+        doc_store.save_document(PROGENA_STATE_PREFIX, BACKGROUND_TASKS_DOCUMENT_KEY, tasks)
         return
 
     import psycopg
 
     with psycopg.connect(url, autocommit=True) as conn:
-        conn.execute("SELECT pg_advisory_lock(hashtextextended('background_tasks', 0))")
+        conn.execute(
+            "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
+            (BACKGROUND_TASKS_ADVISORY_LOCK_KEY,),
+        )
         try:
-            existing = doc_store.get_document(PROGENA_STATE_PREFIX, "background_tasks", [])
+            existing = doc_store.get_document(
+                PROGENA_STATE_PREFIX, BACKGROUND_TASKS_DOCUMENT_KEY, []
+            )
             tasks = list(existing.payload) if existing is not None else []
             tasks.append(task)
-            doc_store.save_document(PROGENA_STATE_PREFIX, "background_tasks", tasks)
+            doc_store.save_document(PROGENA_STATE_PREFIX, BACKGROUND_TASKS_DOCUMENT_KEY, tasks)
         finally:
-            conn.execute("SELECT pg_advisory_unlock(hashtextextended('background_tasks', 0))")
+            conn.execute(
+                "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+                (BACKGROUND_TASKS_ADVISORY_LOCK_KEY,),
+            )
 
 
 class RoutineRunNotQueued(RuntimeError):
@@ -73,7 +86,7 @@ def enqueue_routine_run(
 
     session_id = session_id or uuid.uuid4().hex
     metadata: dict[str, Any] = {
-        "kind": "routine_run",
+        "kind": ROUTINE_RUN_TASK_KIND,
         "routine_id": routine_id,
         "session_id": session_id,
         "request_id": request_id,

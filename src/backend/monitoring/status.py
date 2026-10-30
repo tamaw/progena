@@ -28,6 +28,7 @@ import src.backend.settings.preferences as settings_preferences
 import src.backend.storage.documents as storage_documents
 import src.backend.tasks.service as tasks_service
 import src.backend.workflows.runtime as workflows_runtime
+from src.backend.events import contracts as events_contracts
 from src.progena.documents.content import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
 from src.progena.documents.kinds import (
     CANVAS_DOCUMENT_KEY_PREFIX,
@@ -209,7 +210,9 @@ async def _status_monitor():
             if not events_stream._ui_stream_subscribers:
                 continue  # No subscribers, skip
 
-            events_stream.broadcast_ui_event("status.updated", _process_metrics())
+            events_stream.broadcast_ui_event(
+                events_contracts.UiEvent.STATUS_UPDATED, _process_metrics()
+            )
 
         except asyncio.CancelledError:
             logger.info("[StatusMonitor] Cancelled")
@@ -223,7 +226,7 @@ async def _broadcast_latest_status() -> None:
     global _state_watch_push_task
     try:
         current = await _get_current_status()
-        events_stream.broadcast_ui_event("status.updated", current)
+        events_stream.broadcast_ui_event(events_contracts.UiEvent.STATUS_UPDATED, current)
         if events_stream._ui_stream_subscribers:
             await chat_routes._broadcast_chat_sessions_snapshot()
     finally:
@@ -381,5 +384,6 @@ def stop_status_monitor():
 def broadcast_status_change(status: str, details: dict | None = None):
     """Broadcast a status change to all subscribers."""
     events_stream.broadcast_ui_event(
-        "status.updated", {"status": status, "details": details or {}, "timestamp": time.time()}
+        events_contracts.UiEvent.STATUS_UPDATED,
+        {"status": status, "details": details or {}, "timestamp": time.time()},
     )

@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../../realtime/eventVocabulary';
 import { useEffect, useMemo, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useConfig } from '../../../context/ConfigContext';
@@ -6,6 +7,8 @@ import useEntityDraft from '../../../hooks/useEntityDraft';
 import { fetchPolicies, savePolicy, selectPolicies } from '../../settings/state/policies';
 import styles from './RoutinePolicyPanel.module.css';
 import Select from '../../../components/Select';
+import { BROWSER_EVENT } from '../../../lib/browserContracts';
+
 
 const fields = [
   ['attempt_timeout', 'Attempt timeout (seconds)'], ['idle_timeout', 'Idle timeout (seconds)'],
@@ -25,8 +28,8 @@ export function RoutinePolicyPanel({ policyId, onSelect, onClose, recordedPolicy
   const workspaceGenerationRef = useRef(0);
   useEffect(() => {
     const invalidateSaveContinuation = () => { workspaceGenerationRef.current += 1; };
-    window.addEventListener('progena:workspace-switched', invalidateSaveContinuation);
-    return () => window.removeEventListener('progena:workspace-switched', invalidateSaveContinuation);
+    window.addEventListener(BROWSER_EVENT.WORKSPACE_SWITCHED, invalidateSaveContinuation);
+    return () => window.removeEventListener(BROWSER_EVENT.WORKSPACE_SWITCHED, invalidateSaveContinuation);
   }, []);
   const values = historical ? recordedPolicy?.values : draft?.values;
   function update(key, value, retry = false) {
@@ -44,7 +47,7 @@ export function RoutinePolicyPanel({ policyId, onSelect, onClose, recordedPolicy
     if (!ticket) return;
     const workspaceGeneration = workspaceGenerationRef.current;
     const operation = dispatch(savePolicy({ url, policy }));
-    controls.trackSave(ticket, { requestId: operation.requestId, events: ['policies.snapshot'] });
+    controls.trackSave(ticket, { requestId: operation.requestId, events: [UI_EVENT.POLICIES_SNAPSHOT] });
     try {
       await operation.unwrap();
       if (copy && workspaceGeneration === workspaceGenerationRef.current) onSelect(policy.id);

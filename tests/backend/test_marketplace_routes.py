@@ -15,6 +15,7 @@ from src.backend.storage.documents import (
     InMemoryDocumentStore,
     set_default_document_store,
 )
+from src.progena.plugins.sources import PluginFetchErrorCode, PluginFetchErrorKind
 
 
 @pytest.fixture
@@ -192,4 +193,71 @@ class TestMarketplaceRoutes:
 
         response = client.get("/api/ui/marketplaces/bad/plugins")
         assert response.status_code == 400
-        assert "network error" in response.json()["detail"]
+
+    @pytest.mark.parametrize(
+        ("error", "expected_status"),
+        [
+            (
+                (
+                    "GitHub request failed (HTTP 403)",
+                    PluginFetchErrorCode.GITHUB_HTTP_ERROR,
+                    PluginFetchErrorKind.HTTP,
+                    403,
+                ),
+                403,
+            ),
+            (
+                (
+                    "GitHub API rate limit exceeded; configure GITHUB_TOKEN or retry later",
+                    PluginFetchErrorCode.GITHUB_RATE_LIMITED,
+                    PluginFetchErrorKind.RATE_LIMIT,
+                    403,
+                ),
+                429,
+            ),
+            (
+                (
+                    "GitHub API rate limit exceeded; configure GITHUB_TOKEN or retry later",
+                    PluginFetchErrorCode.GITHUB_RATE_LIMITED,
+                    PluginFetchErrorKind.RATE_LIMIT,
+                    429,
+                ),
+                429,
+            ),
+            (
+                (
+                    "GitHub commit not found (404): acme/plugins@missing",
+                    PluginFetchErrorCode.COMMIT_NOT_FOUND,
+                    PluginFetchErrorKind.NOT_FOUND,
+                    404,
+                ),
+                404,
+            ),
+        ],
+    )
+    def test_browse_maps_typed_github_failures(
+        self, client, document_store, monkeypatch, error, expected_status
+    ):
+        from src.progena.plugins.sources import PluginFetchError
+
+        message, code, kind, status = error
+        document_store.save_document(
+            PROGENA_STATE_PREFIX,
+            "marketplaces",
+            {
+                "marketplaces": {
+                    "acme": {
+                        "source": "https://github.com/acme/plugins",
+                        "added_at": "2026-07-29T10:00:00Z",
+                    }
+                }
+            },
+        )
+        monkeypatch.setattr(
+            "src.backend.plugins.marketplace_routes.fetch_marketplace",
+            AsyncMock(side_effect=PluginFetchError(message, code=code, kind=kind, status=status)),
+        )
+
+        response = client.get("/api/ui/marketplaces/acme/plugins")
+
+        assert response.status_code == expected_status

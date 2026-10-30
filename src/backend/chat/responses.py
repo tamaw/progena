@@ -20,6 +20,7 @@ import src.backend.attachments.routes as attachments_routes
 import src.backend.attachments.store as attachments_store
 import src.backend.chat.models as chat_models
 import src.backend.chat.session as chat_session
+import src.backend.events.contracts as events_contracts
 import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
 import src.backend.http.requests as http_requests
@@ -161,7 +162,7 @@ def _set_response_delegation_active(
 
     state.activity = "delegating" if is_delegating else "generating"
     events_stream.broadcast_ui_event(
-        "chat.response.activity",
+        events_contracts.UiEvent.CHAT_RESPONSE_ACTIVITY,
         {"thread_id": state.thread_id, "activity": state.activity},
         scope="chat",
         session_id=state.thread_id,
@@ -369,7 +370,7 @@ async def _generate_response_stream(
         cursor_status, cursor_seq = _parse_response_stream_cursor(state.request_id, cursor)
         if cursor_status == "invalid":
             yield encode_event(
-                "chat.response.resync_required",
+                events_contracts.ChatContentEvent.RESYNC_REQUIRED,
                 {"request_id": state.request_id, "reason": "invalid_cursor"},
             )
             return
@@ -379,7 +380,7 @@ async def _generate_response_stream(
             assert cursor_seq is not None
             if retained_frames and cursor_seq < retained_frames[0].seq - 1:
                 yield encode_event(
-                    "chat.response.resync_required",
+                    events_contracts.ChatContentEvent.RESYNC_REQUIRED,
                     {"request_id": state.request_id, "reason": "cursor_expired"},
                 )
                 return
@@ -400,7 +401,7 @@ async def _generate_response_stream(
                 if state.terminal_reached and queue.empty():
                     break
                 yield encode_event(
-                    "chat.response.heartbeat",
+                    events_contracts.ChatContentEvent.HEARTBEAT,
                     {"request_id": state.request_id, "timestamp": time.time()},
                 )
                 continue
@@ -497,7 +498,7 @@ async def responses(
         )
     )
     events_stream.broadcast_ui_event(
-        "chat.response.started",
+        events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
         {
             "id": response_id,
             "model": body.model,
@@ -513,7 +514,9 @@ async def responses(
 
     # Only started is guaranteed synchronously for every accepted generation.
     # Terminal and chunk event types depend on the generation outcome.
-    return http_contracts.acknowledgement_response(request_id, ["chat.response.started"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.CHAT_RESPONSE_STARTED]
+    )
 
 
 @router.put(
@@ -560,7 +563,7 @@ async def cancel_response(
     if target_response_id is not None:
         cancellation_payload["target_response_id"] = target_response_id
     events_stream.broadcast_ui_event(
-        "chat.response.cancel_requested",
+        events_contracts.UiEvent.CHAT_RESPONSE_CANCEL_REQUESTED,
         cancellation_payload,
         scope="chat",
         request_id=request_id,
@@ -570,13 +573,15 @@ async def cancel_response(
         # to emit the target terminal event after a successful remote cancel.
         _clear_response_activity(target_request_id)
         events_stream.broadcast_ui_event(
-            "chat.response.cancelled",
+            events_contracts.UiEvent.CHAT_RESPONSE_CANCELLED,
             cancellation_payload,
             scope="chat",
             request_id=target_request_id,
         )
 
-    return http_contracts.acknowledgement_response(request_id, ["chat.response.cancel_requested"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.CHAT_RESPONSE_CANCEL_REQUESTED]
+    )
 
 
 def _extract_response_input(request: chat_models.ResponseRequest) -> str:
@@ -676,7 +681,7 @@ def _build_chat_request_metadata(
     ).strip()
     thread_id = requested_thread_id or _default_conversation_id(session)
     metadata["thread_id"] = thread_id
-    metadata["source"] = lifecycle_state.SOURCE_UI
+    metadata["source"] = http_contracts.SOURCE_UI
     return thread_id, metadata
 
 
@@ -728,7 +733,7 @@ async def _run_response_event_stream(
     def emit_cancelled() -> None:
         _clear_response_activity(request_id)
         events_stream.broadcast_ui_event(
-            "chat.response.cancelled",
+            events_contracts.UiEvent.CHAT_RESPONSE_CANCELLED,
             response_payload(cancelled=True),
             scope="chat",
             session_id=thread_id,
@@ -760,7 +765,7 @@ async def _run_response_event_stream(
                     if response_stream_state is not None:
                         _append_response_stream_frame(
                             response_stream_state,
-                            "chat.response.delta",
+                            events_contracts.ChatContentEvent.DELTA,
                             response_payload(
                                 delta=chunk,
                                 request_id=request_id,
@@ -783,7 +788,7 @@ async def _run_response_event_stream(
                     if response_stream_state is not None:
                         _append_response_stream_frame(
                             response_stream_state,
-                            "chat.response.event",
+                            events_contracts.ChatContentEvent.EVENT,
                             payload,
                         )
             if cancel_event.is_set():
@@ -803,7 +808,7 @@ async def _run_response_event_stream(
 
             reasoning_text = (response_details.reasoning or "").strip()
             events_stream.broadcast_ui_event(
-                "chat.response.delta",
+                events_contracts.UiEvent.CHAT_RESPONSE_DELTA,
                 response_payload(
                     delta=response_details.response,
                     reasoning=reasoning_text or None,
@@ -816,7 +821,7 @@ async def _run_response_event_stream(
 
         _clear_response_activity(request_id)
         events_stream.broadcast_ui_event(
-            "chat.response.completed",
+            events_contracts.UiEvent.CHAT_RESPONSE_COMPLETED,
             response_payload(completed=True),
             scope="chat",
             session_id=thread_id,
@@ -830,7 +835,7 @@ async def _run_response_event_stream(
         else:
             _clear_response_activity(request_id)
             events_stream.broadcast_ui_event(
-                "chat.response.failed",
+                events_contracts.UiEvent.CHAT_RESPONSE_FAILED,
                 response_payload(error="Response generation timed out"),
                 scope="chat",
                 session_id=thread_id,
@@ -844,7 +849,7 @@ async def _run_response_event_stream(
         else:
             _clear_response_activity(request_id)
             events_stream.broadcast_ui_event(
-                "chat.response.failed",
+                events_contracts.UiEvent.CHAT_RESPONSE_FAILED,
                 response_payload(error=str(error)),
                 scope="chat",
                 session_id=thread_id,

@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useLayoutEffect, useState } from 'react';
+import { BROWSER_STORAGE_KEY, GLOBAL_PREFERENCE_STORAGE_KEYS } from '../lib/browserContracts';
 import { resolveWorkspaceOrigin } from '../lib/workspace';
 
 const ConfigContext = createContext(null);
@@ -64,16 +65,11 @@ const defaultConfig = {
     options: ['system', 'dark', 'light']
   },
   storage: {
-    theme: 'progena_theme',
-    chatHistory: 'progena_chat_history',
-    settings: 'progena_settings',
-    inputHistory: 'progena_input_history',
-    sidebarCollapsed: 'progena_sidebar_collapsed',
-    pinnedPanel: 'progena_pinned_panel',
-    streamFilters: 'progena_stream_filters',
-    quickChatHandoff: 'progena_quick_chat_handoff',
-    idleTimeoutMinutes: 'progena_idle_timeout_minutes',
-    density: 'progena_density'
+    theme: BROWSER_STORAGE_KEY.THEME, chatHistory: BROWSER_STORAGE_KEY.CHAT_HISTORY,
+    settings: BROWSER_STORAGE_KEY.SETTINGS, inputHistory: BROWSER_STORAGE_KEY.INPUT_HISTORY,
+    sidebarCollapsed: BROWSER_STORAGE_KEY.SIDEBAR_COLLAPSED, pinnedPanel: BROWSER_STORAGE_KEY.PINNED_PANEL,
+    streamFilters: BROWSER_STORAGE_KEY.STREAM_FILTERS, quickChatHandoff: BROWSER_STORAGE_KEY.QUICK_CHAT_HANDOFF,
+    idleTimeoutMinutes: BROWSER_STORAGE_KEY.IDLE_TIMEOUT_MINUTES, density: BROWSER_STORAGE_KEY.DENSITY
   }
 };
 
@@ -85,7 +81,7 @@ const defaultConfig = {
 // means navigating to a different workspace URL.
 export function ConfigProvider({ children, workspaceHost }) {
   const [config, setConfig] = useState(() => {
-    const savedTheme = localStorage.getItem('progena_theme');
+    const savedTheme = localStorage.getItem(defaultConfig.storage.theme);
     const savedDensity = localStorage.getItem(defaultConfig.storage.density);
     const savedTimeout = Number(localStorage.getItem(defaultConfig.storage.idleTimeoutMinutes));
 
@@ -126,7 +122,7 @@ export function ConfigProvider({ children, workspaceHost }) {
       ...prev,
       theme: { ...prev.theme, default: theme }
     }));
-    localStorage.setItem('progena_theme', theme);
+    localStorage.setItem(defaultConfig.storage.theme, theme);
   };
 
   const setDensity = (density) => {
@@ -144,7 +140,7 @@ export function ConfigProvider({ children, workspaceHost }) {
       ...defaultConfig,
       api: { ...defaultConfig.api, baseUrl: resolveWorkspaceOrigin(workspaceHost) },
     });
-    Object.values(defaultConfig.storage).forEach((key) => localStorage.removeItem(key));
+    GLOBAL_PREFERENCE_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
   };
 
   return (

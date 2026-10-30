@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { store, workspaceSwitched } from '../store/store';
+import { dispatchWorkspaceSwitched } from '../lib/browserContracts';
 import { parseWorkspacePath, buildWorkspacePath, currentPageHost, ensureWorkspaceRegistered, setDefaultWorkspaceHost } from '../lib/workspace';
 import { clearWorkspaceScopedCaches } from './workspaceCache';
 
@@ -14,7 +15,7 @@ function hostFromLocation() {
 
 function resetForNewWorkspace() {
   clearWorkspaceScopedCaches();
-  window.dispatchEvent(new CustomEvent('progena:workspace-switched'));
+  dispatchWorkspaceSwitched();
   store.dispatch(workspaceSwitched());
 }
 

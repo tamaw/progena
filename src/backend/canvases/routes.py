@@ -217,7 +217,9 @@ async def get_canvases(
     request_id = _request_correlation_id(request, x_request_id)
 
     broadcast_canvases_snapshot(request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["canvases.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.CANVASES_SNAPSHOT]
+    )
 
 
 @router.get(
@@ -236,12 +238,14 @@ async def get_canvas_files(
     files = await asyncio.to_thread(_canvas_files, store, name)
     request_id = _request_correlation_id(request, x_request_id)
     events_stream.broadcast_ui_event(
-        "canvas.files.loaded",
+        events_contracts.UiEvent.CANVAS_FILES_LOADED,
         {"name": name, "revision": canvas_revision(files), "files": files},
         request_id=request_id,
         client_id=client_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["canvas.files.loaded"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.CANVAS_FILES_LOADED]
+    )
 
 
 @router.delete(
@@ -265,8 +269,12 @@ async def delete_canvas(
         for key, _document in store.list_documents(PROGENA_STATE_PREFIX, data_prefix):
             store.delete_document(PROGENA_STATE_PREFIX, key)
     request_id = _request_correlation_id(request, x_request_id)
-    events_stream.broadcast_ui_event("canvas.deleted", {"name": name}, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["canvas.deleted"])
+    events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.CANVAS_DELETED, {"name": name}, request_id=request_id
+    )
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.CANVAS_DELETED]
+    )
 
 
 @router.post(
@@ -292,12 +300,14 @@ async def save_canvas_status(
         store.save_document(PROGENA_STATE_PREFIX, canvas_status_key(name), payload)
     request_id = _request_correlation_id(request, x_request_id)
     events_stream.broadcast_ui_event(
-        "canvas.status.saved",
+        events_contracts.UiEvent.CANVAS_STATUS_SAVED,
         {"name": name, "state": body.state, "revision": body.revision},
         request_id=request_id,
         client_id=body.client_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["canvas.status.saved"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.CANVAS_STATUS_SAVED]
+    )
 
 
 @router.post(
@@ -345,12 +355,14 @@ async def get_canvas_documents(
     cursor = items[-1]["key"] if has_more and items else None
     request_id = _request_correlation_id(request, x_request_id)
     events_stream.broadcast_ui_event(
-        "canvas.documents.loaded",
+        events_contracts.UiEvent.CANVAS_DOCUMENTS_LOADED,
         {"name": name, "type": body.type, "items": items, "cursor": cursor},
         request_id=request_id,
         client_id=body.client_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["canvas.documents.loaded"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.CANVAS_DOCUMENTS_LOADED]
+    )
 
 
 @router.post(
@@ -418,9 +430,14 @@ async def canvas_data(
         payload["items"] = items
     request_id = _request_correlation_id(request, x_request_id)
     events_stream.broadcast_ui_event(
-        "canvas.data.loaded", payload, request_id=request_id, client_id=body.client_id
+        events_contracts.UiEvent.CANVAS_DATA_LOADED,
+        payload,
+        request_id=request_id,
+        client_id=body.client_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["canvas.data.loaded"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.CANVAS_DATA_LOADED]
+    )
 
 
 @router.put(
@@ -441,12 +458,14 @@ async def update_canvas_subscription(
     canvas_events.set_interest(body.client_id, name, events)
     request_id = _request_correlation_id(request, x_request_id)
     events_stream.broadcast_ui_event(
-        "canvas.subscription.updated",
+        events_contracts.UiEvent.CANVAS_SUBSCRIPTION_UPDATED,
         {"name": name, "events": events},
         request_id=request_id,
         client_id=body.client_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["canvas.subscription.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.CANVAS_SUBSCRIPTION_UPDATED]
+    )
 
 
 @router.delete(
@@ -465,12 +484,14 @@ async def delete_canvas_subscription(
     canvas_events.clear_interest(client_id, name)
     request_id = _request_correlation_id(request, x_request_id)
     events_stream.broadcast_ui_event(
-        "canvas.subscription.updated",
+        events_contracts.UiEvent.CANVAS_SUBSCRIPTION_UPDATED,
         {"name": name, "events": []},
         request_id=request_id,
         client_id=client_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["canvas.subscription.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.CANVAS_SUBSCRIPTION_UPDATED]
+    )
 
 
 def broadcast_canvases_snapshot(
@@ -482,5 +503,5 @@ def broadcast_canvases_snapshot(
 
     items = [summary.model_dump(mode="json") for summary in canvas_summaries()]
     return events_stream.broadcast_ui_event(
-        "canvases.snapshot", {"items": items}, request_id=request_id
+        events_contracts.UiEvent.CANVASES_SNAPSHOT, {"items": items}, request_id=request_id
     )

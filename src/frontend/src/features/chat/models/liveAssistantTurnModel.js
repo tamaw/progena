@@ -19,7 +19,7 @@
  * rendering a React hook.
  */
 
-import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, extractCacheReadTokenCount, mergeReasoningEvents, isReasoningEvent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
+import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, extractCacheReadTokenCount, mergeReasoningEvents, isReasoningEvent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE, CANCELLED_SUFFIX } from './streamEventsModel';
 import { isA2AToolName } from './a2aTools';
 import { normalizeContextUsage } from './contextWindowModel';
 import { isToolEventFailure } from './toolFailureModel';
@@ -96,6 +96,14 @@ const SUBAGENT_EVENT_TYPES = new Set([
   'subagent_tool_start',
   'subagent_tool_result',
   'subagent_tool_error',
+]);
+
+const ASYNC_SUBAGENT_EVENT_TYPES = new Set([
+  'async_subagent_start',
+  'async_subagent_update',
+  'async_subagent_pause',
+  'async_subagent_result',
+  'async_subagent_cancel',
 ]);
 
 function subagentItemId(toolCallId) {
@@ -205,7 +213,7 @@ function hasVisibleTimelineOutput(timelineItems) {
     if (item.kind === 'stream_event') {
       return isRenderableStreamEvent(item.event);
     }
-    return item.kind === 'subagent' || item.kind === 'a2a_call';
+    return item.kind === 'subagent' || item.kind === 'async_subagent' || item.kind === 'a2a_call';
   });
 }
 
@@ -308,6 +316,82 @@ export function applySubagentEvent(timelineItems, nextEvent) {
 
   return timelineItems.map((entry, idx) => (
     idx === index ? applySubagentEventToItem(entry, normalizedEvent) : entry
+  ));
+}
+
+function asyncSubagentItemId(taskId) {
+  return `async-subagent-${taskId}`;
+}
+
+function isAsyncSubagentTerminalStatus(status) {
+  return status === 'success' || status === 'error' || status === 'cancelled';
+}
+
+function asyncSubagentStatus(item, event) {
+  if (event.eventType === 'async_subagent_start') return 'running';
+  if (event.eventType === 'async_subagent_pause') return 'interrupted';
+  if (event.eventType === 'async_subagent_cancel') return 'cancelled';
+  const status = event.metadata?.status;
+  return ['running', 'interrupted', 'success', 'error', 'cancelled'].includes(status)
+    ? status
+    : item.status;
+}
+
+function createAsyncSubagentItem(taskId, event) {
+  const metadata = event.metadata || {};
+  const status = asyncSubagentStatus({ status: 'running' }, event);
+  const terminal = isAsyncSubagentTerminalStatus(status);
+  return {
+    kind: 'async_subagent',
+    id: asyncSubagentItemId(taskId),
+    taskId,
+    toolCallId: typeof metadata.tool_call_id === 'string' ? metadata.tool_call_id : '',
+    taskSummary: '',
+    subagentName: metadata.subagent_name || event.content || '',
+    status,
+    startedAt: event.eventType === 'async_subagent_start' ? event.timestamp : null,
+    finishedAt: terminal ? event.timestamp : null,
+    durationMs: null,
+    resultPreview: typeof metadata.result_preview === 'string' ? metadata.result_preview : '',
+    error: status === 'error' && typeof metadata.error === 'string' ? metadata.error : null,
+    entries: [],
+  };
+}
+
+function applyAsyncSubagentEventToItem(item, event) {
+  if (isAsyncSubagentTerminalStatus(item.status)) return item;
+
+  const metadata = event.metadata || {};
+  const status = asyncSubagentStatus(item, event);
+  const terminal = isAsyncSubagentTerminalStatus(status);
+  return {
+    ...item,
+    subagentName: metadata.subagent_name || event.content || item.subagentName,
+    status,
+    finishedAt: terminal ? (event.timestamp ?? item.finishedAt) : item.finishedAt,
+    resultPreview: typeof metadata.result_preview === 'string'
+      ? metadata.result_preview
+      : item.resultPreview,
+    error: status === 'error' && typeof metadata.error === 'string'
+      ? metadata.error
+      : item.error,
+  };
+}
+
+export function applyAsyncSubagentEvent(timelineItems, event) {
+  if (!event || !ASYNC_SUBAGENT_EVENT_TYPES.has(event.eventType)) return null;
+  const taskId = typeof event.metadata?.task_id === 'string' ? event.metadata.task_id.trim() : '';
+  if (!taskId) return null;
+
+  const itemId = asyncSubagentItemId(taskId);
+  const index = timelineItems.findIndex((entry) => (
+    entry.kind === 'async_subagent' && entry.id === itemId
+  ));
+  if (index === -1) {
+    return [...timelineItems, createAsyncSubagentItem(taskId, event)];
+  }
+  return timelineItems.map((entry, itemIndex) => (
+    itemIndex === index ? applyAsyncSubagentEventToItem(entry, event) : entry
   ));
 }
 
@@ -510,6 +594,12 @@ function applyStreamEventToTimeline(turn, streamEvent) {
     return next;
   }
 
+  const updatedAsyncSubagentItems = applyAsyncSubagentEvent(next.timelineItems, nextEvent);
+  if (updatedAsyncSubagentItems) {
+    next.timelineItems = updatedAsyncSubagentItems;
+    return next;
+  }
+
   // A2A tool lifecycle events update the rich a2a_call card but deliberately
   // also keep their plain stream_event row. The plain row is pushed first so
   // a freshly-seeded card follows its dispatch marker. Progress has no
@@ -682,6 +772,19 @@ function collectSubagentGroups(streamEvents) {
   return groups;
 }
 
+function collectAsyncSubagentGroups(streamEvents) {
+  let items = [];
+  for (const event of streamEvents) {
+    const updated = applyAsyncSubagentEvent(items, event);
+    if (updated) items = updated;
+  }
+  const groups = new Map();
+  for (const item of items) {
+    groups.set(item.taskId, item);
+  }
+  return groups;
+}
+
 // Reconstructs grouped A2A call cards from a flat, persisted stream_events
 // array by replaying applyA2ACallEvent over the flat events in order so live
 // and reload cannot drift apart.
@@ -720,8 +823,10 @@ export function buildDefaultAssistantTimeline(message) {
 
   const todosByCallId = collectTodosByToolCallId(streamEvents);
   const subagentGroups = collectSubagentGroups(streamEvents);
+  const asyncSubagentGroups = collectAsyncSubagentGroups(streamEvents);
   const a2aCallGroups = collectA2ACallGroups(streamEvents);
   const insertedSubagentIds = new Set();
+  const insertedAsyncSubagentIds = new Set();
   const insertedA2ACallIds = new Set();
   let todosSeq = 0;
   for (const event of streamEvents) {
@@ -741,6 +846,21 @@ export function buildDefaultAssistantTimeline(message) {
         continue;
       }
       if (!toolCallId) continue;
+    }
+
+    if (ASYNC_SUBAGENT_EVENT_TYPES.has(event?.eventType)) {
+      const taskId = typeof event.metadata?.task_id === 'string'
+        ? event.metadata.task_id.trim()
+        : '';
+      const group = taskId ? asyncSubagentGroups.get(taskId) : undefined;
+      if (group) {
+        if (!insertedAsyncSubagentIds.has(group.id)) {
+          insertedAsyncSubagentIds.add(group.id);
+          items.push({ ...group, timestamp: event.timestamp });
+        }
+        continue;
+      }
+      if (!taskId) continue;
     }
 
     // The grouped A2A call card splices in once after the earliest lifecycle
@@ -968,9 +1088,9 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
   }
 
   if (status === 'cancelled' && hasVisibleOutput) {
-    finalTurn.content = finalTurn.content.endsWith(' [Cancelled]')
+    finalTurn.content = finalTurn.content.endsWith(CANCELLED_SUFFIX)
       ? finalTurn.content
-      : `${finalTurn.content} [Cancelled]`;
+      : `${finalTurn.content}${CANCELLED_SUFFIX}`;
   }
 
   // Ensure the timeline items reflect the final state.

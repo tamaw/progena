@@ -6,6 +6,10 @@ from collections.abc import Awaitable, Callable
 
 from src.progena.orchestration.state import BackgroundTaskEntry
 
+BACKGROUND_TASKS_DOCUMENT_KEY = "background_tasks"
+BACKGROUND_TASKS_ADVISORY_LOCK_KEY = BACKGROUND_TASKS_DOCUMENT_KEY
+ROUTINE_RUN_TASK_KIND = "routine_run"
+
 
 async def enqueue_background_task(
     *,

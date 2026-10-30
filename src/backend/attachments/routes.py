@@ -25,6 +25,7 @@ from fastapi.responses import Response
 import src.backend.events.stream as events_stream
 from src.backend.attachments.processing import AttachmentManager, create_attachment_from_upload
 from src.backend.attachments.store import get_attachment_blob_store
+from src.backend.events import contracts as events_contracts
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ async def upload_attachment(
     meta = store.get_by_checksum(result.checksum)
     if meta is not None:
         events_stream.broadcast_ui_event(
-            "attachment.uploaded", _metadata_payload(meta), scope="global"
+            events_contracts.UiEvent.ATTACHMENT_UPLOADED, _metadata_payload(meta), scope="global"
         )
 
     return result.model_dump(mode="json")
@@ -130,7 +131,9 @@ async def delete_attachment(attachment_id: str, thread_id: str = Query(...)) -> 
     if blob is None or blob.thread_id != thread_id:
         raise HTTPException(status_code=404, detail="Attachment not found")
     store.delete(attachment_id)
-    events_stream.broadcast_ui_event("attachment.deleted", {"id": attachment_id}, scope="global")
+    events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.ATTACHMENT_DELETED, {"id": attachment_id}, scope="global"
+    )
     return Response(status_code=204)
 
 

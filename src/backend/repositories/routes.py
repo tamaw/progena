@@ -60,7 +60,9 @@ async def get_repos(
     """Acknowledge a read and publish the repositories snapshot on the UI stream."""
     request_id = _request_correlation_id(request, x_request_id)
     broadcast_repositories_snapshot(request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["repositories.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.REPOSITORIES_SNAPSHOT]
+    )
 
 
 @router.post("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
@@ -84,7 +86,9 @@ async def create_repo_entry(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     broadcast_repositories_snapshot(request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["repositories.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.REPOSITORIES_SNAPSHOT]
+    )
 
 
 @router.patch("/{repo_id}", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
@@ -108,7 +112,11 @@ async def patch_repo_entry(
     broadcast_repositories_snapshot(request_id=request_id)
     broadcast_repo_detail(repo_id, request_id=request_id)
     return http_contracts.acknowledgement_response(
-        request_id, ["repositories.snapshot", "repo.detail.updated"]
+        request_id,
+        [
+            events_contracts.UiEvent.REPOSITORIES_SNAPSHOT,
+            events_contracts.UiEvent.REPO_DETAIL_UPDATED,
+        ],
     )
 
 
@@ -126,7 +134,9 @@ async def delete_repo_entry(
     if not existed:
         raise HTTPException(status_code=404, detail=f"repo '{repo_id}' not found")
     broadcast_repositories_snapshot(request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["repositories.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.REPOSITORIES_SNAPSHOT]
+    )
 
 
 @router.get(
@@ -143,7 +153,9 @@ async def get_repo_detail(
         broadcast_repo_detail(repo_id, request_id=request_id)
     except RepoNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"repo '{repo_id}' not found") from exc
-    return http_contracts.acknowledgement_response(request_id, ["repo.detail.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.REPO_DETAIL_UPDATED]
+    )
 
 
 @router.post(
@@ -170,7 +182,11 @@ async def fetch_repo_entry(
     broadcast_repositories_snapshot(request_id=request_id)
     broadcast_repo_detail(repo_id, request_id=request_id)
     return http_contracts.acknowledgement_response(
-        request_id, ["repositories.snapshot", "repo.detail.updated"]
+        request_id,
+        [
+            events_contracts.UiEvent.REPOSITORIES_SNAPSHOT,
+            events_contracts.UiEvent.REPO_DETAIL_UPDATED,
+        ],
     )
 
 
@@ -191,7 +207,9 @@ def broadcast_repositories_snapshot(
         "items": repositories_service.merged_repo_rows(),
         "workspace_signal": repositories_service.workspace_signal(),
     }
-    return events_stream.broadcast_ui_event("repositories.snapshot", payload, request_id=request_id)
+    return events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.REPOSITORIES_SNAPSHOT, payload, request_id=request_id
+    )
 
 
 def broadcast_repo_detail(
@@ -199,4 +217,6 @@ def broadcast_repo_detail(
 ) -> events_contracts.UiEventEnvelope:
     """Broadcast one repo's merged declared+scanned detail payload."""
     payload = repositories_service.merged_repo_detail(repo_id)
-    return events_stream.broadcast_ui_event("repo.detail.updated", payload, request_id=request_id)
+    return events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.REPO_DETAIL_UPDATED, payload, request_id=request_id
+    )

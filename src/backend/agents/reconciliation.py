@@ -10,6 +10,7 @@ import src.backend.agents.store as agents_store
 import src.backend.events.stream as events_stream
 import src.backend.monitoring.status as monitoring_status
 import src.backend.storage.documents as storage_documents
+from src.backend.events import contracts as events_contracts
 from src.progena.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,9 @@ def _queue_routine_agent_reconciliation(_snapshot, changed_key: str | None = Non
             items = await asyncio.to_thread(
                 policy_catalog, storage_documents.get_default_document_store()
             )
-            events_stream.broadcast_ui_event("policies.snapshot", {"items": items})
+            events_stream.broadcast_ui_event(
+                events_contracts.UiEvent.POLICIES_SNAPSHOT, {"items": items}
+            )
 
         policy_task = asyncio.create_task(push_policies())
         _active_routine_agent_tasks.add(policy_task)
@@ -78,7 +81,9 @@ async def _reconcile_routine_agent(changed_key: str | None) -> None:
                 deleted = await asyncio.to_thread(store.delete_routine_catalog_entry, agent_id)
                 if deleted:
                     roster_changed = True
-                    events_stream.broadcast_ui_event("agent.deleted", {"agent_id": agent_id})
+                    events_stream.broadcast_ui_event(
+                        events_contracts.UiEvent.AGENT_DELETED, {"agent_id": agent_id}
+                    )
                 continue
             created = await asyncio.to_thread(store.ensure_routine_agent, agent_id, graph_document)
             agent = await asyncio.to_thread(store.get_agent, agent_id)
@@ -104,7 +109,7 @@ async def _reconcile_routine_agent(changed_key: str | None) -> None:
         graph_payload["nodes"] = graph_document.get("nodes", [])
         graph_payload["edges"] = graph_document.get("edges", [])
         events_stream.broadcast_ui_event(
-            "agent.graph.updated",
+            events_contracts.UiEvent.AGENT_GRAPH_UPDATED,
             {
                 "agent_id": agent_id,
                 "graph": agents_routes.AgentGraphModel(**graph_payload).model_dump(by_alias=True),
@@ -123,7 +128,7 @@ async def _reconcile_routine_agent(changed_key: str | None) -> None:
             logger.debug("Failed to list routine revisions for %r", agent_id, exc_info=True)
         else:
             events_stream.broadcast_ui_event(
-                "agent.routine.revisions.loaded",
+                events_contracts.UiEvent.AGENT_ROUTINE_REVISIONS_LOADED,
                 {
                     "agent_id": agent_id,
                     "revisions": [

@@ -230,6 +230,133 @@ class TestUIRoutes:
         assert replay.payload["total"] == 1
         assert replay.payload["sessions"][0]["thread_id"] == thread_id
 
+    @pytest.mark.asyncio
+    async def test_concurrent_chat_mutations_emit_their_own_correlated_events(self, document_store):
+        """Each persisted route mutation settles only its own acknowledgement."""
+        import httpx
+
+        from src.backend.events.documents import DocumentEventDispatcher
+
+        _create_session_document(document_store, "thread-patch", "Before")
+        _create_session_document(document_store, "thread-delete", "Disposable")
+        _create_session_document(document_store, "thread-empty", "Untouched")
+        _create_session_document(document_store, "thread-idempotent", "Already pinned")
+        dispatcher = DocumentEventDispatcher(
+            store_getter=lambda: document_store, consumer="test.chat-route-correlation"
+        )
+        dispatcher.add_handler(chat_routes._publish_chat_session_document_event)
+        await dispatcher.start()
+        event_start = len(events_stream._ui_event_replay)
+        patch_request_id = "chat-mutation-patch"
+        delete_request_id = "chat-mutation-delete"
+        missing_request_id = "chat-mutation-missing"
+        empty_request_id = "chat-mutation-empty"
+        idempotent_request_id = "chat-mutation-idempotent"
+
+        try:
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as async_client:
+                (
+                    patch_response,
+                    delete_response,
+                    missing_response,
+                    empty_response,
+                    idempotent_response,
+                ) = await asyncio.gather(
+                    async_client.patch(
+                        "/api/ui/chats/thread-patch",
+                        json={"title": "After", "pinned": True, "archived": True},
+                        headers={"X-Operation-Id": patch_request_id},
+                    ),
+                    async_client.delete(
+                        "/api/ui/chats/thread-delete",
+                        headers={"X-Operation-Id": delete_request_id},
+                    ),
+                    async_client.patch(
+                        "/api/ui/chats/missing",
+                        json={"title": "Never persisted"},
+                        headers={"X-Operation-Id": missing_request_id},
+                    ),
+                    async_client.patch(
+                        "/api/ui/chats/thread-empty",
+                        json={},
+                        headers={"X-Operation-Id": empty_request_id},
+                    ),
+                    async_client.patch(
+                        "/api/ui/chats/thread-idempotent",
+                        json={"pinned": False},
+                        headers={"X-Operation-Id": idempotent_request_id},
+                    ),
+                )
+            await dispatcher.drain()
+        finally:
+            await dispatcher.stop()
+
+        assert_acknowledged(
+            patch_response,
+            ["chat.session.metadata.updated", "chat.sessions.snapshot"],
+            request_id=patch_request_id,
+            check_request_id_header=True,
+        )
+        assert_acknowledged(
+            delete_response,
+            ["chat.session.deleted", "chat.sessions.snapshot"],
+            request_id=delete_request_id,
+            check_request_id_header=True,
+        )
+        assert missing_response.status_code == 404
+        assert_acknowledged(
+            empty_response,
+            ["chat.sessions.snapshot"],
+            request_id=empty_request_id,
+            check_request_id_header=True,
+        )
+        assert_acknowledged(
+            idempotent_response,
+            ["chat.sessions.snapshot"],
+            request_id=idempotent_request_id,
+            check_request_id_header=True,
+        )
+        emitted = events_stream._ui_event_replay[event_start:]
+        by_request_id = {
+            request_id: [
+                event for event in emitted if event.payload.get("request_id") == request_id
+            ]
+            for request_id in (
+                patch_request_id,
+                delete_request_id,
+                missing_request_id,
+                empty_request_id,
+                idempotent_request_id,
+            )
+        }
+        assert [event.type for event in by_request_id[patch_request_id]] == [
+            "chat.sessions.snapshot",
+            "chat.session.metadata.updated",
+        ]
+        assert [event.type for event in by_request_id[delete_request_id]] == [
+            "chat.sessions.snapshot",
+            "chat.session.deleted",
+        ]
+        assert by_request_id[missing_request_id] == []
+        assert [event.type for event in by_request_id[empty_request_id]] == [
+            "chat.sessions.snapshot"
+        ]
+        assert [event.type for event in by_request_id[idempotent_request_id]] == [
+            "chat.sessions.snapshot"
+        ]
+        patched_session = by_request_id[patch_request_id][1].payload["session"]
+        assert patched_session["thread_id"] == "thread-patch"
+        assert patched_session["title"] == "After"
+        assert patched_session["pinned"] is True
+        assert patched_session["archived"] is True
+        assert by_request_id[delete_request_id][1].payload == {
+            "thread_id": "thread-delete",
+            "request_id": delete_request_id,
+        }
+
     def test_chat_detail_request_emits_request_scoped_selection_event(self, client, document_store):
 
         _create_session_document(document_store, "thread-select", "Selectable chat")
