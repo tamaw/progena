@@ -92,6 +92,7 @@ const __routineIsFinite = Number.isFinite;
 const __routineTypeError = TypeError;
 const __routineRangeError = RangeError;
 const __routineCharCodeAt = Function.prototype.call.bind(String.prototype.charCodeAt);
+const __routineRegExpExec = Function.prototype.call.bind(RegExp.prototype.exec);
 const __routineResult = await (async function(input) {
 """
 
@@ -109,15 +110,23 @@ const __routineSerialized = __routineStringify(__routineResult, (key, value) => 
 const __routineMaxBytes = """
     + str(_CODE_MAX_RESULT_BYTES)
     + """;
-let __routineResultBytes = 0;
-for (let index = 0; index < __routineSerialized.length; index += 1) {
-  const unit = __routineCharCodeAt(__routineSerialized, index);
-  if (unit < 0x80) __routineResultBytes += 1;
-  else if (unit < 0x800) __routineResultBytes += 2;
-  else if (unit >= 0xD800 && unit <= 0xDBFF) {
-    __routineResultBytes += 4;
-    index += 1;
-  } else __routineResultBytes += 3;
+// UTF-16 length is a lower bound on JSON's UTF-8 size. Reject it first, then
+// scan runs of equally wide non-ASCII code points in native code instead of
+// spending the guest CPU budget counting every byte. JSON.stringify escapes
+// lone surrogates, so only the astral branch can contain surrogate pairs.
+let __routineResultBytes = __routineSerialized.length;
+if (__routineResultBytes > __routineMaxBytes) {
+  throw new __routineRangeError("code result exceeds the maximum size");
+}
+const __routineNonAsciiPattern = /[\\u0080-\\u07FF]+|[\\u0800-\\uFFFF]+|[\\u{10000}-\\u{10FFFF}]+/gu;
+let __routineNonAscii;
+while ((__routineNonAscii = __routineRegExpExec(
+    __routineNonAsciiPattern, __routineSerialized)) !== null) {
+  const unit = __routineCharCodeAt(__routineNonAscii[0], 0);
+  // Two-byte points and surrogate pairs each need one extra byte per UTF-16
+  // unit; three-byte BMP points need two. Every match has a single width.
+  const extraBytesPerUnit = unit < 0x800 || (unit >= 0xD800 && unit <= 0xDBFF) ? 1 : 2;
+  __routineResultBytes += __routineNonAscii[0].length * extraBytesPerUnit;
   if (__routineResultBytes > __routineMaxBytes) {
     throw new __routineRangeError("code result exceeds the maximum size");
   }

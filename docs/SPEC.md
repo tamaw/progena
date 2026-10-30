@@ -103,6 +103,10 @@ sandbox API key is required.
   timeout watchdog responsive. Cancelling the awaiting node does not kill
   the worker; its independent one-second guest deadline still bounds execution.
   The host also checks serialized UTF-8 bytes before accepting the result.
+  The guest rejects serialized UTF-16 length above the cap immediately, then
+  counts additional UTF-8 bytes by native regex runs of equal encoding width.
+  This avoids spending the JS deadline on a per-ASCII-byte validation loop while
+  retaining the exact byte cap, including JSON quotes and surrogate pairs.
   The JavaScript editor reuses graph-state autocomplete with `input`-rooted
   dot/bracket references, rather than Python expression or prompt-template
   syntax. It suggests declared routine inputs and predecessor output keys/
