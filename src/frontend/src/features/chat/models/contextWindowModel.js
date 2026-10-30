@@ -10,6 +10,17 @@ function optionalString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+
+function normalizeCompaction(compaction) {
+  if (!compaction || typeof compaction !== 'object') return null;
+  const beforeInputTokens = nonNegativeInteger(compaction.before_input_tokens ?? compaction.beforeInputTokens);
+  const afterInputTokens = nonNegativeInteger(compaction.after_input_tokens ?? compaction.afterInputTokens);
+  const freedInputTokens = nonNegativeInteger(compaction.freed_input_tokens ?? compaction.freedInputTokens);
+  if (beforeInputTokens === null || afterInputTokens === null || freedInputTokens === null
+    || freedInputTokens !== Math.max(0, beforeInputTokens - afterInputTokens)
+    || compaction.measurement !== 'comparable_provider_footprints') return null;
+  return { beforeInputTokens, afterInputTokens, freedInputTokens, measurement: compaction.measurement };
+}
 /** Normalize the backend's latest parent-call footprint into UI naming. */
 export function normalizeContextUsage(usage) {
   if (!usage || typeof usage !== 'object' || Array.isArray(usage)) {
@@ -26,6 +37,7 @@ export function normalizeContextUsage(usage) {
   const profileName = optionalString(usage.profile_name ?? usage.profileName);
   const deployment = optionalString(usage.deployment);
   const providerId = optionalString(usage.provider_id ?? usage.providerId);
+  const compaction = normalizeCompaction(usage.compaction);
   return {
     inputTokens,
     outputTokens,
@@ -33,6 +45,7 @@ export function normalizeContextUsage(usage) {
     ...(profileName ? { profileName } : {}),
     ...(deployment ? { deployment } : {}),
     ...(providerId ? { providerId } : {}),
+    ...(compaction ? { compaction } : {}),
   };
 }
 
@@ -75,7 +88,11 @@ export function resolveComposerContextUsage({ contextUsage, profiles, isFreshCon
   if (normalizedUsage) {
     const profile = matchingProfile(catalogue, normalizedUsage);
     const maxTokens = positiveInteger(profile?.context_window);
-    return maxTokens === null ? null : { usedTokens: normalizedUsage.totalTokens, maxTokens };
+    return maxTokens === null ? null : {
+      usedTokens: normalizedUsage.totalTokens,
+      maxTokens,
+      ...(normalizedUsage.compaction ? { compaction: normalizedUsage.compaction } : {}),
+    };
   }
 
   if (!isFreshConversation) {

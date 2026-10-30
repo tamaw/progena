@@ -55,6 +55,15 @@ async def _collect_items(bridge: DeepAgentSSEStream, message: str = "hello") -> 
     return [item async for item in bridge.stream(message, thread_id="thread-1")]
 
 
+def _terminal_usage_metadata(items: list[dict]) -> dict:
+    return next(
+        item["metadata"]
+        for item in items
+        if item.get("event_type") == "usage_update"
+        and "response_status" in item.get("metadata", {})
+    )
+
+
 @pytest.mark.asyncio
 async def test_graph_message_events_stream_incrementally_without_duplicate_final():
     graph = _FakeGraph(
@@ -1294,8 +1303,8 @@ async def test_usage_update_keeps_aggregate_billing_but_reports_latest_context_c
 
     items = await _collect_items(bridge)
 
-    usage_update = next(item for item in items if item.get("event_type") == "usage_update")
-    assert usage_update["metadata"] == {
+    usage_update = _terminal_usage_metadata(items)
+    assert usage_update == {
         "output_tokens": 28,
         "final_call_output_tokens": 8,
         "response_status": "unknown",
@@ -1309,6 +1318,73 @@ async def test_usage_update_keeps_aggregate_billing_but_reports_latest_context_c
             "provider_id": "provider-1",
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_committed_compaction_usage_update_arrives_before_end_of_turn() -> None:
+    compacted = AIMessage(
+        id="ai-compacted",
+        content="Done",
+        usage_metadata={"input_tokens": 400, "output_tokens": 10, "total_tokens": 410},
+        response_metadata={
+            "progena_context_compaction": {
+                "before_input_tokens": 1_200,
+                "after_input_tokens": 400,
+                "freed_input_tokens": 800,
+                "measurement": "comparable_provider_footprints",
+            }
+        },
+    )
+    graph = _FakeGraph(
+        [("updates", {"ContextCompactionMiddleware.after_model": {"messages": [compacted]}})]
+    )
+
+    items = await _collect_items(DeepAgentSSEStream(graph, config=_make_config(), state={}))
+
+    usage_updates = [item for item in items if item.get("event_type") == "usage_update"]
+    assert usage_updates[0]["metadata"] == {
+        "context_usage": {
+            "input_tokens": 400,
+            "output_tokens": 10,
+            "total_tokens": 410,
+            "compaction": {
+                "before_input_tokens": 1_200,
+                "after_input_tokens": 400,
+                "freed_input_tokens": 800,
+                "measurement": "comparable_provider_footprints",
+            },
+        }
+    }
+    assert (
+        usage_updates[-1]["metadata"]["context_usage"]
+        == usage_updates[0]["metadata"]["context_usage"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_complete_root_model_updates_refresh_context_once_per_provider_footprint() -> None:
+    call = AIMessage(
+        id="ai-tool-loop",
+        content="",
+        usage_metadata={"input_tokens": 200, "output_tokens": 10, "total_tokens": 210},
+    )
+    graph = _FakeGraph(
+        [
+            ("updates", {"model": {"messages": [call]}}),
+            ("updates", {"model": {"messages": [call]}}),
+        ]
+    )
+
+    items = await _collect_items(DeepAgentSSEStream(graph, config=_make_config(), state={}))
+
+    live_updates = [
+        item
+        for item in items
+        if item.get("event_type") == "usage_update" and set(item["metadata"]) == {"context_usage"}
+    ]
+    assert [item["metadata"]["context_usage"] for item in live_updates] == [
+        {"input_tokens": 200, "output_tokens": 10, "total_tokens": 210}
+    ]
 
 
 @pytest.mark.asyncio
@@ -1433,7 +1509,11 @@ async def test_usage_update_sums_model_calls_and_deduplicates_repeated_message_i
         DeepAgentSSEStream(graph, config=_make_config(reasoning_enabled=False), state={})
     )
 
-    usage_updates = [item for item in items if item.get("event_type") == "usage_update"]
+    usage_updates = [
+        item
+        for item in items
+        if item.get("event_type") == "usage_update" and "usage" in item.get("metadata", {})
+    ]
     assert [item["metadata"]["usage"] for item in usage_updates] == [
         {"input_tokens": 30, "output_tokens": 16, "total_tokens": 46}
     ]
@@ -1461,7 +1541,7 @@ async def test_missing_provider_usage_remains_unknown_instead_of_zero():
         DeepAgentSSEStream(graph, config=_make_config(reasoning_enabled=False), state={})
     )
 
-    usage = next(item["metadata"] for item in items if item.get("event_type") == "usage_update")
+    usage = _terminal_usage_metadata(items)
     assert usage["output_tokens"] is None
     assert usage["final_call_output_tokens"] is None
     assert "usage" not in usage
@@ -1488,7 +1568,7 @@ async def test_response_output_requires_explicit_usage_from_each_model_call(
         ]
     )
     items = await _collect_items(DeepAgentSSEStream(graph, config=_make_config(), state={}))
-    usage = next(item["metadata"] for item in items if item.get("event_type") == "usage_update")
+    usage = _terminal_usage_metadata(items)
     assert usage["output_tokens"] == expected_total
     assert usage["final_call_output_tokens"] == expected_final
 
@@ -1502,7 +1582,7 @@ async def test_unfinished_tool_request_has_no_final_answer_output_usage():
     )
     graph = _FakeGraph([("updates", {"model": {"messages": [request]}})])
     items = await _collect_items(DeepAgentSSEStream(graph, config=_make_config(), state={}))
-    usage = next(item["metadata"] for item in items if item.get("event_type") == "usage_update")
+    usage = _terminal_usage_metadata(items)
     assert usage["output_tokens"] == 9
     assert usage["final_call_output_tokens"] is None
 
@@ -1525,7 +1605,7 @@ async def test_final_output_usage_replaces_an_earlier_count_for_the_same_call():
         ]
     )
     items = await _collect_items(DeepAgentSSEStream(graph, config=_make_config(), state={}))
-    usage = next(item["metadata"] for item in items if item.get("event_type") == "usage_update")
+    usage = _terminal_usage_metadata(items)
     assert usage["output_tokens"] == 7
     assert usage["final_call_output_tokens"] == 7
 
@@ -1551,7 +1631,7 @@ async def test_repaired_history_does_not_count_prior_turns_as_current_output(old
     ]
     graph = _FakeGraph([("updates", {"model": {"messages": repaired}})])
     items = await _collect_items(DeepAgentSSEStream(graph, config=_make_config(), state={}))
-    usage = next(item["metadata"] for item in items if item.get("event_type") == "usage_update")
+    usage = _terminal_usage_metadata(items)
     assert usage["output_tokens"] == 7
     assert usage["final_call_output_tokens"] == 7
 
@@ -1568,7 +1648,7 @@ async def test_provider_incomplete_status_is_preserved_for_live_work_state():
     )
     graph = _FakeGraph([("updates", {"model": {"messages": [final]}})])
     items = await _collect_items(DeepAgentSSEStream(graph, config=_make_config(), state={}))
-    usage = next(item["metadata"] for item in items if item.get("event_type") == "usage_update")
+    usage = _terminal_usage_metadata(items)
     assert usage["response_status"] == "interrupted"
     assert usage["output_tokens"] == 7
 
@@ -1587,7 +1667,7 @@ async def test_native_graph_interrupt_is_not_reported_as_completed_work():
         ]
     )
     items = await _collect_items(DeepAgentSSEStream(graph, config=_make_config(), state={}))
-    usage = next(item["metadata"] for item in items if item.get("event_type") == "usage_update")
+    usage = _terminal_usage_metadata(items)
     assert usage["response_status"] == "interrupted"
     assert usage["final_call_output_tokens"] is None
 
@@ -1600,6 +1680,6 @@ async def test_reasoning_only_tail_has_output_but_no_final_answer_count():
     )
     graph = _FakeGraph([("updates", {"model": {"messages": [reasoning]}})])
     items = await _collect_items(DeepAgentSSEStream(graph, config=_make_config(), state={}))
-    usage = next(item["metadata"] for item in items if item.get("event_type") == "usage_update")
+    usage = _terminal_usage_metadata(items)
     assert usage["output_tokens"] == 7
     assert usage["final_call_output_tokens"] is None

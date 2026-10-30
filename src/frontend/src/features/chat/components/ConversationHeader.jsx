@@ -3,7 +3,8 @@ import StreamFilterMenu from './StreamFilterMenu';
 import DetailHeader, { DetailHeaderAction, DetailHeaderActions } from '../../../components/layout/DetailHeader';
 import EditableDetailTitle from '../../../components/EditableDetailTitle';
 import InlineFailure from '../../../components/InlineFailure';
-import { committedReasoningTokenCounts, committedReasoningTokenDisplay, formatStartedTime, liveReasoningTokenAdjustment } from '../models/conversationModel';
+import { formatStartedTime } from '../models/conversationModel';
+import { conversationUsageDisplay } from '../models/conversationUsageModel';
 import { STREAM_EVENT_CATEGORIES, countCategorizedEvents } from '../models/streamFilters';
 import { countReasoningTimelineEntries } from '../models/streamEventsModel';
 import { CHAT_STATUS } from '../models/chatStatus';
@@ -12,7 +13,7 @@ export const LiveConversationHeader = memo(function LiveConversationHeader({
   liveTurnStore,
   isRouteDetailError,
   messages,
-  totalTokenCount,
+  cumulativeUsage,
   firstMessageTime,
   isContentLoading,
   isEmptyConversationPane,
@@ -31,22 +32,7 @@ export const LiveConversationHeader = memo(function LiveConversationHeader({
     liveTurnStore.getHeaderSnapshot,
     liveTurnStore.getHeaderSnapshot,
   );
-  const committedReasoningMeta = useMemo(
-    () => committedReasoningTokenDisplay(messages),
-    [messages],
-  );
-  const committedReasoningCounts = useMemo(
-    () => committedReasoningTokenCounts(messages),
-    [messages],
-  );
-  const liveReasoningMeta = useMemo(
-    () => liveReasoningTokenAdjustment(liveHeaderSnapshot, committedReasoningCounts),
-    [committedReasoningCounts, liveHeaderSnapshot],
-  );
-  const reasoningTokenMeta = useMemo(() => ({
-    total: committedReasoningMeta.total + liveReasoningMeta.total,
-    estimated: committedReasoningMeta.estimated || liveReasoningMeta.estimated,
-  }), [committedReasoningMeta, liveReasoningMeta]);
+  const usageDisplay = conversationUsageDisplay(cumulativeUsage);
   const committedEventCounts = useMemo(() => {
     const counts = STREAM_EVENT_CATEGORIES.reduce((acc, c) => { acc[c.id] = 0; return acc; }, {});
     for (const message of messages) {
@@ -106,8 +92,8 @@ export const LiveConversationHeader = memo(function LiveConversationHeader({
             {chatStatus === CHAT_STATUS.DELEGATING ? 'Delegating' : chatStatus}
           </span>,
           <span key="started" className="muted">Started {formatStartedTime(firstMessageTime) || 'not started'}</span>,
-          <span key="tokens" className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>,
-          <span key="reasoning-tokens" className="muted">{reasoningTokenMeta.estimated ? '~' : ''}{new Intl.NumberFormat().format(reasoningTokenMeta.total)} reasoning tokens</span>,
+          <span key="tokens" className="muted">{usageDisplay.output}</span>,
+          <span key="reasoning-tokens" className="muted">{usageDisplay.reasoning}</span>,
           threadId ? <span key="id" className="chat-session-id">{threadId}</span> : null,
         ]}
       />

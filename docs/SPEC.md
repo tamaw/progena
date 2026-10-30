@@ -66,8 +66,13 @@ to the backend and receives browser application data through two SSE roles:
     historical messages before the current user boundary are not current-turn
     output. Missing counts stay unknown; explicit zero is preserved. Provider
     incompleteness and native graph interrupts remain interrupted even if the
-    enclosing response transport completes. Existing `usage`/`context_usage`
-    metadata remain separate from this strict display contract.
+    enclosing response transport completes. Context-only `usage_update` events
+    also report each complete root provider footprint during tool loops. Optional
+    `context_usage.compaction` compares same-provider/deployment input footprints
+    before/after a committed automatic summary, not exact tokenizer savings.
+    It is persisted on AI response metadata through a native after-model update
+    and retained on later responses until the next summary supersedes it.
+    Existing aggregate `usage` remains separate from this display contract.
 - `GET /v1/events` broadcasts runtime agent events to the backend.
 
 ### JavaScript execution

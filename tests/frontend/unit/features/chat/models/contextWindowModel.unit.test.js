@@ -39,6 +39,31 @@ describe('normalizeContextUsage', () => {
     expect(normalizeContextUsage({ input_tokens: 1, output_tokens: 2 })).toBeNull();
     expect(normalizeContextUsage({ input_tokens: 1, output_tokens: 2, total_tokens: 2.5 })).toBeNull();
   });
+
+  it('retains comparable compaction evidence through canonical normalization', () => {
+    const usage = normalizeContextUsage({
+      input_tokens: 12000, output_tokens: 500, total_tokens: 12500,
+      profile_name: 'general', provider_id: 'provider-a', deployment: 'gpt-a',
+      compaction: {
+        before_input_tokens: 80000, after_input_tokens: 12000, freed_input_tokens: 68000,
+        measurement: 'comparable_provider_footprints',
+      },
+    });
+    const canonical = normalizeContextUsage(usage);
+    expect(resolveComposerContextUsage({ contextUsage: canonical, profiles: [general] })).toMatchObject({
+      usedTokens: 12500, compaction: { freedInputTokens: 68000 },
+    });
+  });
+
+  it('does not advertise inconsistent or unmeasured savings', () => {
+    for (const compaction of [
+      { before_input_tokens: 80000, after_input_tokens: 12000, freed_input_tokens: 70000, measurement: 'comparable_provider_footprints' },
+      { before_input_tokens: 80000, after_input_tokens: 12000, freed_input_tokens: 68000 },
+    ]) {
+      expect(normalizeContextUsage({ input_tokens: 12000, output_tokens: 500, total_tokens: 12500, compaction }))
+        .not.toHaveProperty('compaction');
+    }
+  });
 });
 
 describe('resolveComposerContextUsage', () => {

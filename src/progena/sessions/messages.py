@@ -410,12 +410,14 @@ def _output_tokens_from_container(container: dict[str, Any]) -> int | None:
     return None
 
 
-def extract_context_usage(msg: Any) -> dict[str, int | str] | None:
+def extract_context_usage(msg: Any) -> dict[str, Any] | None:
     """Return one complete model call's usage and persisted profile attribution.
 
     Context capacity is meaningful only for an actual provider call. Unlike
     aggregate accounting, this deliberately rejects partial usage records
-    rather than inventing zero input or output tokens.
+    rather than inventing zero input or output tokens. A native compaction
+    comparison is included only when it was persisted beside that provider
+    footprint and passes its strict internal consistency checks.
     """
     if msg is None:
         return None
@@ -445,7 +447,7 @@ def extract_context_usage(msg: Any) -> dict[str, int | str] | None:
     if usage is None:
         return None
 
-    result: dict[str, int | str] = dict(usage)
+    result: dict[str, Any] = dict(usage)
     if not isinstance(response_metadata, dict):
         return result
     insights = response_metadata.get("insights")
@@ -460,7 +462,39 @@ def extract_context_usage(msg: Any) -> dict[str, int | str] | None:
             provider_id = provider.get("id")
             if isinstance(provider_id, str) and provider_id:
                 result["provider_id"] = provider_id
+    compaction = _extract_context_compaction(response_metadata)
+    if compaction is not None:
+        result["compaction"] = compaction
     return result
+
+
+def _extract_context_compaction(
+    response_metadata: dict[str, Any],
+) -> dict[str, int | str] | None:
+    """Read an internally consistent, explicitly non-precise compaction delta."""
+    value = response_metadata.get("progena_context_compaction")
+    if not isinstance(value, dict):
+        return None
+    before = value.get("before_input_tokens")
+    after = value.get("after_input_tokens")
+    freed = value.get("freed_input_tokens")
+    if (
+        type(before) is not int
+        or before < 0
+        or type(after) is not int
+        or after < 0
+        or type(freed) is not int
+        or freed <= 0
+        or freed != before - after
+        or value.get("measurement") != "comparable_provider_footprints"
+    ):
+        return None
+    return {
+        "before_input_tokens": before,
+        "after_input_tokens": after,
+        "freed_input_tokens": freed,
+        "measurement": "comparable_provider_footprints",
+    }
 
 
 def extract_cache_read_token_count(msg: Any) -> int | None:

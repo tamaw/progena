@@ -33,6 +33,7 @@ from src.progena.agent.filesystem.mounts import create_progena_backend
 from src.progena.agent.filesystem.shell import ShellPaths
 from src.progena.agent.middleware import (
     AsyncSubagentTrackingMiddleware,
+    ContextCompactionMiddleware,
     DirectA2AFastPathMiddleware,
     DynamicMCPToolMiddleware,
     LiveInstructionMiddleware,
@@ -345,6 +346,7 @@ async def create_progena_agent(
         SchemaCompactionMiddleware(),
         SecretRedactionMiddleware(),
         ToolTimingMiddleware(),
+        ContextCompactionMiddleware(),
         _create_javascript_middleware(),
     ]
 

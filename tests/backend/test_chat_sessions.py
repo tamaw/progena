@@ -320,6 +320,7 @@ class TestGetChatDetail:
             "profile_name": "general",
             "deployment": "final-model",
             "provider_id": "provider-1",
+            "compaction": None,
         }
 
     def test_aggregates_root_tool_call_and_final_output_usage(self):
@@ -809,6 +810,132 @@ class TestGetChatDetail:
         ]
         calls = detail.messages[1].tool_calls
         assert [call.get("commentary") for call in calls] == ["I'll look at the repo first.", None]
+
+    def test_usage_totals_cover_retained_transcript_before_pagination_and_compaction(self):
+        store = InMemoryDocumentStore()
+        raw_messages = [
+            item
+            for index in range(51)
+            for item in (
+                {"id": f"u{index}", "type": "human", "content": f"question {index}"},
+                {
+                    "id": f"a{index}",
+                    "type": "ai",
+                    "content": f"answer {index}",
+                    "usage_metadata": {"output_tokens": 2, "reasoning_tokens": 1},
+                },
+            )
+        ]
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_usage_totals",
+                checkpoint_id="before-compaction",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=raw_messages,
+            )
+        )
+        _store_session(store, "thread_usage_totals")
+
+        before_compaction = get_chat_detail(store, "thread_usage_totals")
+
+        assert before_compaction is not None
+        assert before_compaction.usage_totals.model_dump() == {
+            "output_tokens": 102,
+            "reasoning_tokens": 51,
+            "output_coverage": "complete",
+            "reasoning_coverage": "complete",
+            "assistant_message_count": 51,
+            "output_token_message_count": 51,
+            "reasoning_token_message_count": 51,
+        }
+        page, has_more = paginate_chat_messages(before_compaction.messages, limit=50)
+        assert len(page) == 50
+        assert has_more is True
+
+        # Native compaction preserves the raw root messages even when the
+        # browser only renders a page and a summary boundary.
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_usage_totals",
+                checkpoint_id="after-compaction",
+                checkpoint_ts="2026-01-01T00:01:00Z",
+                messages=raw_messages,
+            )
+        )
+
+        after_compaction = get_chat_detail(store, "thread_usage_totals")
+
+        assert after_compaction is not None
+        assert after_compaction.usage_totals == before_compaction.usage_totals
+
+    def test_usage_totals_deduplicate_reemissions_and_mark_missing_provider_counts(self):
+        store = InMemoryDocumentStore()
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_partial_usage_totals",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "first persisted emission",
+                        "usage_metadata": {"output_tokens": 2, "reasoning_tokens": 1},
+                    },
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "final persisted emission",
+                        "usage_metadata": {"output_tokens": 5},
+                    },
+                    {
+                        "id": "a2",
+                        "type": "ai",
+                        "content": "output usage unavailable",
+                        "usage_metadata": {"reasoning_tokens": 3},
+                    },
+                ],
+            )
+        )
+        _store_session(store, "thread_partial_usage_totals")
+
+        detail = get_chat_detail(store, "thread_partial_usage_totals")
+
+        assert detail is not None
+        assert detail.usage_totals.model_dump() == {
+            "output_tokens": 5,
+            "reasoning_tokens": 4,
+            "output_coverage": "partial",
+            "reasoning_coverage": "complete",
+            "assistant_message_count": 2,
+            "output_token_message_count": 1,
+            "reasoning_token_message_count": 2,
+        }
+
+    def test_usage_totals_mark_an_unreported_metric_unknown(self):
+        store = InMemoryDocumentStore()
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_unknown_usage_totals",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[{"id": "a1", "type": "ai", "content": "No provider usage."}],
+            )
+        )
+        _store_session(store, "thread_unknown_usage_totals")
+
+        detail = get_chat_detail(store, "thread_unknown_usage_totals")
+
+        assert detail is not None
+        assert detail.usage_totals.model_dump() == {
+            "output_tokens": None,
+            "reasoning_tokens": None,
+            "output_coverage": "unknown",
+            "reasoning_coverage": "unknown",
+            "assistant_message_count": 1,
+            "output_token_message_count": 0,
+            "reasoning_token_message_count": 0,
+        }
 
 
 class TestPatchSessionDocument:

@@ -186,6 +186,7 @@ function contextUsageRenderSignature(contextUsage) {
     profileName: contextUsage?.profileName ?? '',
     deployment: contextUsage?.deployment ?? '',
     providerId: contextUsage?.providerId ?? '',
+    compaction: contextUsage?.compaction ?? null,
   };
 }
 
@@ -438,72 +439,6 @@ export function countTokens(messages) {
     (total, message) => total + (Number.isFinite(message?.tokenCount) ? message.tokenCount : 0),
     0,
   );
-}
-
-export function countReasoningTokens(messages) {
-  return messages.reduce((total, message) => {
-    if (message?.role !== 'assistant' && message?.role !== 'ai') return total;
-    return total + (Number.isFinite(message.reasoningTokenCount) ? message.reasoningTokenCount : 0);
-  }, 0);
-}
-
-function estimateReasoningTokens(reasoningText) {
-  const length = typeof reasoningText === 'string' ? reasoningText.trim().length : 0;
-  return length > 0 ? Math.round(length / 4) : 0;
-}
-
-export function committedReasoningTokenDisplay(messages) {
-  let total = countReasoningTokens(messages);
-  let estimated = false;
-  for (const message of messages) {
-    if (message?.role !== 'assistant' && message?.role !== 'ai') continue;
-    if (Number.isFinite(message.reasoningTokenCount) && message.reasoningTokenCount > 0) continue;
-    const estimate = estimateReasoningTokens(message.reasoningText);
-    if (estimate > 0) {
-      total += estimate;
-      estimated = true;
-    }
-  }
-  return { total, estimated };
-}
-
-export function committedReasoningTokenCounts(messages) {
-  const counts = new Map();
-  for (const message of messages) {
-    if (!message?.id || (message.role !== 'assistant' && message.role !== 'ai')) continue;
-    if (Number.isFinite(message.reasoningTokenCount)) {
-      counts.set(message.id, message.reasoningTokenCount);
-    }
-  }
-  return counts;
-}
-
-export function liveReasoningTokenAdjustment(liveAssistantTurn, committedCounts) {
-  if (!liveAssistantTurn) {
-    return { total: 0, estimated: false };
-  }
-
-  const hasCommitted = Boolean(
-    liveAssistantTurn.assistantMessageId
-    && committedCounts.has(liveAssistantTurn.assistantMessageId),
-  );
-  const liveCount = Number.isFinite(liveAssistantTurn.reasoningTokenCount)
-    ? liveAssistantTurn.reasoningTokenCount
-    : 0;
-  const committedCount = hasCommitted
-    ? committedCounts.get(liveAssistantTurn.assistantMessageId)
-    : 0;
-
-  if (liveCount > committedCount) {
-    return { total: liveCount - committedCount, estimated: false };
-  }
-  if (!hasCommitted) {
-    const estimate = estimateReasoningTokens(liveAssistantTurn.reasoningText);
-    if (estimate > 0) {
-      return { total: estimate, estimated: true };
-    }
-  }
-  return { total: 0, estimated: false };
 }
 
 function getFirstMessageTimestamp(messages) {

@@ -26,7 +26,11 @@ function sameContextUsage(left, right) {
     && left?.totalTokens === right?.totalTokens
     && left?.profileName === right?.profileName
     && left?.deployment === right?.deployment
-    && left?.providerId === right?.providerId;
+    && left?.providerId === right?.providerId
+    // Savings may arrive after the same footprint; notify the tooltip too.
+    && left?.compaction?.beforeInputTokens === right?.compaction?.beforeInputTokens
+    && left?.compaction?.afterInputTokens === right?.compaction?.afterInputTokens
+    && left?.compaction?.freedInputTokens === right?.compaction?.freedInputTokens;
 }
 
 function sameHeaderSnapshot(left, right) {

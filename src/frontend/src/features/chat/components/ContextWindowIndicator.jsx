@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import styles from './ContextWindowIndicator.module.css';
 
-/** Provider-reported footprint of the latest model call, not cumulative usage. */
+/** Latest provider footprint; compaction savings compare observed input footprints. */
 export default function ContextWindowIndicator({ usage }) {
   const tooltipId = useId();
   const { usedTokens, maxTokens } = usage || {};
@@ -11,7 +11,11 @@ export default function ContextWindowIndicator({ usage }) {
   const fraction = Math.min(1, usedTokens / maxTokens);
   const percent = Math.round(fraction * 100);
   const format = new Intl.NumberFormat();
-  const description = `${percent}% context used · ${format.format(usedTokens)} / ${format.format(maxTokens)} tokens (latest model call)`;
+  const footprint = `${percent}% context used · ${format.format(usedTokens)} / ${format.format(maxTokens)} tokens (latest model call)`;
+  const freed = usage?.compaction?.freedInputTokens;
+  const description = Number.isSafeInteger(freed) && freed > 0
+    ? `${footprint}. Last compaction: input decreased by ${format.format(freed)} tokens (${format.format(usage.compaction.beforeInputTokens)} → ${format.format(usage.compaction.afterInputTokens)}). Observed before/after calls; not exact tokenizer savings. Lifetime usage is unchanged.`
+    : footprint;
 
   return (
     <span

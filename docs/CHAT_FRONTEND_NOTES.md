@@ -138,6 +138,27 @@ completed, failed, cancelled, interrupted, or neutral unknown. A failed tool is
 shown as a failure count, not automatically as a failed whole response. Elapsed
 work time remains the transcript span through answer start, not tool CPU time.
 
+The conversation header uses backend `session.usage_totals`, not sums over the
+currently loaded message page or streamed reasoning text. These are cumulative
+root output tokens and their reasoning subset; partial coverage is shown as a
+recorded lower bound, unknown as unavailable. Selection and accepted canonical
+completion reconciliation replace the totals within the same thread/ownership
+fences as the transcript. The live answer is not added twice.
+
+The composer circle remains the latest provider-reported context footprint,
+updated through existing context-only `usage_update` events during root tool
+loops. After automatic native compaction, its styled tooltip can show the
+observed input decrease from `context_usage.compaction`. The reduction is
+explicitly not exact tokenizer savings, is available only after comparable
+provider usage arrives, and never subtracts from lifetime header totals.
+The retained summary/recent messages still occupy context; do not reset to zero.
+New ChatGPT reasoning streams attach model attribution only once so chunk merging
+does not concatenate deployment names and hide the circle through a failed
+profile match. Existing malformed historical attribution is not guessed or
+rewritten. Old summaries without recorded comparable footprints do not acquire
+invented savings figures.
+
+
 
 ## Conversation summaries
 
@@ -151,7 +172,7 @@ preserve placement and deduplication during paging and canonical reconciliation.
 Original messages remain visible and searchable. Nested summaries stay inside
 their subagent activity. Completed markers must remain visible with debug events
 filtered out, and when a frozen live owner suppresses its historical answer twin.
-Do not introduce another EventSource, polling, exact duration or savings claims.
+Do not introduce another EventSource, polling, or exact duration/savings claims.
 Tool-output offload and prompt-argument trimming indicators are not implemented.
 
 

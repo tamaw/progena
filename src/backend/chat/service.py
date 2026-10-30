@@ -113,6 +113,18 @@ class ReasoningSegment(BaseModel):
     created_at: str | None = None
 
 
+UsageCoverage = Literal["complete", "partial", "unknown"]
+
+
+class ContextCompaction(BaseModel):
+    """One comparable provider-measured context contraction."""
+
+    before_input_tokens: int = Field(ge=0)
+    after_input_tokens: int = Field(ge=0)
+    freed_input_tokens: int = Field(ge=0)
+    measurement: Literal["comparable_provider_footprints"]
+
+
 class ContextUsage(BaseModel):
     """Latest main-agent model call token footprint and optional attribution."""
 
@@ -122,6 +134,20 @@ class ContextUsage(BaseModel):
     profile_name: str | None = None
     deployment: str | None = None
     provider_id: str | None = None
+    compaction: ContextCompaction | None = None
+
+
+class ConversationUsageTotals(BaseModel):
+    """Root assistant output accounting from the retained checkpoint transcript."""
+
+    output_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    output_coverage: UsageCoverage = "unknown"
+    reasoning_coverage: UsageCoverage = "unknown"
+    # Distinct durable root assistant message IDs represented in this projection.
+    assistant_message_count: int = 0
+    output_token_message_count: int = 0
+    reasoning_token_message_count: int = 0
 
 
 class ChatMessage(BaseModel):
@@ -176,6 +202,8 @@ class ChatSessionSummary(BaseModel):
     # The runtime could not be reached to read this chat's messages, so
     # message_count/preview are unknown (not zero) until it is back.
     history_unavailable: bool = False
+    # Full root transcript accounting; independent of the visible message page.
+    usage_totals: ConversationUsageTotals = Field(default_factory=ConversationUsageTotals)
 
 
 class ChatInterruption(BaseModel):
@@ -353,6 +381,76 @@ def _raw_message_role(raw: Any) -> str:
     if role in {"ai", "assistant"}:
         return "assistant"
     return role or "assistant"
+
+
+def _durable_raw_message_id(raw: Any) -> str | None:
+    """Return a persisted LangChain message ID without inventing a page-local one."""
+    raw_id = raw.get("id") if isinstance(raw, dict) else getattr(raw, "id", None)
+    return str(raw_id) if isinstance(raw_id, str) and raw_id else None
+
+
+def _usage_metric_total(
+    values: list[int | None], *, unidentifiable_assistant_count: int
+) -> tuple[int | None, UsageCoverage, int]:
+    known_values = [value for value in values if value is not None]
+    known_count = len(known_values)
+    if not values and not unidentifiable_assistant_count:
+        return 0, "complete", 0
+    if known_count == len(values) and not unidentifiable_assistant_count:
+        return sum(known_values), "complete", known_count
+    if known_count:
+        return sum(known_values), "partial", known_count
+    return None, "unknown", 0
+
+
+def _usage_totals_from_checkpoint(
+    snapshot: CheckpointThreadSnapshot | None,
+) -> ConversationUsageTotals:
+    """Account for the full retained root transcript before any page is sliced.
+
+    Native conversation summaries retain the root LangChain messages.  The
+    checkpoint projection is therefore the canonical full-session source; it
+    intentionally excludes subagent namespaces and does not walk historical
+    checkpoint revisions.  A durable ID is required so repeated persisted
+    emissions cannot inflate the totals.
+    """
+    if snapshot is None or not snapshot.messages_available:
+        return ConversationUsageTotals()
+
+    usage_by_message_id: dict[str, tuple[int | None, int | None]] = {}
+    unidentifiable_assistant_count = 0
+    for raw in snapshot.messages:
+        if _raw_message_role(raw) != "assistant":
+            continue
+        message_id = _durable_raw_message_id(raw)
+        if message_id is None:
+            unidentifiable_assistant_count += 1
+            continue
+        previous_output, previous_reasoning = usage_by_message_id.get(message_id, (None, None))
+        output_tokens = extract_output_token_count(raw)
+        reasoning_tokens = extract_reasoning_token_count(raw)
+        usage_by_message_id[message_id] = (
+            output_tokens if output_tokens is not None else previous_output,
+            reasoning_tokens if reasoning_tokens is not None else previous_reasoning,
+        )
+
+    output_tokens, output_coverage, output_count = _usage_metric_total(
+        [usage[0] for usage in usage_by_message_id.values()],
+        unidentifiable_assistant_count=unidentifiable_assistant_count,
+    )
+    reasoning_tokens, reasoning_coverage, reasoning_count = _usage_metric_total(
+        [usage[1] for usage in usage_by_message_id.values()],
+        unidentifiable_assistant_count=unidentifiable_assistant_count,
+    )
+    return ConversationUsageTotals(
+        output_tokens=output_tokens,
+        reasoning_tokens=reasoning_tokens,
+        output_coverage=output_coverage,
+        reasoning_coverage=reasoning_coverage,
+        assistant_message_count=len(usage_by_message_id),
+        output_token_message_count=output_count,
+        reasoning_token_message_count=reasoning_count,
+    )
 
 
 def _raw_message_created_at(raw: Any) -> str | None:
@@ -850,6 +948,7 @@ def _summary_from_session(
     payload: dict[str, Any],
     *,
     messages: list[ChatMessage],
+    usage_totals: ConversationUsageTotals,
     history_unavailable: bool = False,
 ) -> ChatSessionSummary:
     preview = next((message.content for message in reversed(messages) if message.content), "")
@@ -864,6 +963,7 @@ def _summary_from_session(
         message_count=len(messages),
         preview=preview,
         history_unavailable=history_unavailable,
+        usage_totals=usage_totals,
     )
 
 
@@ -899,6 +999,7 @@ def list_chat_sessions(
             _summary_from_session(
                 payload,
                 messages=messages,
+                usage_totals=_usage_totals_from_checkpoint(snapshot),
                 history_unavailable=history_unavailable,
             )
         )
@@ -917,7 +1018,11 @@ def get_chat_detail(
     snapshot = store.get_checkpoint_thread_snapshot(thread_id, include_summary_occurrences=True)
     messages = _messages_from_checkpoint(snapshot)
     summary_markers = _summary_markers_from_checkpoint(snapshot, messages)
-    summary = _summary_from_session(payload, messages=messages)
+    summary = _summary_from_session(
+        payload,
+        messages=messages,
+        usage_totals=_usage_totals_from_checkpoint(snapshot),
+    )
     return ChatSessionDetail(
         **summary.model_dump(), messages=messages, summary_markers=summary_markers
     )
@@ -940,7 +1045,10 @@ def get_chat_summary(store: BackendDocumentStore, thread_id: str) -> ChatSession
         history_unavailable = True
     messages = _messages_from_checkpoint(snapshot)
     return _summary_from_session(
-        payload, messages=messages, history_unavailable=history_unavailable
+        payload,
+        messages=messages,
+        usage_totals=_usage_totals_from_checkpoint(snapshot),
+        history_unavailable=history_unavailable,
     )
 
 

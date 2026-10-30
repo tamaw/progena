@@ -110,6 +110,7 @@ function ConversationPage() {
   const [summaryMarkers, setSummaryMarkers] = useState(() => (
     normalizeConversationSummaryMarkers(initialQuickChatHandoff?.summaryMarkers)
   ));
+  const [conversationUsage, setConversationUsage] = useState(null);
   const [isClearingSession, setIsClearingSession] = useState(false);
   const [threadId, setThreadId] = useState(() => (
     typeof initialQuickChatHandoff?.threadId === 'string' ? initialQuickChatHandoff.threadId : null
@@ -644,6 +645,10 @@ function ConversationPage() {
     ) {
       return;
     }
+    setConversationUsage({
+      threadId: intent.threadId,
+      totals: chatReconciliationState.detail.usage_totals,
+    });
     const canonicalMessages = Array.isArray(chatReconciliationState.detail.messages)
       ? chatReconciliationState.detail.messages
         .map((message, index) => normalizeBackendChatMessage(message, index))
@@ -717,6 +722,10 @@ function ConversationPage() {
     pinTranscriptToTail(messagesContainerRef.current, isPinnedToBottomRef);
     setMessages(backendMessages);
     setSummaryMarkers(normalizeConversationSummaryMarkers(activeBackendChat.summary_markers));
+    setConversationUsage({
+      threadId: activeBackendChat.thread_id,
+      totals: activeBackendChat.usage_totals,
+    });
     setOldestMessageCursor(backendMessages.length ? backendMessages[0].id : null);
     appliedOlderPageRequestIdRef.current = null;
     setIsGenerating(false);
@@ -1574,7 +1583,7 @@ function ConversationPage() {
         <LiveConversationHeader
           liveTurnStore={liveTurnStore}
           messages={messages}
-          totalTokenCount={totalTokenCount}
+          cumulativeUsage={conversationUsage?.threadId === threadId ? conversationUsage.totals : null}
           firstMessageTime={firstMessageTime}
           isContentLoading={isContentLoading}
           isEmptyConversationPane={isEmptyConversationPane}

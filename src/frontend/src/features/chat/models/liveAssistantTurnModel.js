@@ -564,9 +564,9 @@ function applyStreamEventToTimeline(turn, streamEvent) {
     return turn;
   }
 
-  // usage_update is terminal, non-visual provider metadata. Its explicit
-  // counts and response status are authoritative; missing values remain
-  // unknown rather than being inferred from transport chunks.
+  // Context-only updates arrive during root tool loops; terminal updates add
+  // authoritative response totals/status. Omitted fields leave existing values
+  // untouched; never infer usage from transport chunks.
   if (nextEvent.eventType === 'usage_update') {
     const metadata = nextEvent.metadata || {};
     const cacheReadTokens = extractCacheReadTokenCount(nextEvent);

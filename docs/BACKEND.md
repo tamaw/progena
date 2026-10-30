@@ -154,12 +154,24 @@ Representative payloads:
 ```
 
 Structured `chat.response.event` frames preserve the runtime's `metadata` and,
-when present, the runtime `images` list. A terminal `usage_update` event keeps
-aggregate billing usage in `metadata.usage`; when the latest main-agent model
-call reported complete input/output usage, `metadata.context_usage` is its
-non-aggregate `{input_tokens, output_tokens, total_tokens, profile_name?,
-deployment?, provider_id?}` footprint. Persisted chat messages expose the same
-optional `context_usage`; missing provider usage is omitted rather than inferred.
+when present, the runtime `images` list. Terminal `usage_update` events keep
+aggregate billing usage in `metadata.usage`. During root tool loops, the same
+event also carries context-only updates when a complete provider footprint
+changes: `metadata.context_usage` is non-aggregate
+`{input_tokens, output_tokens, total_tokens, profile_name?, deployment?,
+provider_id?, compaction?}`. Persisted chat messages expose the same optional
+`context_usage`; missing provider usage is omitted rather than inferred.
+
+`compaction` is an optional `{before_input_tokens, after_input_tokens,
+freed_input_tokens, measurement: "comparable_provider_footprints"}` descriptor.
+It compares the immediately preceding root provider input footprint with the
+first call following a newly committed automatic native summary, only for the
+same identified provider/deployment and a positive reduction. This is not exact
+tokenizer savings: intervening user/tool/system content may differ. The native
+summary itself remains unchanged; a normal after-model state update persists the
+descriptor on the AI message and carries it to later root footprints. A newer
+summary without a comparable reduction clears the old descriptor. The circle
+updates after provider usage arrives, never optimistically resets to zero.
 
 ### Native conversation-summary visibility
 
@@ -228,6 +240,20 @@ existing response-content stream; the backend does not create a second ledger
 or a notification path. Historical transient provider states remain unknown
 without current running evidence. Browser completion callbacks must not turn a
 provider-incomplete result into completed work.
+
+Session detail `usage_totals` reports cumulative root assistant output and its
+reasoning subset from the full retained checkpoint transcript, before message
+paging or display grouping. It contains nullable `output_tokens`,
+`reasoning_tokens`, per-metric `output_coverage`/`reasoning_coverage`
+(`complete`, `partial`, `unknown`), and `assistant_message_count`,
+`output_token_message_count`, `reasoning_token_message_count`. Partial counts
+are recorded lower bounds; unknown is not zero. Durable assistant IDs are
+counted once. Native compaction preserves the raw transcript, so neither it nor
+loading older pages reduces these totals. Explicit history deletion is not a
+billing ledger: removed checkpoints/messages cannot be recovered by this view.
+The existing snapshot supplies totals without another database/history scan.
+Existing session selection/completion reconciliation events update the header;
+the browser does not add the live response again on top.
 
 
 

@@ -28,4 +28,15 @@ describe('ContextWindowIndicator', () => {
     expect(meter.getAttribute('aria-valuetext')).toContain('1,200 / 1,000');
     expect(meter.firstElementChild.style.getPropertyValue('--context-fill')).toBe('100%');
   });
+
+  it('reports the observed input reduction without erasing retained context', () => {
+    const meter = render({
+      usedTokens: 12500, maxTokens: 100000,
+      compaction: { beforeInputTokens: 80000, afterInputTokens: 12000, freedInputTokens: 68000 },
+    }).querySelector('[role="meter"]');
+    expect(meter.getAttribute('aria-valuenow')).toBe('12500');
+    expect(meter.getAttribute('aria-valuetext')).toContain('input decreased by 68,000 tokens');
+    expect(meter.getAttribute('aria-valuetext')).toContain('not exact tokenizer savings');
+    expect(meter.getAttribute('aria-valuetext')).toContain('Lifetime usage is unchanged');
+  });
 });
