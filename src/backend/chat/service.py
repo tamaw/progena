@@ -592,14 +592,20 @@ def _chat_message_from_raw(
     content = _raw_message_content(raw)
     if role == "assistant" and _is_cancelled_reply(raw):
         content = f"{content}{CANCELLED_SUFFIX}" if content else CANCELLED_SUFFIX.strip()
-    if not content and role == "assistant":
-        return None
-    reasoning_text = extract_reasoning_trace(raw) or ""
-    created_at = _raw_message_created_at(raw)
-    display_metadata = _display_metadata_from_raw(raw)
     response_status: ResponseStatus = (
         _answer_response_status(raw) if role == "assistant" else "unknown"
     )
+    reasoning_text = extract_reasoning_trace(raw) or ""
+    if not content and role == "assistant":
+        if response_status != "failed":
+            return None
+        # Retain an otherwise empty provider failure so a reload can expose
+        # its terminal status and authoritative usage. Work/reasoning already
+        # renders its own failed status, so only a truly empty turn needs text.
+        if not tool_calls and not reasoning_text:
+            content = "Error: Response failed."
+    created_at = _raw_message_created_at(raw)
+    display_metadata = _display_metadata_from_raw(raw)
     final_call_token_count = extract_output_token_count(raw) if role == "assistant" else None
     return ChatMessage(
         id=_raw_message_id(raw, index),

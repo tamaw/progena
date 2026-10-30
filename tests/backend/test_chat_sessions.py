@@ -402,6 +402,57 @@ class TestGetChatDetail:
         assert (missing.token_count, missing.final_call_token_count) == (None, None)
         assert missing.response_status == "unknown"
 
+    def test_retains_empty_provider_failure_with_a_canonical_terminal_row(self):
+        [user, failure] = _messages_from_checkpoint(
+            CheckpointThreadSnapshot(
+                thread_id="thread_content_filter",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "usage_metadata": {"output_tokens": 0},
+                        "response_metadata": {"finish_reason": "content_filter"},
+                    },
+                ],
+            )
+        )
+
+        assert user.content == "answer"
+        assert failure.id == "a1"
+        assert failure.content == "Error: Response failed."
+        assert failure.raw["content"] == ""
+        assert (failure.token_count, failure.final_call_token_count) == (0, 0)
+        assert failure.response_status == "failed"
+
+    def test_uses_existing_work_as_the_terminal_failure_indicator(self):
+        [user, failure] = _messages_from_checkpoint(
+            CheckpointThreadSnapshot(
+                thread_id="thread_failed_tool_work",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [{"id": "c1", "name": "lookup", "args": {}}],
+                        "response_metadata": {"status": "failed"},
+                    },
+                    {"id": "t1", "type": "tool", "tool_call_id": "c1", "content": "result"},
+                ],
+            )
+        )
+
+        assert user.content == "answer"
+        assert failure.content == ""
+        assert failure.response_status == "failed"
+        assert [call["id"] for call in failure.tool_calls] == ["c1"]
+
     def test_retains_trailing_reasoning_only_usage_without_an_answer_boundary(self):
         messages = _messages_from_checkpoint(
             CheckpointThreadSnapshot(

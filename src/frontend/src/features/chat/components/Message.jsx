@@ -173,6 +173,25 @@ function MessageView({
     // claimToolCommentary in liveAssistantTurnModel.js) has nothing to show.
     const answerItems = allAnswerItems.filter((item) => item.error || (item.content || '').trim());
     const workGroups = buildWorkGroups(workItems);
+    // Work filters can hide every tool/reasoning row. Keep the turn's explicit
+    // terminal failure visible without reintroducing any filtered diagnostics.
+    const terminalStatusItems = responseStatus === 'failed' && workGroups.length === 0 && answerItems.length === 0
+      ? [{
+        kind: 'assistant_message',
+        id: `${messageId}-failed-status`,
+        content: '',
+        timestamp,
+        isStreaming: false,
+        error: false,
+        responseStatus: 'failed',
+        tokenCount: message.tokenCount,
+        finalCallTokenCount: message.finalCallTokenCount,
+        usageProvenance: message.usageProvenance,
+        displayAgentName: message.displayAgentName || '',
+        displayModelName: message.displayModelName,
+        displayToolCalls: message.displayToolCalls,
+      }]
+      : [];
     return (
       <div className="chat-entry-chain chat-entry-chain--connected">
         {workGroups.length > 0 && (
@@ -187,7 +206,7 @@ function MessageView({
           summaryActivities={summaryActivities}
         />
         )}
-        {[...cardItems, ...answerItems].map((item, idx) => (
+        {[...cardItems, ...answerItems, ...terminalStatusItems].map((item, idx) => (
           <TimelineItem
             key={timelineItemKey(item, idx)}
             item={item}

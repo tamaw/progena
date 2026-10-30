@@ -350,6 +350,7 @@ async def create_progena_agent(
         SecretRedactionMiddleware(),
         ProgenaSummarizationMiddleware(model=model, backend=backend),
         ToolTimingMiddleware(),
+        _create_javascript_middleware(),
         ContextCompactionMiddleware(),
     ]
 

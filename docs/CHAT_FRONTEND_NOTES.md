@@ -137,6 +137,11 @@ Work state comes from actual response/provider/native interrupt evidence:
 completed, failed, cancelled, interrupted, or neutral unknown. A failed tool is
 shown as a failure count, not automatically as a failed whole response. Elapsed
 work time remains the transcript span through answer start, not tool CPU time.
+Provider-only failure with no visible answer/work produces a terminal failure
+row even when transport completes normally; canonical reload preserves it.
+Partial answers and visible work keep their failure status without a duplicate
+synthetic row. Background completion may use provider status only from its own
+stream ID, never from the currently selected conversation's live turn.
 
 The conversation header uses backend `session.usage_totals`, not sums over the
 currently loaded message page or streamed reasoning text. These are cumulative
@@ -145,6 +150,9 @@ recorded lower bound. Unknown output stays unavailable; unreported reasoning
 displays `0` in the header without changing backend coverage. Selection and accepted canonical
 completion reconciliation replace the totals within the same thread/ownership
 fences as the transcript. The live answer is not added twice.
+Absent reasoning/cache counters normalize to the canonical zero for equivalence,
+so materializing user-message defaults does not retire/remount a frozen answer.
+Unknown output usage remains distinct from reported zero.
 
 The composer circle remains the latest provider-reported context footprint,
 updated through existing context-only `usage_update` events during root tool

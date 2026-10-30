@@ -22,6 +22,7 @@ import {
   isReopeningCurrentLocalDraft,
   shouldAdoptMaterializedDraft,
 } from '@frontend/features/chat/models/conversationModel';
+import { normalizeBackendChatMessage } from '@frontend/features/chat/models/chatSessionsModel';
 
 describe('chat selection race guards', () => {
   it('defers roster selection until draft bootstrap settles or an existing selection exists', () => {
@@ -212,6 +213,17 @@ describe('areChatTranscriptsEquivalent', () => {
     ];
 
     expect(areChatTranscriptsEquivalent(localTranscript, persistedTranscript)).toBe(true);
+  });
+
+  it('keeps local row ownership when canonical user accounting only materializes absent zeros', () => {
+    const canonical = localTranscript.map((message, index) => normalizeBackendChatMessage({
+      id: `server-${index}`, role: message.role, content: message.content,
+    }, index));
+    expect(areChatTranscriptsEquivalent(localTranscript, canonical)).toBe(true);
+    expect(mergeCanonicalMessages(localTranscript, canonical)).toBe(localTranscript);
+    const reportedZeroOutput = canonical.map((message) => message.role === 'assistant'
+      ? { ...message, tokenCount: 0 } : message);
+    expect(areChatTranscriptsEquivalent(localTranscript, reportedZeroOutput)).toBe(false);
   });
 
   it('detects a persisted final assistant-content difference', () => {

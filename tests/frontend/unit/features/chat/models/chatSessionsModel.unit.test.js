@@ -117,6 +117,36 @@ describe('normalizeBackendChatMessage', () => {
     });
   });
 
+  it('keeps the canonical empty provider failure visible after reload', () => {
+    const message = normalizeBackendChatMessage({
+      id: 'm-content-filter',
+      role: 'assistant',
+      content: 'Error: Response failed.',
+      token_count: 0,
+      final_call_token_count: 0,
+      response_status: 'failed',
+    }, 0);
+
+    expect(message).toMatchObject({
+      content: 'Error: Response failed.',
+      tokenCount: 0,
+      finalCallTokenCount: 0,
+      usageProvenance: 'provider',
+      responseStatus: 'failed',
+      responseTimestamp: null,
+    });
+    expect(message.timelineItems).toEqual([
+      expect.objectContaining({
+        kind: 'assistant_message',
+        content: 'Error: Response failed.',
+        responseStatus: 'failed',
+        tokenCount: 0,
+        finalCallTokenCount: 0,
+        usageProvenance: 'provider',
+      }),
+    ]);
+  });
+
   it('keeps an incomplete provider response interrupted after reload even with body text', () => {
     const message = normalizeBackendChatMessage({
       id: 'm-incomplete',

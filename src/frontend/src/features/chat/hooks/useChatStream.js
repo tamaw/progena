@@ -403,7 +403,12 @@ export function useChatStream({
           if (!stale) {
             flushPendingText(streamId);
           }
-          const responseStatus = resolveLiveTurnResponseStatus(liveTurnRef.current, status);
+          // A stale stream must not resolve its outcome from the replacement
+          // turn: provider terminal metadata belongs to the turn's stream.
+          const completedTurn = liveTurnRef.current?.streamId === streamId
+            ? liveTurnRef.current
+            : null;
+          const responseStatus = resolveLiveTurnResponseStatus(completedTurn, status);
           const outcome = resolveBackgroundStreamOutcome({
             isStale: stale,
             originChatId,

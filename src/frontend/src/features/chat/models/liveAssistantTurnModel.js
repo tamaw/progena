@@ -1078,9 +1078,10 @@ export function resolveLiveTurnResponseStatus(turn, status) {
  * Rules:
  * - `completed` with visible output → normal message.
  * - `completed` with **no** visible output → "(No response text)" placeholder.
+ * - a provider-reported failure without visible output → a concise failed row.
  * - `cancelled` with no visible output → drop (return null).
  * - `cancelled` with partial visible output → keep, append cancelled suffix once.
- * - `error` → message with `Error: ...` content and `error: true`.
+ * - transport `error` → message with `Error: ...` content and `error: true`.
  */
 export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
   if (!turn) return null;
@@ -1172,6 +1173,38 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
       reasoningText: finalTurn.reasoningText,
     });
     finalTurn.timelineItems = timelineItems;
+    return toCommittedAssistantMessage(finalTurn);
+  }
+
+  if (responseStatus === 'failed' && !hasVisibleOutput) {
+    // The transport can complete after a provider content filter or similar
+    // terminal rejection. There is no provider text to preserve, but the
+    // failed terminal state still needs a visible, durable row.
+    finalTurn.content = `Error: ${typeof errorMessage === 'string' && errorMessage.trim() ? errorMessage.trim() : 'Response failed.'}`;
+    finalTurn.error = true;
+    if (!finalTurn.assistantMessageId) {
+      finalTurn.assistantMessageId = `${finalTurn.streamId}-assistant`;
+    }
+    finalTurn.timelineItems = [
+      ...(Array.isArray(finalTurn.timelineItems) ? finalTurn.timelineItems : []),
+      {
+        kind: 'assistant_message',
+        id: `${finalTurn.assistantMessageId}-error`,
+        content: finalTurn.content,
+        timestamp: finalTurn.assistantTimestamp,
+        isStreaming: false,
+        error: true,
+        displayAgentName: finalTurn.displayAgentName || '',
+        displayModelName: finalTurn.displayModelName,
+        displayToolCalls: finalTurn.displayToolCalls,
+        tokenCount: finalTurn.tokenCount,
+        finalCallTokenCount: finalTurn.finalCallTokenCount,
+        usageProvenance: finalTurn.usageProvenance,
+        responseStatus: finalTurn.responseStatus,
+        reasoningTokenCount: finalTurn.reasoningTokenCount,
+        reasoningText: finalTurn.reasoningText,
+      },
+    ];
     return toCommittedAssistantMessage(finalTurn);
   }
 

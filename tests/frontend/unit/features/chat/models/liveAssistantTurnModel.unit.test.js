@@ -2000,6 +2000,104 @@ describe('finalizeLiveAssistantTurn', () => {
     expect(result.responseStatus).toBe(responseStatus);
   });
 
+  it('materializes a failed provider usage update after normal transport completion', () => {
+    const turn = applyAssistantStreamEvent(baseTurn(), rawStreamEvent('usage_update', {
+      metadata: {
+        output_tokens: 0,
+        final_call_output_tokens: 0,
+        response_status: 'failed',
+        context_usage: {
+          input_tokens: 120,
+          output_tokens: 0,
+          total_tokens: 120,
+          profile_name: 'general',
+          provider_id: 'provider-a',
+        },
+      },
+    }), NOW);
+
+    const result = finalizeLiveAssistantTurn(turn, { status: 'completed', now: NOW + 1 });
+
+    expect(result).toMatchObject({
+      content: 'Error: Response failed.',
+      error: true,
+      responseStatus: 'failed',
+      tokenCount: 0,
+      finalCallTokenCount: 0,
+      usageProvenance: 'provider',
+      responseTimestamp: null,
+      contextUsage: { totalTokens: 120, providerId: 'provider-a' },
+    });
+    expect(result.timelineItems).toHaveLength(1);
+    expect(result.timelineItems[0]).toMatchObject({
+      kind: 'assistant_message',
+      content: 'Error: Response failed.',
+      error: true,
+      responseStatus: 'failed',
+      tokenCount: 0,
+      finalCallTokenCount: 0,
+      usageProvenance: 'provider',
+    });
+  });
+
+  it('surfaces a provider failure after hidden debug activity without dropping the event', () => {
+    let turn = applyAssistantStreamEvent(
+      baseTurn(),
+      rawStreamEvent('node_update', { metadata: { node_name: 'pending_response' } }),
+      NOW,
+    );
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('usage_update', {
+      metadata: { response_status: 'failed' },
+    }), NOW + 1);
+
+    const result = finalizeLiveAssistantTurn(turn, { status: 'completed', now: NOW + 2 });
+
+    expect(result.content).toBe('Error: Response failed.');
+    expect(result.streamEvents).toHaveLength(1);
+    expect(result.streamEvents[0].eventType).toBe('node_update');
+    expect(result.timelineItems).toHaveLength(1);
+    expect(result.timelineItems[0]).toMatchObject({ error: true, responseStatus: 'failed' });
+  });
+
+  it('keeps partial provider output as the only answer row when its terminal usage fails', () => {
+    let turn = applyAssistantChunk(baseTurn(), 'Partial provider answer', NOW);
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('usage_update', {
+      metadata: { response_status: 'failed' },
+    }), NOW + 1);
+
+    const result = finalizeLiveAssistantTurn(turn, { status: 'completed', now: NOW + 2 });
+
+    expect(result).toMatchObject({
+      content: 'Partial provider answer',
+      error: false,
+      responseStatus: 'failed',
+    });
+    expect(result.timelineItems).toHaveLength(1);
+    expect(result.timelineItems[0]).toMatchObject({
+      kind: 'assistant_message',
+      content: 'Partial provider answer',
+      error: false,
+      responseStatus: 'failed',
+    });
+  });
+
+  it('does not append a duplicate failure row when visible work already reports the provider failure', () => {
+    let turn = applyAssistantStreamEvent(
+      baseTurn(),
+      rawStreamEvent('tool_start', { content: 'searching' }),
+      NOW,
+    );
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('usage_update', {
+      metadata: { response_status: 'failed' },
+    }), NOW + 1);
+
+    const result = finalizeLiveAssistantTurn(turn, { status: 'completed', now: NOW + 2 });
+
+    expect(result).toMatchObject({ content: '', error: false, responseStatus: 'failed' });
+    expect(result.timelineItems).toHaveLength(1);
+    expect(result.timelineItems[0].kind).toBe('stream_event');
+  });
+
 
   // Acceptance: completion with output returns a normal committed message.
   describe('status = completed', () => {

@@ -70,8 +70,8 @@ function message(timelineItems, overrides = {}) {
   };
 }
 
-async function renderMessage(value) {
-  await act(async () => root.render(<Message message={value} />));
+async function renderMessage(value, props = {}) {
+  await act(async () => root.render(<Message message={value} {...props} />));
 }
 
 function assistantWork() {
@@ -275,4 +275,33 @@ describe('terminal replies without tool work', () => {
       expect(host.textContent).toContain('Partial answer');
     },
   );
+
+  it('keeps a provider failure status visible when filters hide all tool work', async () => {
+    await renderMessage(message([
+      tool('filtered-tool', 'tool_start', 1_000),
+    ], {
+      responseStatus: 'failed',
+      tokenCount: 0,
+      finalCallTokenCount: null,
+      usageProvenance: 'provider',
+    }), {
+      streamEventFilter: () => false,
+    });
+
+    expect(host.querySelector('section[aria-label="Assistant work"]')).toBeNull();
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('Failed');
+    expect(host.querySelectorAll('.entry--assistant')).toHaveLength(1);
+    expect(host.textContent).toContain('0 output tokens');
+  });
+
+  it('uses the visible work group as the only failure indicator when work is unfiltered', async () => {
+    await renderMessage(message([
+      tool('visible-tool', 'tool_start', 1_000),
+    ], {
+      responseStatus: 'failed',
+    }));
+
+    expect(assistantWork().textContent).toContain('Work failed');
+    expect(host.querySelector('[role="status"]')).toBeNull();
+  });
 });
