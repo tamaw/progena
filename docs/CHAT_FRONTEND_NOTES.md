@@ -126,13 +126,18 @@ from both the message and any denormalized assistant timeline rows; text and
 other transcript data remain available. A canonical history read supplies fresh
 provider counts. This does not authorize storing backend transcripts locally.
 
-All assistant rendering uses the same timeline path. Root work is one outer
-keyboard-operable disclosure using the existing work-summary row styling.
-Completed work starts collapsed; expanding it reveals tool rows directly rather
-than repeating a generic work-summary disclosure. Distinct reasoning sections
-retain their own headings and details. Delegated-agent cards, the answer and
-conversation-summary markers remain outside this disclosure. Native reasoning
-headings remain verbatim; they are not rewritten as evidence that an action succeeded.
+All assistant rendering uses the same timeline path. Root work phases are
+sibling keyboard-operable disclosures, not children of a whole-turn summary.
+The initial generic `Working` phase ends when reasoning arrives; each reasoning
+section's title becomes the next top-level header and owns the tools that follow.
+Unheaded reasoning uses the neutral title `Reasoning`. Completed phases start
+collapsed. One expansion reveals the full available reasoning and named tool
+rows; each tool keeps its own input/output disclosure. A title-only provider
+summary has no additional body to invent. Tool results arriving across a reasoning
+boundary remain with their initiating call, and do not extend the prior phase's
+elapsed time past that boundary. Delegated-agent cards, the answer and conversation
+summary markers retain their existing placement. Native reasoning headings remain
+verbatim; they are not rewritten as evidence that an action succeeded.
 
 Work state comes from actual response/provider/native interrupt evidence:
 completed, failed, cancelled, interrupted, or neutral unknown. A failed tool is

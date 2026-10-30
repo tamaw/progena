@@ -3,7 +3,7 @@ import { useMermaidRender } from '../../../hooks/useMermaidRender';
 import { collectMessageImages } from '../models/conversationModel';
 import { hasReasoningContent, isReasoningEvent } from '../models/streamEventsModel';
 import TimelineItem from './TimelineItem';
-import TurnWorkGroup from './TurnWorkGroup';
+import WorkGroup from './WorkGroup';
 import { buildWorkGroups, partitionTurnTimeline, timelineItemKey } from '../models/workGroupModel';
 import { buildDefaultAssistantTimeline } from '../models/liveAssistantTurnModel';
 import MessageImageStrip from './MessageImageStrip';
@@ -117,6 +117,9 @@ function MessageView({
     responseStatus = 'unknown',
     attachments = [],
   } = message;
+  const workResponseStatus = ['running', 'completed', 'failed', 'cancelled', 'interrupted', 'unknown'].includes(responseStatus)
+    ? responseStatus
+    : 'unknown';
   const regenerateMessage = useMemo(
     () => onRegenerate ? () => onRegenerate(messageId) : undefined,
     [messageId, onRegenerate],
@@ -151,8 +154,8 @@ function MessageView({
   );
 
 
-  // Timeline turns render as: one collapsible work group (tools, reasoning,
-  // plan, steps), then delegated-agent cards, then the answer.
+  // Root-agent work phases, delegated-agent cards and answer rows are siblings
+  // in one chain. Each WorkGroup owns only the tools following its reasoning.
   if (isAssistant) {
     const fullTimelineItems = withReasoningFallback(assistantTimeline, {
       reasoningText,
@@ -164,9 +167,13 @@ function MessageView({
     });
     // Visibility is a presentation choice, not a different end to the work.
     // Skip rows emptied by tool commentary, as the visible answer path does.
+    const answerStarted = fullTimelineItems.some((item) =>
+      item.kind === 'assistant_message' && (item.error || (item.content || '').trim())
+    );
     const answerStartedAt = fullTimelineItems.find((item) =>
       item.kind === 'assistant_message' && (item.error || (item.content || '').trim())
     )?.timestamp ?? null;
+    const turnStillRunning = workResponseStatus === 'running' || workResponseStatus === 'unknown';
     const visibleTimelineItems = filterTimelineItems(fullTimelineItems, streamEventFilter);
     const { workItems, cardItems, answerItems: allAnswerItems } = partitionTurnTimeline(visibleTimelineItems);
     // An answer row whose text all turned out to be tool commentary (see
@@ -175,7 +182,7 @@ function MessageView({
     const workGroups = buildWorkGroups(workItems);
     // Work filters can hide every tool/reasoning row. Keep the turn's explicit
     // terminal failure visible without reintroducing any filtered diagnostics.
-    const terminalStatusItems = responseStatus === 'failed' && workGroups.length === 0 && answerItems.length === 0
+    const terminalStatusItems = workResponseStatus === 'failed' && workGroups.length === 0 && answerItems.length === 0
       ? [{
         kind: 'assistant_message',
         id: `${messageId}-failed-status`,
@@ -194,18 +201,23 @@ function MessageView({
       : [];
     return (
       <div className="chat-entry-chain chat-entry-chain--connected">
-        {workGroups.length > 0 && (
-        <TurnWorkGroup
-          groups={workGroups}
-          workItems={workItems}
-          active={workActive}
-          endedAt={answerStartedAt}
-          responseStatus={responseStatus}
-          onRegenerate={regenerateMessage}
-          summaryMarkers={summaryMarkers}
-          summaryActivities={summaryActivities}
-        />
-        )}
+        {workGroups.map((group, index) => {
+          const isLast = index === workGroups.length - 1;
+          return (
+            <WorkGroup
+              key={group.id}
+              heading={group.heading}
+              items={group.items}
+              active={workActive && turnStillRunning && !answerStarted && isLast}
+              endedAt={isLast ? answerStartedAt : workGroups[index + 1].startedAt}
+              terminal={isLast}
+              responseStatus={isLast ? workResponseStatus : undefined}
+              onRegenerate={regenerateMessage}
+              summaryMarkers={summaryMarkers}
+              summaryActivities={summaryActivities}
+            />
+          );
+        })}
         {[...cardItems, ...answerItems, ...terminalStatusItems].map((item, idx) => (
           <TimelineItem
             key={timelineItemKey(item, idx)}

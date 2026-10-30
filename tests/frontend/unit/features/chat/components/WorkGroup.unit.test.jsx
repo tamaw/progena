@@ -15,10 +15,6 @@ let root;
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.stubGlobal('React', React);
-  vi.stubGlobal('ResizeObserver', class {
-    observe() {}
-    disconnect() {}
-  });
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -58,22 +54,31 @@ const items = [
 ];
 
 describe('WorkGroup', () => {
-  it('renders headless work as actual timeline rows without a second work disclosure', () => {
+  it('collapses completed generic work behind its own summary toggle', () => {
     const html = renderToStaticMarkup(React.createElement(WorkGroup, { items, active: false, endedAt: 9_000 }));
-    expect(html).not.toContain('Worked for 8s');
-    expect(html).not.toContain('work-group__toggle');
-    expect(html).toContain('/a');
-    expect(html).toContain('/e');
+    expect(html).toContain('Worked for 8s');
+    expect(html).toContain('work-group__toggle');
+    expect(html).not.toContain('/a');
+    expect(html).not.toContain('/e');
   });
 
-  it('keeps headless tool rows visible when the turn changes from active to complete', async () => {
+  it('opens the group header with the keyboard', async () => {
+    await act(async () => root.render(<WorkGroup items={items} active={false} endedAt={9_000} />));
+    const toggle = host.querySelector('.work-group__toggle');
+
+    await act(async () => toggle.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('expands generic work while live, then collapses it when the answer phase begins', async () => {
     await act(async () => root.render(<WorkGroup items={items} active />));
-    expect(host.querySelector('.work-group__toggle')).toBeNull();
+    expect(host.querySelector('.work-group__toggle')).not.toBeNull();
     expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(5);
 
     await act(async () => root.render(<WorkGroup items={items} active={false} endedAt={9_000} />));
-    expect(host.querySelector('.work-group__toggle')).toBeNull();
-    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(5);
+    expect(host.querySelector('.work-group__toggle')).not.toBeNull();
+    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(0);
   });
 
   it("does not repeat a headed group's reasoning as a preview step, since the header already shows it", () => {
@@ -117,6 +122,7 @@ describe('WorkGroup', () => {
     expect(host.textContent).toContain('Provider summary');
     expect(host.textContent).toContain('Provider reasoning detail');
     expect(host.textContent).not.toContain('This generated text must not replace provider metadata.');
+    expect(host.querySelector('.work-group__reasoning-toggle')).toBeNull();
   });
 
   it('keeps generated reasoning body without repeating its heading', async () => {
@@ -190,6 +196,7 @@ describe('WorkGroup', () => {
     await act(async () => root.render(
       <WorkGroup items={writeTodosItems} active={false} endedAt={1_000} />,
     ));
+    await act(async () => host.querySelector('.work-group__toggle').click());
 
     expect(host.querySelector('.tool-call-entry--error')).not.toBeNull();
     expect(host.querySelector('.entry__badge--err')).not.toBeNull();
@@ -198,5 +205,72 @@ describe('WorkGroup', () => {
     expect(host.textContent).toContain('Input');
     expect(host.textContent).toContain('Error');
     expect(host.textContent).toContain('Todo service rejected the update.');
+  });
+
+  it('shows tool titles before their input and output disclosures open', async () => {
+    await act(async () => root.render(
+      <WorkGroup items={[tool('start', 'tool_start', 'read', { timestamp: 1_000 })]} active={false} endedAt={2_000} />,
+    ));
+
+    await act(async () => host.querySelector('.work-group__toggle').click());
+
+    const disclosure = host.querySelector('.tool-call-entry__disclosure');
+    expect(disclosure?.querySelector('summary')?.textContent).toContain('Read File');
+    expect(disclosure?.hasAttribute('open')).toBe(false);
+  });
+
+  it.each([
+    ['failed', 'Work failed'],
+    ['cancelled', 'Work cancelled'],
+    ['interrupted', 'Work interrupted'],
+    ['unknown', 'Work'],
+  ])('uses explicit terminal %s semantics for a generic final group', (responseStatus, title) => {
+    const html = renderToStaticMarkup(
+      <WorkGroup
+        items={[tool('start', 'tool_start', 'read', { timestamp: 1_000 })]}
+        endedAt={2_000}
+        terminal
+        responseStatus={responseStatus}
+      />,
+    );
+
+    expect(html).toContain(`work-group__title">${title}`);
+    expect(html).not.toContain('Worked for 1s');
+    if (responseStatus === 'failed') expect(html).toContain('work-group__badge--error');
+  });
+
+  it('does not present a running final group as an unknown terminal outcome', () => {
+    const html = renderToStaticMarkup(
+      <WorkGroup
+        items={[tool('start', 'tool_start', 'read', { timestamp: 1_000 })]}
+        active
+        terminal
+        responseStatus="running"
+      />,
+    );
+
+    expect(html).toContain('Working');
+    expect(html).not.toContain('Unknown');
+  });
+
+  it('keeps a reasoning title verbatim while surfacing its terminal status once', () => {
+    const reasoning = {
+      kind: 'stream_event',
+      id: 'reasoning',
+      timestamp: 1_000,
+      event: {
+        id: 'reasoning',
+        eventType: 'reasoning_delta',
+        timestamp: 1_000,
+        content: '**Inspect files**\n\nRead the policy.',
+        metadata: {},
+      },
+    };
+    const html = renderToStaticMarkup(
+      <WorkGroup heading="Inspect files" items={[reasoning]} terminal responseStatus="cancelled" />,
+    );
+
+    expect(html).toContain('work-group__title">Inspect files');
+    expect(html.match(/Cancelled/g)).toHaveLength(1);
   });
 });

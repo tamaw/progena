@@ -2651,20 +2651,13 @@ pre.mermaid svg {
     color: var(--color-error);
 }
 
-/* Reasoning text under a headed group's header (ReasoningBody in
-   WorkGroup.jsx): clamped, with a right-hand chevron that only appears when
-   the text is actually cut off. Four lines fit 66 of 69 real summaries at
-   the default chat width, so the chevron marks the genuinely long ones. */
+/* A group's reasoning belongs to its expanded header entry and is always
+   complete once that group is open. */
 .work-group__reasoning {
-    --reasoning-lines: 4;
-    display: flex;
-    gap: 8px;
-    align-items: flex-start;
     margin-top: 2px;
 }
 
 .work-group__reasoning-text {
-    flex: 1 1 auto;
     min-width: 0;
     color: var(--color-text-muted);
 }
@@ -2677,35 +2670,9 @@ pre.mermaid svg {
     margin-bottom: 0;
 }
 
-.work-group__reasoning:not(.work-group__reasoning--open) .work-group__reasoning-text {
-    display: -webkit-box;
-    overflow: hidden;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: var(--reasoning-lines);
-}
-
-.work-group__reasoning-toggle {
-    display: flex;
-    flex: 0 0 auto;
-    padding: 6px 0;
-    color: var(--color-text-primary);
-    background: none;
-    border: 0;
-    cursor: pointer;
-}
-
-.work-group__reasoning-toggle:focus {
-    outline: none;
-}
-
-.work-group__reasoning-toggle:focus-visible .tool-event-disclosure__chevron {
-    color: var(--color-accent);
-}
-
-.work-group__reasoning--open .tool-event-disclosure__chevron {
-    transform: rotate(45deg);
-}
-
+/* Compound the work-group selectors with .entry__badge so they win over
+   chrome-frame.css's later base `.entry__badge { color: white }` rule. */
+.entry__badge.work-group__badge,
 .entry__badge.work-group__badge--done {
     color: var(--color-text-muted);
 }

@@ -9,10 +9,7 @@ import {
   splitGroupReasoning,
   selectRecentLines,
   splitReasoningSections,
-  normalizeTurnResponseStatus,
-  summarizeTurnWork,
   summarizeWork,
-  turnWorkHeader,
   workGroupHeader,
 } from '@frontend/features/chat/models/workGroupModel';
 
@@ -205,9 +202,9 @@ describe('workGroupHeader', () => {
       .toEqual({ title: 'Listing configuration files', meta: '17s · 1 tool' });
   });
 
-  it('shows live seconds from zero while generating without a summary', () => {
+  it('keeps generic work labelled Working while it is active', () => {
     expect(headerFor(lsCall.slice(0, 1), { active: true, endedAt: 1_000 }))
-      .toEqual({ title: null, meta: '0s · 1 tool' });
+      .toEqual({ title: 'Working', meta: '0s · 1 tool' });
   });
 
   it('omits a sub-second duration once done and counts failures', () => {
@@ -219,34 +216,12 @@ describe('workGroupHeader', () => {
     expect(summarizeWork(items, buildWorkSteps(items)).failedCount).toBe(1);
   });
 
-  it('describes headless reasoning-only work as thinking', () => {
+  it('keeps a generic label when directly summarizing unheaded reasoning', () => {
     const items = [eventItem('1', 'reasoning_summary', {}, 1_000, 'plain reasoning')];
-    expect(headerFor(items, { endedAt: 6_000 }).title).toBe('Thought for 5s');
+    expect(headerFor(items, { endedAt: 6_000 }).title).toBe('Worked for 5s');
   });
 });
 
-describe('turn work summary', () => {
-  const items = [
-    eventItem('1', 'tool_start', { tool_name: 'ls', tool_call_id: 'a' }, 1_000),
-    eventItem('2', 'tool_error', { tool_name: 'ls', tool_call_id: 'a' }, 2_000),
-  ];
-
-  it('keeps a retried tool failure as evidence without changing completed response state', () => {
-    const summary = summarizeTurnWork([{ items }], items, 5_000);
-    expect(summary).toMatchObject({ elapsedMs: 4_000, toolCount: 1, failedCount: 1 });
-    expect(turnWorkHeader({ responseStatus: 'completed', running: false, summary }))
-      .toEqual({ title: 'Worked for 4s', meta: '1 tool', badge: 'Completed' });
-  });
-
-  it('renders only explicit terminal states and keeps unknown history neutral', () => {
-    const summary = summarizeTurnWork([], items, null);
-    expect(normalizeTurnResponseStatus('old-state')).toBe('unknown');
-    expect(turnWorkHeader({ responseStatus: 'failed', running: false, summary }).title).toBe('Work failed');
-    expect(turnWorkHeader({ responseStatus: 'cancelled', running: false, summary }).title).toBe('Work cancelled');
-    expect(turnWorkHeader({ responseStatus: 'interrupted', running: false, summary }).title).toBe('Work interrupted');
-    expect(turnWorkHeader({ responseStatus: 'unknown', running: false, summary }).title).toBe('Work');
-  });
-});
 
 describe('splitReasoningSections', () => {
   it('splits on summary headings, including parts streamed back to back without a separator', () => {
@@ -260,7 +235,7 @@ describe('splitReasoningSections', () => {
 });
 
 describe('buildWorkGroups', () => {
-  it('opens a group per reasoning summary and files following work under the latest one', () => {
+  it('opens a group per reasoning section and files following work under the latest one', () => {
     const groups = buildWorkGroups([
       eventItem('pre', 'tool_start', { tool_name: 'ls', tool_call_id: 'a' }, 900),
       eventItem('r1', 'reasoning_delta', { reasoning_tokens: 40 }, 1_000, '**Plan**\n\nfirst.**Look**\n\nsecond.'),
@@ -271,11 +246,29 @@ describe('buildWorkGroups', () => {
     expect(groups.map((group) => [group.heading, group.items.map((item) => item.id)])).toEqual([
       [null, ['pre']],
       ['Plan', ['r1-s0']],
-      // A headless reasoning block continues the group already open.
-      ['Look', ['r1-s1', 't1', 'r2-s0', 't2']],
+      ['Look', ['r1-s1', 't1']],
+      ['Reasoning', ['r2-s0', 't2']],
     ]);
     expect(groups[1].items[0].event.content).toBe('**Plan**\n\nfirst.');
     // A turn-level token count no longer applies once the block is split.
     expect(groups[1].items[0].event.metadata.reasoning_tokens).toBeUndefined();
+  });
+
+  it('keeps a late tool result with its initiating group and freezes that group at the reasoning boundary', () => {
+    const workItems = [
+      eventItem('start-old', 'tool_start', { tool_name: 'read_file', tool_call_id: 'old' }, 1_000),
+      eventItem('reasoning', 'reasoning_delta', {}, 2_000, '**Inspect result**\n\nChecking the output.'),
+      eventItem('start-new', 'tool_start', { tool_name: 'search', tool_call_id: 'new' }, 2_100),
+      eventItem('result-old', 'tool_result', { tool_name: 'read_file', tool_call_id: 'old' }, 3_000),
+      eventItem('result-new', 'tool_result', { tool_name: 'search', tool_call_id: 'new' }, 3_100),
+    ];
+    const groups = buildWorkGroups(workItems);
+
+    expect(groups.map((group) => [group.heading, group.items.map((item) => item.id)])).toEqual([
+      [null, ['start-old', 'result-old']],
+      ['Inspect result', ['reasoning-s0', 'start-new', 'result-new']],
+    ]);
+    expect(summarizeWork(groups[0].items, buildWorkSteps(groups[0].items), groups[1].startedAt).elapsedMs).toBe(1_000);
+    expect(mergeToolCallItems(groups[0].items)).toHaveLength(1);
   });
 });
