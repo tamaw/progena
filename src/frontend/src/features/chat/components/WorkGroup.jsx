@@ -1,15 +1,11 @@
 /**
- * A headed reasoning group inside an assistant turn. The turn owns the one
- * generic work disclosure; headless groups render their timeline rows directly
- * so a tool is never hidden behind a second, identical work summary.
- *
- * Headed groups retain their reasoning summary and their own optional detail
- * disclosure. While a group is active, its rows are expanded.
+ * One collapsible phase of root-agent work. The initial generic phase and
+ * each reasoning section are peers in the transcript chain; expanding a
+ * reasoning phase reveals its complete reasoning and its following tools.
  */
 
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import TimelineItem from './TimelineItem';
-import TypingWord from './TypingWord';
 import { renderSafeMarkdown, sanitizeHtmlFragment } from '../../../lib/safeMarkdown';
 import { describeStreamEvent, formatTimestamp, tokenMetaItemsForEvent } from '../models/messageRenderUtils';
 import {
@@ -24,13 +20,10 @@ import {
 
 const TICK_MS = 1000;
 
-// The reasoning behind a headed group, under its header: clamped to a few
-// lines, with a right-hand chevron (like a tool row's) only when the text is
-// actually cut off at the current width.
+// The group's disclosure is the only reasoning disclosure. Provider detail
+// metadata remains preferred by describeStreamEvent, then all resulting HTML
+// is sanitized before rendering.
 const ReasoningBody = memo(function ReasoningBody({ event }) {
-  const [open, setOpen] = useState(false);
-  const [overflows, setOverflows] = useState(false);
-  const textRef = useRef(null);
   const { bodyHtml, reasoningDetailHtml } = useMemo(() => describeStreamEvent({
     ...event,
     content: reasoningSectionBody(event.content),
@@ -42,34 +35,12 @@ const ReasoningBody = memo(function ReasoningBody({ event }) {
       : renderSafeMarkdown(reasoningSectionBody(event.content));
   }, [bodyHtml, event.content, reasoningDetailHtml]);
 
-  useLayoutEffect(() => {
-    const element = textRef.current;
-    if (!element || open) return undefined;
-    const measure = () => setOverflows(element.scrollHeight > element.clientHeight + 1);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [html, open]);
-
   return (
-    <div className={`work-group__reasoning${open ? ' work-group__reasoning--open' : ''}`}>
+    <div className="work-group__reasoning">
       <div
-        ref={textRef}
         className="message-content work-group__reasoning-text"
         dangerouslySetInnerHTML={{ __html: html }}
       />
-      {(overflows || open) && (
-        <button
-          type="button"
-          className="work-group__reasoning-toggle"
-          aria-expanded={open}
-          aria-label={open ? 'Show less reasoning' : 'Show full reasoning'}
-          onClick={() => setOpen((value) => !value)}
-        >
-          <span className="tool-event-disclosure__chevron" aria-hidden="true" />
-        </button>
-      )}
     </div>
   );
 });
@@ -92,19 +63,37 @@ const WorkEntries = memo(function WorkEntries({
   ));
 });
 
-const WorkGroup = memo(function WorkGroup(props) {
-  if (!props.heading) {
-    return <WorkEntries {...props} />;
-  }
-  return <HeadedWorkGroup {...props} />;
-});
+function terminalStatusLabel(responseStatus) {
+  if (responseStatus === 'failed') return 'Failed';
+  if (responseStatus === 'cancelled') return 'Cancelled';
+  if (responseStatus === 'interrupted') return 'Interrupted';
+  if (responseStatus === 'unknown') return 'Unknown';
+  return '';
+}
 
-const HeadedWorkGroup = memo(function HeadedWorkGroup({ heading, items, active, endedAt, onRegenerate, summaryMarkers, summaryActivities }) {
-  // A manual choice applies only to this phase. Finishing work must collapse
-  // it even if the user reopened it while it was active.
+function terminalGenericTitle(responseStatus) {
+  if (responseStatus === 'failed') return 'Work failed';
+  if (responseStatus === 'cancelled') return 'Work cancelled';
+  if (responseStatus === 'interrupted') return 'Work interrupted';
+  if (responseStatus === 'unknown') return 'Work';
+  return '';
+}
+
+const WorkGroup = memo(function WorkGroup({
+  heading,
+  items,
+  active = false,
+  endedAt,
+  terminal = false,
+  responseStatus,
+  onRegenerate,
+  summaryMarkers,
+  summaryActivities,
+}) {
+  // A manual choice only applies to this phase while it retains the same
+  // running state. Finishing work collapses a live group automatically.
   const [disclosure, setDisclosure] = useState(null);
   const expanded = disclosure?.active === active ? disclosure.open : active;
-  const toggle = () => setDisclosure({ active, open: !expanded });
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return undefined;
@@ -112,21 +101,29 @@ const HeadedWorkGroup = memo(function HeadedWorkGroup({ heading, items, active, 
     return () => clearInterval(timer);
   }, [active]);
 
-  // The header already names the group's reasoning, so that reasoning is not
-  // repeated as a row or a preview step; its text is the group's body.
   const { reasoningItem, rest } = useMemo(() => splitGroupReasoning(heading, items), [heading, items]);
   const steps = useMemo(() => buildWorkSteps(items), [items]);
   const end = active ? now : endedAt;
   const summary = useMemo(() => summarizeWork(items, steps, end), [items, steps, end]);
-  const header = workGroupHeader({ heading, active, summary });
-  const badgeState = active ? 'running' : (summary.failedCount > 0 ? 'error' : 'done');
+  const defaultHeader = workGroupHeader({ heading, active, summary });
+  const explicitGenericTitle = terminal && !active && !heading ? terminalGenericTitle(responseStatus) : '';
+  const header = explicitGenericTitle ? { ...defaultHeader, title: explicitGenericTitle } : defaultHeader;
+  const terminalLabel = terminal && !active && !explicitGenericTitle ? terminalStatusLabel(responseStatus) : '';
+  const badgeState = active
+    ? 'running'
+    : (responseStatus === 'failed' ? 'error' : (summary.failedCount > 0 ? 'error' : 'done'));
   const tokenMeta = reasoningItem ? tokenMetaItemsForEvent(reasoningItem.event) : [];
   const firstItem = items[0];
   const time = formatTimestamp(firstItem?.timestamp ?? firstItem?.event?.timestamp);
 
-  // The group's rows belong to the same agent and conversation, so they are
-  // siblings in the turn's chain (same gutter, same line) rather than nested
-  // under the header. Only delegated agents (subagent/A2A cards) nest.
+  const toggle = () => setDisclosure({ active, open: !expanded });
+  const toggleOnKeyDown = (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      toggle();
+    }
+  };
+
   return (
     <>
       <div className={`entry entry--chain-item work-group${active ? ' work-group--active' : ''}`}>
@@ -139,14 +136,14 @@ const HeadedWorkGroup = memo(function HeadedWorkGroup({ heading, items, active, 
             className="entry__head entry-toggle work-group__toggle"
             aria-expanded={expanded}
             onClick={toggle}
+            onKeyDown={toggleOnKeyDown}
           >
-            <span className="entry__role work-group__title">
-              {header.title ?? <TypingWord reserveWidth />}
-            </span>
+            <span className="entry__role work-group__title">{header.title}</span>
             {header.meta && <span className="work-group__meta">{header.meta}</span>}
             {summary.failedCount > 0 && (
               <span className="work-group__failed">{summary.failedCount} failed</span>
             )}
+            {terminalLabel && <span className="work-group__status">{terminalLabel}</span>}
             <span className="msg__head-trailing">
               {tokenMeta.map((meta) => <span key={meta} className="msg__stat message-token-count">{meta}</span>)}
               {time && <span className="msg__time entry__time">{time}</span>}

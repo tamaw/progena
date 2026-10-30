@@ -42,10 +42,46 @@ describe('Message work duration', () => {
     };
 
     const visible = renderTurn(message);
-    const work = visible.querySelector('section[aria-label="Assistant work"]');
-    const summary = work?.querySelector('button[aria-expanded="false"]');
+    const summary = visible.querySelector('.work-group__toggle');
 
     expect(summary?.textContent).toContain('Worked for 17s');
     expect(visible.textContent).toContain('Finished answer');
+  });
+
+  it('stops the latest work group when answer text has started even while the turn remains live', () => {
+    const message = {
+      id: 'turn',
+      role: 'assistant',
+      workActive: true,
+      responseStatus: 'running',
+      timelineItems: [
+        {
+          kind: 'stream_event',
+          id: 'tool',
+          timestamp: 1_000,
+          event: {
+            id: 'tool',
+            eventType: 'tool_start',
+            timestamp: 1_000,
+            content: '',
+            metadata: { tool_name: 'read_file', tool_call_id: 'read' },
+          },
+        },
+        {
+          kind: 'assistant_message',
+          id: 'answer',
+          timestamp: 2_000,
+          content: 'Streaming answer',
+          isStreaming: true,
+        },
+      ],
+    };
+
+    const visible = renderTurn(message);
+    const summary = visible.querySelector('.work-group__toggle');
+
+    expect(visible.querySelector('.work-group--active')).toBeNull();
+    expect(summary?.getAttribute('aria-expanded')).toBe('false');
+    expect(summary?.textContent).not.toContain('Unknown');
   });
 });
