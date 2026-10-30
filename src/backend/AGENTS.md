@@ -28,7 +28,8 @@ backend/
 ├── insights/            # Checkpoint-backed usage accounting
 ├── inbox/ / alerts/ / search/
 ├── monitoring/          # State reader, status/metrics and logs
-└── integrations/        # Runtime clients and Telegram adapters
+├── channels/            # Messaging channels: channel:<id> documents, adapters (Telegram), manager
+└── integrations/        # Runtime clients
 ```
 
 Put endpoints in their feature's `routes.py`; register routers in `http/router.py`

@@ -1,5 +1,5 @@
 """
-Tests for Telegram Client Integration.
+Tests for the Telegram channel's Bot API client and runtime bridge.
 
 Tests the TelegramClient class, rate limiting, message chunking,
 polling, command handling, and integration with the backend event system.
@@ -10,20 +10,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import src.backend.channels.telegram.bridge as telegram_bridge
 import src.backend.events.stream as events_stream
-import src.backend.integrations.telegram_bridge as integrations_telegram_bridge
-from src.backend.chat.models import AgentResponse
-from src.backend.config import ChatServerConfig
-from src.backend.integrations.telegram import (
+from src.backend.channels.telegram.client import (
     TelegramClient,
     TelegramConfig,
     TelegramDraftSession,
     TelegramDraftStreamingError,
     TelegramRateLimiter,
-    get_telegram_client,
-    init_telegram_client,
-    stop_telegram_client,
 )
+from src.backend.channels.telegram.settings import TelegramSettings
+from src.backend.chat.models import AgentResponse
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 
 
@@ -39,23 +36,35 @@ async def _async_event_iter(*items):
         yield item
 
 
+def _mock_session(payload: dict) -> MagicMock:
+    """An aiohttp session whose every POST returns ``payload``."""
+    session = MagicMock()
+    session.close = AsyncMock()
+    response = AsyncMock()
+    response.json = AsyncMock(return_value=payload)
+    response.__aenter__ = AsyncMock(return_value=response)
+    response.__aexit__ = AsyncMock()
+    session.post = MagicMock(return_value=response)
+    return session
+
+
 class TestTelegramConfig:
     """Tests for TelegramConfig."""
 
-    def test_from_chat_config(self):
-        """Test extracting Telegram config from ChatServerConfig."""
-        chat_config = ChatServerConfig(
-            telegram_enabled=True,
-            telegram_bot_token="123456:ABC-DEF",
-            telegram_chat_id="987654321",
-            telegram_api_timeout=60,
-            telegram_max_retries=5,
-            telegram_retry_delay=2.0,
-            telegram_max_message_length=2048,
-            telegram_rate_limit_per_minute=20,
+    def test_from_settings(self):
+        """Channel settings plus the resolved token become the client config."""
+        settings = TelegramSettings.from_mapping(
+            {
+                "chat_id": "987654321",
+                "api_timeout": 60,
+                "max_retries": 5,
+                "retry_delay": 2.0,
+                "max_message_length": 2048,
+                "rate_limit_per_minute": 20,
+            }
         )
 
-        tg_config = TelegramConfig.from_chat_config(chat_config)
+        tg_config = TelegramConfig.from_settings(settings, "123456:ABC-DEF")
 
         assert tg_config.bot_token == "123456:ABC-DEF"
         assert tg_config.chat_id == "987654321"
@@ -65,6 +74,7 @@ class TestTelegramConfig:
         assert tg_config.max_message_length == 2048
         assert tg_config.rate_limit_per_minute == 20
         assert tg_config.draft_update_interval_ms == 1000
+        assert tg_config.allowed_users == {"987654321"}
 
 
 class TestTelegramRateLimiter:
@@ -380,56 +390,87 @@ class TestTelegramClient:
         )
 
 
-class TestTelegramClientIntegration:
-    """Integration tests for Telegram client lifecycle."""
+class TestTelegramClientLifecycle:
+    """Connection state the Channels page reports."""
+
+    @staticmethod
+    def _config(**overrides) -> TelegramConfig:
+        values = {
+            "bot_token": "123456:ABC-DEF",
+            "chat_id": "987654321",
+            "api_timeout": 10,
+            "max_retries": 1,
+            "retry_delay": 0.0,
+            "max_message_length": 4096,
+            "rate_limit_per_minute": 30,
+        }
+        values.update(overrides)
+        return TelegramConfig(**values)
 
     @pytest.mark.asyncio
-    async def test_init_telegram_client_disabled(self):
-        """Test that init returns None when Telegram is disabled."""
-        config = ChatServerConfig(telegram_enabled=False)
-        result = await init_telegram_client(config)
-        assert result is None
+    async def test_start_records_bot_identity(self):
+        session = _mock_session({"ok": True, "result": {"username": "testbot"}})
+        with patch("aiohttp.ClientSession", return_value=session):
+            client = TelegramClient(self._config())
+            await client.start()
+
+        assert client.started
+        assert client.bot_username == "testbot"
+        assert client.last_error is None
+
+        await client.stop()
+        assert not client.started
+        session.close.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_init_telegram_client_missing_token(self):
-        """Test that init returns None when token is missing."""
-        config = ChatServerConfig(
-            telegram_enabled=True,
-            telegram_bot_token="",
-            telegram_chat_id="123456",
+    async def test_rejected_token_is_reported(self):
+        session = _mock_session({"ok": False, "error_code": 401, "description": "Unauthorized"})
+        with patch("aiohttp.ClientSession", return_value=session):
+            client = TelegramClient(self._config())
+            await client.start()
+
+        assert client.bot_username is None
+        assert (
+            client.last_error == "Could not verify the bot: 401 Unauthorized: check the bot token"
         )
-        result = await init_telegram_client(config)
-        assert result is None
+        await client.stop()
 
     @pytest.mark.asyncio
-    async def test_init_and_stop(self):
-        """Test full init and stop cycle with mocked session."""
-        config = ChatServerConfig(
-            telegram_enabled=True,
-            telegram_bot_token="123456:ABC-DEF",
-            telegram_chat_id="987654321",
-        )
+    async def test_polling_conflict_stops_polling_and_notifies(self):
+        client = TelegramClient(self._config())
+        observer = MagicMock()
+        client.set_state_change_callback(observer)
 
-        with patch("aiohttp.ClientSession") as mock_session:
-            mock_instance = MagicMock()
-            mock_instance.close = AsyncMock()
-            mock_session.return_value = mock_instance
+        with (
+            patch.object(client, "_get_updates", AsyncMock(return_value=([], "conflict"))),
+            patch("src.backend.channels.telegram.client.asyncio.sleep", AsyncMock()),
+        ):
+            await client._polling_loop()
 
-            # Mock getMe response
-            mock_response = AsyncMock()
-            mock_response.json = AsyncMock(
-                return_value={"ok": True, "result": {"username": "testbot"}}
-            )
-            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-            mock_response.__aexit__ = AsyncMock()
-            mock_instance.post = MagicMock(return_value=mock_response)
+        assert client.last_error is not None
+        assert "409 Conflict" in client.last_error
+        observer.assert_called_once_with()
 
-            client = await init_telegram_client(config)
-            assert client is not None
-            assert get_telegram_client() is client
+    @pytest.mark.asyncio
+    async def test_successful_poll_clears_a_previous_error(self):
+        client = TelegramClient(self._config(polling_interval=0))
+        client.last_error = "Could not verify the bot: HTTP error"
+        observer = MagicMock()
+        client.set_state_change_callback(observer)
+        calls = 0
 
-            await stop_telegram_client()
-            assert get_telegram_client() is None
+        async def get_updates():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return [], None
+            raise asyncio.CancelledError
+
+        with patch.object(client, "_get_updates", get_updates):
+            await client._polling_loop()
+
+        assert client.last_error is None
+        observer.assert_called_once_with()
 
 
 class TestSubscriberTracking:
@@ -519,20 +560,14 @@ class TestTelegramPolling:
         return TelegramClient(config_with_polling)
 
     def test_config_allowed_users(self):
-        """Test that allowed_users is properly populated from config."""
-        chat_config = ChatServerConfig(
-            telegram_enabled=True,
-            telegram_bot_token="123456:ABC-DEF",
-            telegram_chat_id="987654321",
-            telegram_allowed_users="111222333,444555666",
+        """The primary chat is always allowed alongside the configured chats."""
+        settings = TelegramSettings.from_mapping(
+            {"chat_id": "987654321", "allowed_chat_ids": ["111222333", "444555666"]}
         )
 
-        tg_config = TelegramConfig.from_chat_config(chat_config)
+        tg_config = TelegramConfig.from_settings(settings, "123456:ABC-DEF")
 
-        # Should include primary chat_id plus allowed_users
-        assert "987654321" in tg_config.allowed_users
-        assert "111222333" in tg_config.allowed_users
-        assert "444555666" in tg_config.allowed_users
+        assert tg_config.allowed_users == {"987654321", "111222333", "444555666"}
 
     def test_set_message_handler(self, client_with_polling):
         """Test setting a message handler."""
@@ -818,7 +853,7 @@ class TestTelegramConnectedMessage:
             reasoning_tokens=None,
         )
 
-        await integrations_telegram_bridge._send_telegram_connected_message(
+        await telegram_bridge._send_telegram_connected_message(
             telegram, progena, InMemoryDocumentStore()
         )
 
@@ -842,9 +877,7 @@ class TestTelegramConnectedMessage:
         store = InMemoryDocumentStore()
         store.save_document(PROGENA_STATE_PREFIX, "session:tele_555", {"title": "Telegram"})
 
-        await integrations_telegram_bridge._send_telegram_connected_message(
-            telegram, progena, store
-        )
+        await telegram_bridge._send_telegram_connected_message(telegram, progena, store)
 
         progena.send_message.assert_not_awaited()
         telegram.send_message.assert_not_awaited()
@@ -863,7 +896,7 @@ class TestTelegramConnectedMessage:
             reasoning_tokens=None,
         )
 
-        await integrations_telegram_bridge._send_telegram_connected_message(
+        await telegram_bridge._send_telegram_connected_message(
             telegram, progena, InMemoryDocumentStore()
         )
 
@@ -877,7 +910,7 @@ class TestTelegramConnectedMessage:
         progena.is_running = True
         progena.send_message.side_effect = RuntimeError("SSE down")
 
-        await integrations_telegram_bridge._send_telegram_connected_message(
+        await telegram_bridge._send_telegram_connected_message(
             telegram, progena, InMemoryDocumentStore()
         )
 
@@ -905,7 +938,7 @@ class TestTelegramBackendStreaming:
             )
         )
 
-        result = await integrations_telegram_bridge._handle_telegram_agent_message(
+        result = await telegram_bridge._handle_telegram_agent_message(
             telegram,
             progena,
             "987654321",
@@ -935,7 +968,7 @@ class TestTelegramBackendStreaming:
             return_value=_async_event_iter({"type": "stream_chunk", "content": "Hello"})
         )
 
-        result = await integrations_telegram_bridge._handle_telegram_agent_message(
+        result = await telegram_bridge._handle_telegram_agent_message(
             telegram,
             progena,
             "987654321",

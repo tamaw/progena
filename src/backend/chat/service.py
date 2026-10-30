@@ -145,6 +145,8 @@ class ChatMessage(BaseModel):
 class ChatSessionSummary(BaseModel):
     thread_id: str
     title: str
+    # Where the conversation started: "ui", "telegram" (a channel) or "api".
+    source: str | None = None
     pinned: bool = False
     archived: bool = False
     created_at: str | None = None
@@ -727,6 +729,7 @@ def _summary_from_session(
     return ChatSessionSummary(
         thread_id=payload["thread_id"],
         title=display_title(payload["title"], payload["first_message"]),
+        source=payload.get("source"),
         pinned=payload["pinned"],
         archived=payload["archived"],
         created_at=_known_session_timestamp(payload.get("created_at")),

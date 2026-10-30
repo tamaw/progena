@@ -28,6 +28,7 @@ from src.progena.documents.kinds import (
     CANVAS_DATA_KEY_PREFIX,
     CANVAS_DOCUMENT_KEY_PREFIX,
     CANVAS_STATUS_KEY_PREFIX,
+    CHANNEL_KEY_PREFIX,
     DOCUMENT_TYPE_KEY_PREFIX,
     INBOX_MESSAGE_KEY_PREFIX,
     INSTRUCTION_DOCUMENT_KEY_PREFIX,
@@ -185,6 +186,7 @@ BUILTIN_DOCUMENT_TYPES: tuple[DocumentType, ...] = (
         "knowledge_index",
     ),
     _prefix_type("session", "Session", SESSION_KEY_PREFIX, "session"),
+    _prefix_type("channel", "Channel", CHANNEL_KEY_PREFIX, "channel"),
     _single_type("kanban_board", "Kanban Board", "kanban_board", None),
 )
 

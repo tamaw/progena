@@ -7,6 +7,8 @@ from fastapi import APIRouter
 import src.backend.agents.routes as agents_routes
 import src.backend.agents.store as agents_store
 import src.backend.alerts.routes as alerts_routes
+import src.backend.channels.manager as channels_manager
+import src.backend.channels.routes as channels_routes
 import src.backend.chat.routes as chat_routes
 import src.backend.events.routes as events_routes
 import src.backend.events.stream as events_stream
@@ -89,5 +91,12 @@ router.include_router(
 router.include_router(
     insights_routes.create_insights_router(
         storage_documents.get_default_document_store, events_stream.broadcast_ui_event
+    )
+)
+router.include_router(
+    channels_routes.create_channels_router(
+        get_manager=channels_manager.get_channel_manager,
+        get_store=storage_documents.get_default_document_store,
+        broadcast=events_stream.broadcast_ui_event,
     )
 )

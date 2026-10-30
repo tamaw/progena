@@ -61,6 +61,7 @@ src/
     ├── agents/              # Catalogue, agent details and catalogue/run state
     ├── alerts/              # Alert panel, model and state
     ├── canvases/            # Canvas pages, sandbox host and generated vendor bundles
+    ├── channels/            # Messaging channels (Telegram): page, model and state
     ├── chat/                # Conversation/sessions, quick chat and response streams
     │   ├── pages/
     │   ├── components/

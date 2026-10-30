@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 import src.backend.agents.reconciliation as agents_reconciliation
+import src.backend.channels.manager as channels_manager
 import src.backend.events.dispatch as events_dispatch
 import src.backend.monitoring.state as monitoring_state
 import src.backend.monitoring.status as monitoring_status
@@ -34,10 +35,13 @@ def _queue_knowledge_index_resync(_snapshot, changed_key: str | None = None) -> 
 _routine_agent_watch_callback = None
 
 
+_channel_watch_callback = None
+
+
 async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
     global _state_watch_callback
     global _workflow_invoke_watch_callback, _routine_agent_watch_callback
-    global _knowledge_index_watch_callback
+    global _knowledge_index_watch_callback, _channel_watch_callback
     state_reader = monitoring_state.get_state_reader()
     if _state_watch_callback is None:
         _state_watch_callback = monitoring_status._queue_state_watch_status
@@ -51,6 +55,9 @@ async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
     if _knowledge_index_watch_callback is None:
         _knowledge_index_watch_callback = _queue_knowledge_index_resync
         state_reader.add_watcher(_knowledge_index_watch_callback)
+    if _channel_watch_callback is None:
+        _channel_watch_callback = channels_manager.get_channel_manager().on_store_change
+        state_reader.add_watcher(_channel_watch_callback)
     await workflows_events.routine_events.start()
     # The runtime creates LangGraph's checkpoint tables.  Install the backend
     # trigger only after that schema exists, before listening for its NOTIFYs.
@@ -66,7 +73,7 @@ async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
 async def stop_state_status_watcher() -> None:
     global _state_watch_callback
     global _workflow_invoke_watch_callback, _routine_agent_watch_callback
-    global _knowledge_index_watch_callback
+    global _knowledge_index_watch_callback, _channel_watch_callback
     state_reader = monitoring_state.get_state_reader()
     if _state_watch_callback is not None:
         state_reader.remove_watcher(_state_watch_callback)
@@ -80,6 +87,9 @@ async def stop_state_status_watcher() -> None:
     if _knowledge_index_watch_callback is not None:
         state_reader.remove_watcher(_knowledge_index_watch_callback)
         _knowledge_index_watch_callback = None
+    if _channel_watch_callback is not None:
+        state_reader.remove_watcher(_channel_watch_callback)
+        _channel_watch_callback = None
     await workflows_events.routine_events.stop()
     await runs_events.runs_events.stop()
     await workflows_runtime.get_workflow_cron_clock().stop()

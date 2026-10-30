@@ -46,7 +46,9 @@ Common optional overrides:
 - `PROGENA_REASONING_ENABLED`
 - `PROGENA_REASONING_EFFORT`
 - `PROGENA_REASONING_SUMMARY`
-- `TELEGRAM_*` backend settings
+- `TELEGRAM_*`: seed the first `channel:telegram` document only; afterwards the
+  Channels page owns Telegram settings. `TELEGRAM_BOT_TOKEN` remains the default
+  bot-token source unless the token is stored encrypted in the channel.
 
 Foundry starts with reasoning enabled by default. `PROGENA_REASONING_EFFORT`
 controls the default effort and `PROGENA_REASONING_SUMMARY` the visible reasoning

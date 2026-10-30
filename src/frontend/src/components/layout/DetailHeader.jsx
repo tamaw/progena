@@ -70,6 +70,15 @@ export function StopActionIcon() {
   );
 }
 
+export function SendActionIcon() {
+  return (
+    <ActionSvg>
+      <path d="M13.5 2.5 2.5 7l4.5 2 2 4.5z" />
+      <path d="M13.5 2.5 7 9" />
+    </ActionSvg>
+  );
+}
+
 export function PauseActionIcon() {
   return (
     <ActionSvg>

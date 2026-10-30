@@ -31,6 +31,8 @@
     "CANVAS_STATUS_SAVED": "canvas.status.saved",
     "CANVAS_SUBSCRIPTION_UPDATED": "canvas.subscription.updated",
     "CANVASES_SNAPSHOT": "canvases.snapshot",
+    "CHANNEL_TESTED": "channel.tested",
+    "CHANNELS_SNAPSHOT": "channels.snapshot",
     "CHAT_MESSAGES_PAGE_LOADED": "chat.messages.page.loaded",
     "CHAT_RESPONSE_ACTIVITY": "chat.response.activity",
     "CHAT_RESPONSE_CANCEL_REQUESTED": "chat.response.cancel_requested",

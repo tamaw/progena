@@ -12,6 +12,7 @@ from src.progena.acp.store import ACPTaskStore
 from src.progena.alerts.store import AlertStore
 from src.progena.async_subagents.models import AsyncSubagentTaskRecord
 from src.progena.async_subagents.store import AsyncSubagentStore
+from src.progena.channels.store import ChannelStore
 from src.progena.documents.store import DocumentStore
 from src.progena.documents.types import DocumentType
 from src.progena.inbox.store import InboxStore
@@ -82,6 +83,7 @@ class StateManager:
         self.settings = SettingsStore(self._document_access)
         self.schedules = ScheduleStore(self._document_access)
         self.repositories = RepositoryStore(self._document_access)
+        self.channels = ChannelStore(self._document_access)
         self.registry = RegistryStore(self._document_access)
         self.mcp = MCPStore(self._document_access)
         self.plugins = PluginStore(self._document_access)
@@ -299,6 +301,15 @@ class StateManager:
 
     async def save_repo_scan(self, payload: dict[str, Any]) -> None:
         return await self.repositories.save_repo_scan(payload)
+
+    # ==========================================================================
+    # Channels (``channel:<id>``; backend-owned, read here with secrets redacted)
+    # ==========================================================================
+    async def get_channel(self, channel_id: str) -> dict[str, Any] | None:
+        return await self.channels.get_channel(channel_id)
+
+    async def list_channels(self) -> dict[str, dict[str, Any]]:
+        return await self.channels.list_channels()
 
     # ==========================================================================
     # MCP configuration

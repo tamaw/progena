@@ -70,6 +70,7 @@ from src.progena.agent.filesystem.artifacts import ArtifactDirectoryBackend
 from src.progena.agent.filesystem.attachments import AttachmentDirectoryBackend
 from src.progena.agent.filesystem.base import StateDocumentBackend, StateFile
 from src.progena.agent.filesystem.canvases import CanvasDirectoryBackend
+from src.progena.agent.filesystem.channels import ChannelDirectoryBackend
 from src.progena.agent.filesystem.config import (
     create_health_state_file,
     create_indexer_state_file,
@@ -199,6 +200,7 @@ MOUNT_ACCESS: dict[str, MountAccess] = {
     "/runs/": "read",
     "/config/": "read-write",
     "/config/repos/": "read-write",
+    "/config/channels/": "read",
     "/policies/": "read-write",
     "/inbox/": "read-write",
     "/alerts/": "read-write",
@@ -448,6 +450,8 @@ def create_progena_backend(
         routes["/workflows/"] = WorkflowDirectoryBackend(state_manager)
         # Longest prefix wins, so this shadows /config/ for repos/ only.
         routes["/config/repos/"] = RepoDirectoryBackend(state_manager)
+        # Backend-owned channel settings; secrets redacted, never writable here.
+        routes["/config/channels/"] = ChannelDirectoryBackend(state_manager)
         routes["/alerts/"] = AlertDirectoryBackend(state_manager)
         routes["/routines/"] = RoutineDirectoryBackend(state_manager)
         routes["/policies/"] = PolicyDirectoryBackend(state_manager)

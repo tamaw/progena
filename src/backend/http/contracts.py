@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 SOURCE_UI = "ui"
 SOURCE_WORKFLOW = "workflow"
+SOURCE_TELEGRAM = "telegram"
 
 
 class UiRequestAcknowledgement(BaseModel):

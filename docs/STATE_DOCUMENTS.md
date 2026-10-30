@@ -25,9 +25,9 @@ mounts:
   `/agents/`; native skills and native agent manifests remain bundled files.
 - Postgres-backed virtual document directories: `/tasks/`, `/workflows/`,
   `/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/sessions/`, `/canvases/`,
-  `/artifacts/`, and `/config/repos/`. These are collections of documents, not subdirectories on
-  disk. `/config/repos/` shadows the broader `/config/` route for repository
-  declarations.
+  `/artifacts/`, `/config/repos/` and the read-only `/config/channels/`. These
+  are collections of documents, not subdirectories on disk. `/config/repos/` and
+  `/config/channels/` shadow the broader `/config/` route for their files.
 - Postgres attachment blobs: `/attachments/` is read-only and exposes uploaded
   files for the active conversation. It is not a state-document mount.
 
@@ -116,6 +116,34 @@ canvas cannot write any other document. Backend startup installs
 is stored only, with no browser or restore. `canvas`, `canvas_data` and `canvas_status` are built-in document
 types, so workflows and other canvases can react to them. Routes, events and the
 sandbox loading design are in [CANVASES.md](CANVASES.md).
+
+## Channels
+
+Each messaging channel (today only Telegram) is one `channel:<id>` document
+(`channel.schema.v1.json`): `id`, `type`, `name`, `enabled`, type-specific
+non-secret `settings`, credential references and timestamps. A credential is
+either `{source: "environment", env_var}` (the type's conventional variable such
+as `TELEGRAM_BOT_TOKEN`, or any `PROGENA_CHANNEL_*` variable) or
+`{source: "database", ciphertext}` encrypted with `PROGENA_PROVIDER_ENCRYPTION_KEY`;
+secret values are never stored in plain text. Shared validation and redaction
+live in `src/progena/channels/contracts.py`.
+
+The backend owns channels (`src/backend/channels/`). Each channel type declares
+its settings fields, credentials and capabilities in a `ChannelTypeSpec` and runs
+through a `ChannelAdapter`; `registry.py` lists the types. On startup the
+`ChannelManager` creates a missing document for every registered type, seeding
+Telegram once from the legacy `TELEGRAM_*` variables, then starts each enabled,
+fully configured channel. It reconciles on every committed `channel:` change (from
+the Channels page, a workflow or another writer), restarting an adapter only when
+its type, enabled flag, settings or credentials change. Invalid settings,
+missing credentials or an unknown type become a channel status rather than a
+startup failure. `channel` is a built-in document type, so workflows can react
+to or toggle channels; `credentials` is read-only to them.
+
+The agent sees channels at `/config/channels/<id>.json` (read-only) with each
+credential reduced to `{source, env_var, configured}`. Conversations started
+through a channel carry the channel's session `source` (`telegram`), which chat
+session summaries expose so the Channels page can list them.
 
 ## Artifacts
 

@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Channel",
+  "description": "One messaging channel through which the user reaches Progena (for example Telegram): the payload of a channel:<id> document. The backend runs the channel type's adapter from these settings and reconnects it whenever the document changes. Credentials are references or ciphertext only; secret values are never stored in plain text.",
+  "type": "object",
+  "required": ["id", "type", "name", "enabled", "settings", "credentials", "created_at", "updated_at"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "readOnly": true,
+      "description": "Channel id; the document key is channel:<id>."
+    },
+    "type": {
+      "type": "string",
+      "minLength": 1,
+      "readOnly": true,
+      "description": "Channel adapter type, for example 'telegram'."
+    },
+    "name": {"type": "string", "minLength": 1, "description": "Display name."},
+    "enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether the backend runs this channel."
+    },
+    "settings": {
+      "type": "object",
+      "description": "Non-secret settings defined and validated by the channel type."
+    },
+    "credentials": {
+      "type": "object",
+      "readOnly": true,
+      "description": "Secret references keyed by credential name: an environment variable name, or ciphertext encrypted by the backend.",
+      "additionalProperties": {"$ref": "#/$defs/credential"}
+    },
+    "created_at": {"type": "string", "readOnly": true},
+    "updated_at": {"type": "string", "readOnly": true}
+  },
+  "$defs": {
+    "credential": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["source", "env_var"],
+          "properties": {
+            "source": {"const": "environment"},
+            "env_var": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["source", "ciphertext"],
+          "properties": {
+            "source": {"const": "database"},
+            "ciphertext": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

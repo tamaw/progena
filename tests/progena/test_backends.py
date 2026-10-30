@@ -382,6 +382,63 @@ class TestBackendFactory:
         assert "already owned" in (await backend.awrite(path, content)).error
         assert "user/reviewer/SYSTEM.md" not in sm._docs["agent"]
 
+    async def test_channels_mount_is_read_only_and_redacts_credentials(self, monkeypatch):
+        """/config/channels/ shows channel documents but never secret material."""
+        import json
+        from types import SimpleNamespace
+
+        from src.progena.channels.store import ChannelStore
+
+        self._patch_runtime_free_state_backend(monkeypatch)
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+        documents = {
+            "channel:telegram": {
+                "id": "telegram",
+                "type": "telegram",
+                "enabled": True,
+                "settings": {"chat_id": "42"},
+                "credentials": {
+                    "bot_token": {"source": "environment", "env_var": "TELEGRAM_BOT_TOKEN"},
+                    "webhook_secret": {"source": "database", "ciphertext": "gAAAA-secret"},
+                },
+            },
+        }
+
+        async def peek_document(key):
+            return documents.get(key)
+
+        async def list_documents(prefix):
+            return [(key, value) for key, value in documents.items() if key.startswith(prefix)]
+
+        channels = ChannelStore(
+            SimpleNamespace(
+                store=SimpleNamespace(peek_document=peek_document, list_documents=list_documents)
+            )
+        )
+        state_manager = FakeContentStateManager()
+        state_manager.get_channel = channels.get_channel
+        state_manager.list_channels = channels.list_channels
+        backend = create_progena_backend(project_root=".", state_manager=state_manager)
+
+        listing = await backend.als("/config/channels/")
+        read = await backend.aread("/config/channels/telegram.json")
+        written = await backend.awrite("/config/channels/telegram.json", "{}")
+
+        assert [entry["path"] for entry in listing.entries] == ["/config/channels/telegram.json"]
+        assert read.error is None
+        assert "gAAAA-secret" not in read.file_data["content"]
+        assert "123:abc" not in read.file_data["content"]
+        assert json.loads(read.file_data["content"])["credentials"] == {
+            "bot_token": {
+                "source": "environment",
+                "env_var": "TELEGRAM_BOT_TOKEN",
+                "configured": True,
+            },
+            "webhook_secret": {"source": "database", "env_var": None, "configured": True},
+        }
+        assert written.error is not None
+        assert documents["channel:telegram"]["settings"] == {"chat_id": "42"}
+
 
 async def test_dynamic_plugin_skill_routes_are_exact_and_read_only():
     sm = FakeContentStateManager()

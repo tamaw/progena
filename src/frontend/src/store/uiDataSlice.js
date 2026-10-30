@@ -27,13 +27,13 @@ import * as documentTypes from '../features/documents/state';
 import * as modelProfiles from '../features/settings/state/modelProfiles';
 import * as providers from '../features/settings/state/providers';
 import * as canvases from '../features/canvases/state';
+import * as channels from '../features/channels/state';
 
 import * as search from '../features/search/state';
 import * as insights from '../features/insights/state';
 import * as runs from '../features/runs/state';
 
-
-const domains = [status, alerts, widgets, schedules, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, providers, canvases, search, insights, runs];
+const domains = [status, alerts, widgets, schedules, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, providers, canvases, search, insights, runs, channels];
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
   {},

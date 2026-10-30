@@ -39,7 +39,7 @@ const ModelsPage = lazy(() => import('./features/settings/ModelsPage'));
 
 const ProfilesPage = lazy(() => import('./features/settings/ProfilesPage'));
 
-const ChannelsPage = lazy(() => import('./features/settings/ChannelsPage'));
+const ChannelsPage = lazy(() => import('./features/channels/ChannelsPage'));
 
 const WorkflowsPage = lazy(() => import('./features/workflows/WorkflowsPage'));
 
