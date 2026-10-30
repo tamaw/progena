@@ -30,7 +30,7 @@ Profile:
     task directory (board.json and per-task <id>.md files). Writes persist via
     the StateManager; the Postgres listener publishes the corresponding live UI
     snapshot.
-  - /sessions/ -> chat sessions as YAML-front-matter + IRC-style markdown,
+  - /conversations/ -> chat sessions as YAML-front-matter + IRC-style markdown,
     one <date>_<title-slug>_<id8>.md per non-archived chat, backed by the
     ``session:`` documents in the store (front matter editable, body read-only)
   - /runs/ -> read-only routine, workflow and schedule runs as YAML front matter
@@ -196,7 +196,7 @@ MOUNT_ACCESS: dict[str, MountAccess] = {
     "/agents/user/": "read-write",
     "/memories/": "read-write",
     "/knowledge/": "read-write",
-    "/sessions/": "read-write",
+    "/conversations/": "read-write",
     "/runs/": "read",
     "/config/": "read-write",
     "/config/repos/": "read-write",
@@ -361,7 +361,7 @@ def create_progena_backend(
             same Postgres ``attachments`` blob table the backend writes to);
             without it the mount is omitted entirely.
         checkpointer: The agent's LangGraph checkpointer. With ``state_manager``
-            it enables the ``/sessions/`` chat-session mount; without either,
+            it enables the ``/conversations/`` chat-session mount; without either,
             that mount is omitted.
         plugin_skill_segments: One ``<marketplace>__<plugin>`` segment per
             currently-installed marketplace plugin; each gets its own
@@ -458,7 +458,7 @@ def create_progena_backend(
         # User inbox: a directory of per-message files (/inbox/<id>.md) the
         # agent writes to send the user rich markdown messages.
         routes["/inbox/"] = InboxDirectoryBackend(state_manager)
-        routes["/sessions/"] = SessionDirectoryBackend(state_manager)
+        routes["/conversations/"] = SessionDirectoryBackend(state_manager)
         if checkpointer is not None:
             revision_reader = (
                 PostgresRoutineRevisionReader(database_url)

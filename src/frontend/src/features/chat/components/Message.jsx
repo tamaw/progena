@@ -1,25 +1,18 @@
-import { Fragment, memo, useMemo, useRef } from 'react';
-import { useSelector } from 'react-redux';
+import { memo, useMemo, useRef } from 'react';
 import { useMermaidRender } from '../../../hooks/useMermaidRender';
 import { collectMessageImages } from '../models/conversationModel';
-import { formatDisplayToolCalls } from '../models/messageDisplayModel';
-import { hasReasoningContent, isReasoningEvent, isRenderableStreamEvent } from '../models/streamEventsModel';
+import { hasReasoningContent, isReasoningEvent } from '../models/streamEventsModel';
 import TimelineItem from './TimelineItem';
-import WorkGroup from './WorkGroup';
+import TurnWorkGroup from './TurnWorkGroup';
 import { buildWorkGroups, partitionTurnTimeline, timelineItemKey } from '../models/workGroupModel';
+import { buildDefaultAssistantTimeline } from '../models/liveAssistantTurnModel';
 import MessageImageStrip from './MessageImageStrip';
 import AttachmentFileIcon from './AttachmentFileIcon';
 import { describeAttachmentFileType, formatAttachmentSize } from '../models/attachmentFileTypes';
-import NormalToolContent from './NormalToolContent';
 import MessageActions from './MessageActions';
-import { describeStreamEvent, badgeClassForEvent, toolDetailsForEvent, tokenMetaItemsForEvent, appendStreamingCursor, formatTimestamp } from '../models/messageRenderUtils';
-import { renderSafeMarkdown, sanitizeHtmlFragment } from '../../../lib/safeMarkdown';
-import { filterStreamEvents, filterTimelineItems } from '../models/streamFilters';
-import { selectAgentName } from '../../settings/state/preferences';
-
-function isTimelineStreamEvent(event) {
-  return isRenderableStreamEvent(event);
-}
+import { appendStreamingCursor } from '../models/messageRenderUtils';
+import { renderSafeMarkdown } from '../../../lib/safeMarkdown';
+import { filterTimelineItems } from '../models/streamFilters';
 
 function buildSyntheticReasoningEvent(
   reasoningText,
@@ -44,26 +37,6 @@ function buildSyntheticReasoningEvent(
   };
 }
 
-function buildTimelineStreamEvents(
-  streamEvents,
-  reasoningText,
-  reasoningTokenCount,
-  reasoningTimestamp,
-  messageId,
-  isStreaming = false,
-) {
-  const timelineEvents = streamEvents.filter((event) => isTimelineStreamEvent(event));
-  const hasReasoningEntry = timelineEvents.some((event) =>
-    isReasoningEvent(event) && hasReasoningContent(event)
-  );
-  const fallbackReasoningText = typeof reasoningText === 'string' ? reasoningText.trim() : '';
-
-  if (isStreaming || hasReasoningEntry || !fallbackReasoningText) {
-    return timelineEvents;
-  }
-
-  return [buildSyntheticReasoningEvent(reasoningText, reasoningTokenCount, reasoningTimestamp, messageId), ...timelineEvents];
-}
 
 // Backend-loaded (non-live) assistant messages carry reasoning as plain
 // fields rather than reasoning stream_events in their timelineItems -- see
@@ -135,40 +108,33 @@ function MessageView({
     error,
     isScheduled,
     streamEvents = [],
-    tokenCount = 0,
     reasoningTokenCount = 0,
     reasoningText = '',
     reasoningTimestamp = null,
     reasoningSegments = [],
-    model = '',
-    displayAgentName = '',
-    displayModelName = '',
-    displayToolCalls = [],
     timelineItems,
     workActive = false,
+    responseStatus = 'unknown',
     attachments = [],
   } = message;
+  const regenerateMessage = useMemo(
+    () => onRegenerate ? () => onRegenerate(messageId) : undefined,
+    [messageId, onRegenerate],
+  );
 
-  const hasTimelineItems = role === 'assistant' && Array.isArray(timelineItems) && timelineItems.length > 0;
-  const visibleStreamEvents = useMemo(() => {
-    if (hasTimelineItems) return [];
-
-    const timelineEvents = buildTimelineStreamEvents(
-      streamEvents,
-      reasoningText,
-      reasoningTokenCount,
-      reasoningTimestamp,
-      messageId,
-      isStreaming,
-    );
-    return filterStreamEvents(timelineEvents, streamEventFilter);
-  }, [hasTimelineItems, isStreaming, messageId, reasoningText, reasoningTimestamp, reasoningTokenCount, streamEvents, streamEventFilter]);
+  const isAssistant = role === 'assistant';
+  const assistantTimeline = useMemo(() => (
+    isAssistant
+      ? (Array.isArray(timelineItems) && timelineItems.length > 0
+        ? timelineItems : buildDefaultAssistantTimeline(message))
+      : []
+  ), [isAssistant, message, timelineItems]);
 
   const formattedContent = useMemo(() => {
-    if (!content || hasTimelineItems) return '';
+    if (!content || isAssistant) return '';
     const sanitized = renderSafeMarkdown(content);
     return isStreaming ? appendStreamingCursor(sanitized) : sanitized;
-  }, [content, hasTimelineItems, isStreaming]);
+  }, [content, isAssistant, isStreaming]);
   const messageContentRef = useRef(null);
   useMermaidRender(messageContentRef, formattedContent);
 
@@ -177,23 +143,6 @@ function MessageView({
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
   }, [timestamp]);
 
-  const formattedTokenCount = useMemo(() => {
-    if (role !== 'assistant' || isStreaming || !Number.isFinite(tokenCount) || tokenCount <= 0) {
-      return '';
-    }
-    const count = new Intl.NumberFormat().format(tokenCount);
-    return `${count} ${tokenCount === 1 ? 'token' : 'tokens'}`;
-  }, [isStreaming, role, tokenCount]);
-  const tokenMetaItems = [formattedTokenCount].filter(Boolean);
-  const agentName = useSelector(selectAgentName);
-  const displayName = role === 'assistant' && displayAgentName ? displayAgentName : agentName;
-  const displayModel = role === 'assistant' && displayModelName ? displayModelName : model;
-  const displayTools = useMemo(
-    () => (role === 'assistant' ? formatDisplayToolCalls(displayToolCalls) : ''),
-    [displayToolCalls, role],
-  );
-  const hasConnectedEvents = role === 'assistant' && visibleStreamEvents.length > 0;
-  const entryStateClass = hasConnectedEvents ? 'entry--chain-end' : 'entry--standalone';
 
   // Images belong to the message, even when their producing activity is hidden.
   const messageImages = useMemo(
@@ -201,14 +150,91 @@ function MessageView({
     [content, role, streamEvents],
   );
 
+
+  // Timeline turns render as: one collapsible work group (tools, reasoning,
+  // plan, steps), then delegated-agent cards, then the answer.
+  if (isAssistant) {
+    const fullTimelineItems = withReasoningFallback(assistantTimeline, {
+      reasoningText,
+      reasoningSegments,
+      reasoningTokenCount,
+      reasoningTimestamp,
+      messageId,
+      isStreaming,
+    });
+    // Visibility is a presentation choice, not a different end to the work.
+    // Skip rows emptied by tool commentary, as the visible answer path does.
+    const answerStartedAt = fullTimelineItems.find((item) =>
+      item.kind === 'assistant_message' && (item.error || (item.content || '').trim())
+    )?.timestamp ?? null;
+    const visibleTimelineItems = filterTimelineItems(fullTimelineItems, streamEventFilter);
+    const { workItems, cardItems, answerItems: allAnswerItems } = partitionTurnTimeline(visibleTimelineItems);
+    // An answer row whose text all turned out to be tool commentary (see
+    // claimToolCommentary in liveAssistantTurnModel.js) has nothing to show.
+    const answerItems = allAnswerItems.filter((item) => item.error || (item.content || '').trim());
+    const workGroups = buildWorkGroups(workItems);
+    // Work filters can hide every tool/reasoning row. Keep the turn's explicit
+    // terminal failure visible without reintroducing any filtered diagnostics.
+    const terminalStatusItems = responseStatus === 'failed' && workGroups.length === 0 && answerItems.length === 0
+      ? [{
+        kind: 'assistant_message',
+        id: `${messageId}-failed-status`,
+        content: '',
+        timestamp,
+        isStreaming: false,
+        error: false,
+        responseStatus: 'failed',
+        tokenCount: message.tokenCount,
+        finalCallTokenCount: message.finalCallTokenCount,
+        usageProvenance: message.usageProvenance,
+        displayAgentName: message.displayAgentName || '',
+        displayModelName: message.displayModelName,
+        displayToolCalls: message.displayToolCalls,
+      }]
+      : [];
+    return (
+      <div className="chat-entry-chain chat-entry-chain--connected">
+        {workGroups.length > 0 && (
+        <TurnWorkGroup
+          groups={workGroups}
+          workItems={workItems}
+          active={workActive}
+          endedAt={answerStartedAt}
+          responseStatus={responseStatus}
+          onRegenerate={regenerateMessage}
+          summaryMarkers={summaryMarkers}
+          summaryActivities={summaryActivities}
+        />
+        )}
+        {[...cardItems, ...answerItems, ...terminalStatusItems].map((item, idx) => (
+          <TimelineItem
+            key={timelineItemKey(item, idx)}
+            item={item}
+            itemIndex={idx}
+            onRegenerate={regenerateMessage}
+            summaryMarkers={summaryMarkers}
+            summaryActivities={summaryActivities}
+            showResponseStatus={workGroups.length === 0}
+          />
+        ))}
+        {messageImages.length > 0 && (
+          <div className="chat-entry-chain__images">
+            <MessageImageStrip images={messageImages} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+
   const messageEntry = (
-    <article className={`message-wrapper ${role} msg msg--${role} entry entry--${role === 'assistant' ? 'assistant' : 'user'} ${entryStateClass}`}>
+    <article className={`message-wrapper ${role} msg msg--${role} entry entry--user entry--standalone`}>
       <div className="entry__gutter" aria-hidden="true">
-        <span className={`entry__badge entry__badge--${role === 'assistant' ? 'assistant' : 'user'}${role === 'assistant' && isStreaming && !error ? ' activity-dot' : ''}`} />
+        <span className="entry__badge entry__badge--user" />
       </div>
       <div className="entry__main msg__entry-main">
         <div className="msg__head entry__head">
-          <span className="msg__role">{role === 'assistant' ? displayName : 'Message'}</span>
+          <span className="msg__role">Message</span>
           {isScheduled && (
             <span className="scheduled-badge muted">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -219,17 +245,8 @@ function MessageView({
             </span>
           )}
           <span className="msg__head-trailing">
-            {tokenMetaItems.map((item, index) => (
-              <Fragment key={`${item}-${index}`}>
-                {index > 0 && <span className="message-meta-separator dot-sep" aria-hidden="true" />}
-                <span className="msg__stat message-token-count">{item}</span>
-              </Fragment>
-            ))}
-            {displayModel && <span className="msg__model">{displayModel}</span>}
-            {displayTools && <span className="msg__model">{displayTools}</span>}
             <MessageActions
               content={content}
-              onRegenerate={role === 'assistant' ? onRegenerate : undefined}
             />
             {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
           </span>
@@ -275,76 +292,6 @@ function MessageView({
       </div>
     </article>
   );
-
-  // Timeline turns render as: one collapsible work group (tools, reasoning,
-  // plan, steps), then delegated-agent cards, then the answer.
-  if (hasTimelineItems) {
-    const fullTimelineItems = withReasoningFallback(timelineItems, {
-      reasoningText,
-      reasoningSegments,
-      reasoningTokenCount,
-      reasoningTimestamp,
-      messageId,
-      isStreaming,
-    });
-    // Visibility is a presentation choice, not a different end to the work.
-    // Skip rows emptied by tool commentary, as the visible answer path does.
-    const answerStartedAt = fullTimelineItems.find((item) =>
-      item.kind === 'assistant_message' && (item.error || (item.content || '').trim())
-    )?.timestamp ?? null;
-    const visibleTimelineItems = filterTimelineItems(fullTimelineItems, streamEventFilter);
-    const { workItems, cardItems, answerItems: allAnswerItems } = partitionTurnTimeline(visibleTimelineItems);
-    // An answer row whose text all turned out to be tool commentary (see
-    // claimToolCommentary in liveAssistantTurnModel.js) has nothing to show.
-    const answerItems = allAnswerItems.filter((item) => item.error || (item.content || '').trim());
-    const workGroups = buildWorkGroups(workItems);
-    return (
-      <div className="chat-entry-chain chat-entry-chain--connected">
-        {workGroups.map((group, index) => {
-          const isLatest = index === workGroups.length - 1;
-          return (
-            <WorkGroup
-              key={group.id}
-              heading={group.heading}
-              items={group.items}
-              active={workActive && isLatest}
-              endedAt={isLatest ? answerStartedAt : workGroups[index + 1].startedAt}
-              onRegenerate={onRegenerate}
-              summaryMarkers={summaryMarkers}
-              summaryActivities={summaryActivities}
-            />
-          );
-        })}
-        {[...cardItems, ...answerItems].map((item, idx) => (
-          <TimelineItem
-            key={timelineItemKey(item, idx)}
-            item={item}
-            itemIndex={idx}
-            onRegenerate={onRegenerate}
-            summaryMarkers={summaryMarkers}
-            summaryActivities={summaryActivities}
-          />
-        ))}
-        {messageImages.length > 0 && (
-          <div className="chat-entry-chain__images">
-            <MessageImageStrip images={messageImages} />
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // Fallback: no timelineItems — used by SSE-injected scheduled messages that
-  // are pushed directly to the messages array without going through a normalizer.
-  if (role === 'assistant') {
-    return (
-      <div className={`chat-entry-chain ${hasConnectedEvents ? 'chat-entry-chain--connected' : 'chat-entry-chain--single'}`}>
-        {hasConnectedEvents && <StreamEvents events={visibleStreamEvents} />}
-        {messageEntry}
-      </div>
-    );
-  }
-
   return (
     <>
       {messageEntry}
@@ -352,83 +299,6 @@ function MessageView({
   );
 }
 
-function StreamEvents({ events }) {
-  return (
-    <>
-      {events.map((event) => {
-        const description = describeStreamEvent(event);
-        const isReasoning = isReasoningEvent(event);
-        const badgeClassName = badgeClassForEvent(event.eventType || 'stream_event');
-        const tool = toolDetailsForEvent(event, description);
-        const tokenMetaItems = tokenMetaItemsForEvent(event);
-        const eventFormattedTime = formatTimestamp(event.timestamp);
-        return (
-          <article
-            key={event.id}
-            className={`message-stream-event chat-event-entry entry entry--chain-item ${event.eventType || 'stream_event'}`}
-            role="listitem"
-          >
-            <div className="entry__gutter" aria-hidden="true">
-              <span className={badgeClassName} />
-            </div>
-            <div className="entry__main">
-              <div className="message-stream-event-header entry__head">
-                <span className="entry__role">{description.title}</span>
-                <span className="msg__head-trailing">
-                  {tool?.isNormal
-                    ? (tool.duration && <span className="muted">{tool.duration}</span>)
-                    : (description.metaDetail && <span className="muted">{description.metaDetail}</span>)}
-                  {tokenMetaItems.map((item, index) => (
-                    <Fragment key={`${event.id}-${item}-${index}`}>
-                      {(index > 0 || tool?.duration) && <span className="message-meta-separator dot-sep" aria-hidden="true" />}
-                      <span className="msg__stat message-token-count">{item}</span>
-                    </Fragment>
-                  ))}
-                  {eventFormattedTime && <span className="msg__time entry__time">{eventFormattedTime}</span>}
-                </span>
-              </div>
-              {isReasoning && description.reasoningDetailHtml ? (
-                <details className="tool-event-disclosure reasoning-event-disclosure">
-                  <summary>
-                    <div
-                      className="message-content reasoning-event-disclosure__summary"
-                      dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.bodyHtml || '') }}
-                    />
-                    <span className="tool-event-disclosure__chevron" aria-hidden="true" />
-                  </summary>
-                  <div className="reasoning-event-disclosure__detail">
-                    <div
-                      className="message-content"
-                      dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.reasoningDetailHtml) }}
-                    />
-                  </div>
-                </details>
-              ) : description.bodyHtml && (
-                <div
-                  className="message-stream-event-body entry__content"
-                  dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.bodyHtml) }}
-                />
-              )}
-              {description.bodyDetail && !tool && !description.bodyHtml && (
-                <div className="message-stream-event-detail entry__content">{description.bodyDetail}</div>
-              )}
-              {tool?.isNormal ? <NormalToolContent tool={tool} /> : tool && (
-                <div className="tool chat-event-tool">
-                  <div className="tool__head">
-                    <span className="tool__kind">{tool.kind}</span>
-                    <span className="tool__desc">{tool.desc}</span>
-                  </div>
-                  {tool.command && <div className="tool__cmd"><span className="prompt">$</span>{tool.command}</div>}
-                  {tool.body && <pre className="tool__body tool__body--out">{tool.body}</pre>}
-                </div>
-              )}
-            </div>
-          </article>
-        );
-      })}
-    </>
-  );
-}
 
 // Memoized so a streamed token only re-renders the streaming message, not the
 // whole transcript. streamEventFilter is a stable useCallback in the parent,

@@ -7,10 +7,6 @@ import {
   deriveChatTitle,
   collectMessageImages,
   countToolInvocations,
-  countReasoningTokens,
-  committedReasoningTokenDisplay,
-  committedReasoningTokenCounts,
-  liveReasoningTokenAdjustment,
   countTokens,
   getTimeBucket,
   groupSessionItems,
@@ -26,6 +22,7 @@ import {
   isReopeningCurrentLocalDraft,
   shouldAdoptMaterializedDraft,
 } from '@frontend/features/chat/models/conversationModel';
+import { normalizeBackendChatMessage } from '@frontend/features/chat/models/chatSessionsModel';
 
 describe('chat selection race guards', () => {
   it('defers roster selection until draft bootstrap settles or an existing selection exists', () => {
@@ -218,6 +215,17 @@ describe('areChatTranscriptsEquivalent', () => {
     expect(areChatTranscriptsEquivalent(localTranscript, persistedTranscript)).toBe(true);
   });
 
+  it('keeps local row ownership when canonical user accounting only materializes absent zeros', () => {
+    const canonical = localTranscript.map((message, index) => normalizeBackendChatMessage({
+      id: `server-${index}`, role: message.role, content: message.content,
+    }, index));
+    expect(areChatTranscriptsEquivalent(localTranscript, canonical)).toBe(true);
+    expect(mergeCanonicalMessages(localTranscript, canonical)).toBe(localTranscript);
+    const reportedZeroOutput = canonical.map((message) => message.role === 'assistant'
+      ? { ...message, tokenCount: 0 } : message);
+    expect(areChatTranscriptsEquivalent(localTranscript, reportedZeroOutput)).toBe(false);
+  });
+
   it('detects a persisted final assistant-content difference', () => {
     const persistedTranscript = [
       { id: 'server-user-id', role: 'user', content: 'Explain the handoff.' },
@@ -303,6 +311,39 @@ describe('mergeCanonicalMessages', () => {
     expect(merged).toBe(localMessages);
     expect(merged[0]).toBe(localMessages[0]);
     expect(merged[1]).toBe(localMessages[1]);
+  });
+
+  it('replaces a same-content terminal row when canonical output accounting arrives', () => {
+    const local = [{
+      id: 'local-answer',
+      role: 'assistant',
+      content: 'Done',
+      tokenCount: null,
+      finalCallTokenCount: null,
+      responseStatus: 'running',
+      contextUsage: null,
+    }];
+    const canonical = [{
+      id: 'canonical-answer',
+      role: 'assistant',
+      content: 'Done',
+      tokenCount: 30,
+      finalCallTokenCount: 8,
+      responseStatus: 'completed',
+      contextUsage: {
+        inputTokens: 90,
+        outputTokens: 8,
+        totalTokens: 98,
+        profileName: 'general',
+        deployment: 'gpt-a',
+        providerId: 'provider-a',
+      },
+    }];
+
+    const merged = mergeCanonicalMessages(local, canonical);
+
+    expect(merged).toEqual(canonical);
+    expect(merged[0]).toBe(canonical[0]);
   });
 });
 
@@ -615,101 +656,6 @@ describe('countTokens', () => {
     ];
 
     expect(countTokens(messages)).toBe(15);
-  });
-});
-
-describe('countReasoningTokens', () => {
-  it('sums distinct finite reasoning totals across assistant messages', () => {
-    const messages = [
-      { role: 'assistant', reasoningTokenCount: 4 },
-      { role: 'assistant', reasoningTokenCount: 9 },
-      { role: 'assistant', reasoningTokenCount: 0 },
-      { role: 'assistant', reasoningTokenCount: '3' },
-      {},
-      { role: 'assistant', reasoningTokenCount: NaN },
-      { role: 'assistant', reasoningTokenCount: Infinity },
-      { role: 'assistant', reasoningTokenCount: -Infinity },
-      { role: 'assistant', reasoningTokenCount: 2 },
-    ];
-
-    expect(countReasoningTokens(messages)).toBe(15);
-  });
-  it('ignores missing, zero, invalid, and non-assistant reasoning counts', () => {
-    const messages = [
-      { role: 'assistant', reasoningTokenCount: 0 },
-      { role: 'assistant' },
-      { role: 'assistant', reasoningTokenCount: NaN },
-      { role: 'user', reasoningTokenCount: 99 },
-    ];
-
-    expect(countReasoningTokens(messages)).toBe(0);
-  });
-
-  it('sums provider reasoning counts across assistant messages', () => {
-    const messages = [
-      { role: 'assistant', reasoningTokenCount: 64 },
-      { role: 'user', reasoningTokenCount: 99 },
-      { role: 'assistant', reasoningTokenCount: 128 },
-    ];
-
-    expect(countReasoningTokens(messages)).toBe(192);
-  });
-});
-
-describe('committed and live reasoning token totals', () => {
-  it('combines explicit committed counts with text estimates for missing counts', () => {
-    const messages = [
-      { id: 'explicit', role: 'assistant', reasoningTokenCount: 7, reasoningText: 'ignored fallback' },
-      { id: 'estimated', role: 'assistant', reasoningText: '12345678' },
-      { id: 'zero-count', role: 'ai', reasoningTokenCount: 0, reasoningText: 'abcd' },
-      { id: 'user', role: 'user', reasoningTokenCount: 99, reasoningText: 'not included' },
-    ];
-
-    expect(committedReasoningTokenDisplay(messages)).toEqual({ total: 10, estimated: true });
-  });
-
-  it('keeps finite counts for identified assistant messages only', () => {
-    const counts = committedReasoningTokenCounts([
-      { id: 'assistant-1', role: 'assistant', reasoningTokenCount: 5 },
-      { id: 'ai-1', role: 'ai', reasoningTokenCount: 3 },
-      { id: 'user-1', role: 'user', reasoningTokenCount: 99 },
-      { id: 'missing', role: 'assistant' },
-      { id: 'invalid', role: 'assistant', reasoningTokenCount: NaN },
-      { role: 'assistant', reasoningTokenCount: 8 },
-    ]);
-
-    expect(counts).toEqual(new Map([
-      ['assistant-1', 5],
-      ['ai-1', 3],
-    ]));
-  });
-
-  it('subtracts the matching committed assistant count from the live total', () => {
-    const committedCounts = committedReasoningTokenCounts([
-      { id: 'assistant-1', role: 'assistant', reasoningTokenCount: 5 },
-    ]);
-
-    expect(liveReasoningTokenAdjustment({
-      assistantMessageId: 'assistant-1',
-      reasoningTokenCount: 8,
-      reasoningText: 'already persisted reasoning',
-    }, committedCounts)).toEqual({ total: 3, estimated: false });
-  });
-
-  it('estimates live reasoning text when no matching committed message exists', () => {
-    const committedCounts = committedReasoningTokenCounts([
-      { id: 'other-assistant', role: 'assistant', reasoningTokenCount: 4 },
-    ]);
-
-    expect(liveReasoningTokenAdjustment({
-      assistantMessageId: 'new-assistant',
-      reasoningTokenCount: 0,
-      reasoningText: '  1234567890  ',
-    }, committedCounts)).toEqual({ total: 3, estimated: true });
-  });
-
-  it('returns a zero adjustment when there is no live turn', () => {
-    expect(liveReasoningTokenAdjustment(null, new Map())).toEqual({ total: 0, estimated: false });
   });
 });
 

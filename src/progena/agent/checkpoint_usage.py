@@ -484,10 +484,6 @@ class CheckpointChatOpenAI(ChatOpenAI):
                             current_index,
                         )
                         if finalized_reasoning is not None:
-                            self._attach_usage_context(
-                                finalized_reasoning.message,
-                                self._usage_context(),
-                            )
                             if run_manager:
                                 run_manager.on_llm_new_token(
                                     finalized_reasoning.text,
@@ -579,10 +575,6 @@ class CheckpointChatOpenAI(ChatOpenAI):
                             current_index,
                         )
                         if finalized_reasoning is not None:
-                            self._attach_usage_context(
-                                finalized_reasoning.message,
-                                self._usage_context(),
-                            )
                             if run_manager:
                                 await run_manager.on_llm_new_token(
                                     finalized_reasoning.text,

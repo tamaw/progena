@@ -14,6 +14,46 @@ from src.backend.integrations.runtime_history import (
     RuntimeUnavailable,
 )
 from src.backend.storage.documents import CheckpointThreadSnapshot
+from src.progena.sessions.history import _summary_text
+
+
+@pytest.mark.parametrize(
+    ("summary_message", "expected"),
+    [
+        (
+            {
+                "content": "wrapper",
+                "additional_kwargs": {"progena_summary": {"summary": "Structured body"}},
+            },
+            "Structured body",
+        ),
+        (
+            {
+                "type": "human",
+                "data": {
+                    "content": "serialized wrapper",
+                    "additional_kwargs": {"progena_summary": {"summary": "Serialized body"}},
+                },
+            },
+            "Serialized body",
+        ),
+        (
+            {
+                "content": (
+                    "Context compacted.\n\n<summary>\n"
+                    "Keep literal <summary>inner</summary> Markdown.\n</summary>"
+                )
+            },
+            "Keep literal <summary>inner</summary> Markdown.",
+        ),
+        (
+            {"content": "Here is a summary of the conversation to date:\n\nNative no-archive body"},
+            "Native no-archive body",
+        ),
+    ],
+)
+def test_summary_projection_extracts_only_native_generated_body(summary_message, expected) -> None:
+    assert _summary_text({"summary_message": summary_message}) == expected
 
 
 def test_committed_root_marker_anchors_at_created_boundary_not_compaction_cutoff() -> None:

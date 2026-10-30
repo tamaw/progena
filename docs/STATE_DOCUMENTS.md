@@ -24,7 +24,7 @@ mounts:
   plugin skills and agents receive scoped read-only paths below `/skills/` and
   `/agents/`; native skills and native agent manifests remain bundled files.
 - Postgres-backed virtual document directories: `/tasks/`, `/workflows/`,
-  `/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/sessions/`, `/canvases/`,
+  `/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/conversations/`, `/canvases/`,
   `/artifacts/`, `/config/repos/` and the read-only `/config/channels/`. These
   are collections of documents, not subdirectories on disk. `/config/repos/` and
   `/config/channels/` shadow the broader `/config/` route for their files.
@@ -32,7 +32,7 @@ mounts:
   files for the active conversation. It is not a state-document mount.
 
 `/tasks/` exposes `board.json` plus one Markdown file per card; `/workflows/`,
-`/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/sessions/`, `/canvases/`, `/artifacts/`, and
+`/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/conversations/`, `/canvases/`, `/artifacts/`, and
 `/config/repos/` likewise map document collections to files. Session files
 render the chat body with YAML front matter; only supported front-matter fields
 are editable.

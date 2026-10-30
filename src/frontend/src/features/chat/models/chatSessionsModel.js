@@ -258,6 +258,17 @@ function buildToolStreamEvents(toolCalls, messageId) {
   return events;
 }
 
+const RESPONSE_STATUSES = new Set(['running', 'completed', 'failed', 'cancelled', 'interrupted', 'unknown']);
+
+function normalizeResponseStatus(value) {
+  if (value === 'incomplete') return 'interrupted';
+  return typeof value === 'string' && RESPONSE_STATUSES.has(value) ? value : 'unknown';
+}
+
+function normalizeOutputTokenCount(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
 export function normalizeBackendChatMessage(message, index) {
   if (!message || typeof message !== 'object') {
     return null;
@@ -272,6 +283,7 @@ export function normalizeBackendChatMessage(message, index) {
     ? message.content
     : String(message.content ?? '');
   const id = typeof message.id === 'string' ? message.id : `backend_msg_${index}_${timestamp}`;
+  const responseStatus = normalizeResponseStatus(message.response_status);
   const streamEvents = buildToolStreamEvents(
     Array.isArray(message.tool_calls) ? message.tool_calls : [],
     id,
@@ -283,10 +295,13 @@ export function normalizeBackendChatMessage(message, index) {
     content,
     timestamp,
     // Never reuse the display timestamp's Date.now() fallback for cache age.
-    responseTimestamp: role === 'assistant' && content.trim()
-      && !['cancelled', 'failed', 'incomplete'].includes(raw.response_metadata?.status)
+    responseTimestamp: role === 'assistant' && content.trim() && responseStatus === 'completed'
       ? toValidTimestamp(createdAt) : null,
-    tokenCount: Number.isFinite(message.token_count) ? message.token_count : 0,
+    tokenCount: normalizeOutputTokenCount(message.token_count),
+    finalCallTokenCount: normalizeOutputTokenCount(message.final_call_token_count),
+    // Backend projection is authoritative, including a reported zero.
+    usageProvenance: 'provider',
+    responseStatus,
     reasoningTokenCount: Number.isFinite(message.reasoning_token_count)
       ? message.reasoning_token_count
       : 0,

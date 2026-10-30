@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import React from 'react';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -70,6 +71,16 @@ describe('TimelineItem assistant messages', () => {
     expect(terminalMarkup).toContain('<p><strong>formatted terminal content</strong></p>');
   });
 
+  it('retains the scheduled assistant badge on a rebuilt timeline row', () => {
+    const markup = renderToStaticMarkup(React.createElement(TimelineItem, {
+      item: assistantItem({ isScheduled: true }),
+      itemIndex: 0,
+    }));
+
+    expect(markup).toContain('scheduled-badge');
+    expect(markup).toContain('Scheduled');
+  });
+
   it('renders sanitized reasoning disclosure content without throwing', () => {
     const bodyHtml = '<strong>Reasoning summary</strong>';
     const reasoningDetailHtml = '<p>Reasoning detail</p>';
@@ -127,11 +138,16 @@ describe('TimelineItem subagent summaries', () => {
       summaryActivities: [{
         id: 'nested-callback',
         scope: { kind: 'subagent', id: 'parent-task', label: 'Researcher' },
+      }, {
+        id: 'other-callback',
+        scope: { kind: 'subagent', id: 'another-task', label: 'Other' },
       }],
     }));
 
-    expect(markup).toContain('Conversation summarized');
-    expect(markup).toContain('Summarizing conversation…');
-    expect(markup).not.toContain('by Other');
+    const container = document.createElement('div');
+    container.innerHTML = markup;
+    expect(container.querySelector('#conversation-summary-nested-summary')).not.toBeNull();
+    expect(container.querySelector('#conversation-summary-other-summary')).toBeNull();
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
   });
 });

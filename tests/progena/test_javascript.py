@@ -15,10 +15,14 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool, tool
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.memory import InMemoryStore
 
 from src.progena.agent.adapters import create_deepagent_tools
-from src.progena.agent.factory import _create_javascript_middleware
+from src.progena.agent.factory import _create_javascript_middleware, create_progena_agent
 from src.progena.agent.middleware.schema_compaction import SchemaCompactionMiddleware
+from src.progena.config import ProgenaConfig
+from src.progena.persistence.store import LangGraphRuntimeStore
+from src.progena.state.manager import StateManager
 
 
 class _ToolCallingModel(FakeMessagesListChatModel):
@@ -52,6 +56,39 @@ def _tool_results(result: dict[str, Any]) -> list[str]:
             assert isinstance(message.content, str)
             results.append(message.content)
     return results
+
+
+async def test_root_agent_executes_javascript_with_compaction_middleware(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class RootModel(_ToolCallingModel):
+        @property
+        def _llm_type(self) -> str:
+            return "progena_provider"
+
+    model = RootModel(
+        responses=[_javascript_call("6 * 7", "root-calculation"), AIMessage(content="Calculated.")]
+    )
+    monkeypatch.setattr("src.progena.agent.factory.ProviderChatModel", lambda **kwargs: model)
+    config = ProgenaConfig()
+    config.storage.state_dir = tmp_path / "state"
+    config.storage.worktree_dir = tmp_path / "repos"
+    manager = StateManager(LangGraphRuntimeStore(InMemoryStore()))
+    await manager.initialize()
+    try:
+        graph = await create_progena_agent(
+            config=config,
+            state_manager=manager,
+            checkpointer=InMemorySaver(),
+            project_root=Path(__file__).resolve().parents[2],
+        )
+        result = await graph.ainvoke(
+            {"messages": [HumanMessage(content="Calculate six times seven.")]},
+            {"configurable": {"thread_id": "root-javascript"}},
+        )
+        assert _tool_results(result) == ["<result>42</result>"]
+    finally:
+        await manager.close()
 
 
 def test_javascript_has_no_host_or_unlisted_parent_tool_access() -> None:

@@ -1,53 +1,74 @@
-import { memo, useId, useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
+
 import { renderSafeMarkdown } from '../../../lib/safeMarkdown';
+import { formatTimestamp } from '../models/messageRenderUtils';
 import { summaryScopeLabel } from '../models/conversationSummaryModel';
 import styles from './ConversationSummaryMarker.module.css';
 
-function SummaryIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M3 3.5h10M3 6.75h10M3 10h6.5M3 13.25h4" />
-      <path d="m11.25 10.75 1.25 1.25 2-2" />
-    </svg>
-  );
+function scopeAttribution(scope) {
+  if (scope?.kind !== 'subagent') return '';
+  return `Subagent: ${summaryScopeLabel(scope)}`;
 }
 
 export const ConversationSummaryActivity = memo(function ConversationSummaryActivity({ activity }) {
-  const label = summaryScopeLabel(activity?.scope);
+  const attribution = scopeAttribution(activity?.scope);
   return (
-    <div className={styles.activity} role="status">
-      <span className={styles.activityIcon} aria-hidden="true"><SummaryIcon /></span>
-      <span>Summarizing conversation…</span>
-      {label === 'Conversation' ? null : <span className={styles.attribution}>for {label}</span>}
-    </div>
+    <article className={`${styles.activity} entry entry--chain-item`} role="status">
+      <div className="entry__gutter" aria-hidden="true">
+        <span className={`entry__badge ${styles.badge}`} />
+      </div>
+      <div className="entry__main">
+        <div className="entry__head">
+          <span className="entry__role">Compacting conversation</span>
+          {attribution && <span className={styles.attribution}>{attribution}</span>}
+        </div>
+      </div>
+    </article>
   );
 });
 
 const ConversationSummaryMarker = memo(function ConversationSummaryMarker({ marker }) {
-  const tooltipId = useId();
-  const [hasOpened, setHasOpened] = useState(false);
+  const [open, setOpen] = useState(false);
   const summaryHtml = useMemo(
-    () => (hasOpened ? renderSafeMarkdown(marker.summary) : ''),
-    [hasOpened, marker.summary],
+    // Compacted history can be large; Markdown remains lazy until expanded.
+    () => (open ? renderSafeMarkdown(marker.summary) : ''),
+    [open, marker.summary],
   );
-  const label = summaryScopeLabel(marker.scope);
-  const attribution = marker.scope?.kind === 'subagent' ? label : '';
+  const attribution = scopeAttribution(marker.scope);
+  const timestamp = formatTimestamp(marker.committedAt);
 
   return (
-    <aside className={styles.marker} aria-label={attribution ? `Conversation summarized by ${attribution}` : 'Conversation summarized'}>
-      <details className={styles.disclosure} onToggle={(event) => {
-        if (event.currentTarget.open) setHasOpened(true);
-      }}>
-        <summary className={styles.summary} aria-describedby={tooltipId}>
-          <span className={styles.icon} aria-hidden="true"><SummaryIcon /></span>
-          <span>Conversation summarized</span>
-          {attribution ? <span className={styles.attribution}>by {attribution}</span> : null}
-          <span className="tool-event-disclosure__chevron" aria-hidden="true" />
-        </summary>
-        {hasOpened ? <div className={`${styles.body} message-content`} dangerouslySetInnerHTML={{ __html: summaryHtml }} /> : null}
-      </details>
-      <span id={tooltipId} className={styles.tooltip} role="tooltip">Earlier messages remain available. Show the summary created at this point.</span>
-    </aside>
+    <article
+      id={`conversation-summary-${marker.id}`}
+      className={`${styles.marker} entry entry--chain-item`}
+      data-summary-scope={marker.scope?.id || undefined}
+      aria-label={attribution ? `Conversation compacted, ${attribution}` : 'Conversation compacted'}
+    >
+      <div className="entry__gutter" aria-hidden="true">
+        <span className={`entry__badge ${styles.badge}`} />
+      </div>
+      <div className="entry__main">
+        <details
+          className="tool-event-disclosure"
+          onToggle={(event) => setOpen(event.currentTarget.open)}
+        >
+          <summary className={`entry__head ${styles.summary}`}>
+            <span className="entry__role">Conversation compacted</span>
+            {attribution && <span className={styles.attribution}>{attribution}</span>}
+            <span className="msg__head-trailing">
+              {timestamp && <span className="msg__time entry__time">{timestamp}</span>}
+            </span>
+            <span className="tool-event-disclosure__chevron" aria-hidden="true" />
+          </summary>
+          {open && (
+            <div
+              className={`${styles.body} message-content`}
+              dangerouslySetInnerHTML={{ __html: summaryHtml }}
+            />
+          )}
+        </details>
+      </div>
+    </article>
   );
 });
 

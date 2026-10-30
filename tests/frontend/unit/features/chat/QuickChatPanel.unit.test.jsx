@@ -175,7 +175,7 @@ describe('QuickChatPanel committed-history reconciliation', () => {
     await mountQuickChat();
     await sendQuickChat();
     await act(async () => {
-      mocks.pendingCallbacks.onComplete('');
+      mocks.pendingCallbacks.onComplete('completed');
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -227,7 +227,7 @@ describe('QuickChatPanel committed-history reconciliation', () => {
     await mountQuickChat();
     await sendQuickChat();
     await act(async () => {
-      mocks.pendingCallbacks.onComplete('');
+      mocks.pendingCallbacks.onComplete('completed');
       await Promise.resolve();
       await Promise.resolve();
     });

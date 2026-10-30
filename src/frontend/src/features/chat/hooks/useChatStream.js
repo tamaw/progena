@@ -9,6 +9,7 @@ import {
   applyAssistantStreamEvent,
   applyAssistantChunk,
   finalizeLiveAssistantTurn,
+  resolveLiveTurnResponseStatus,
 } from '../models/liveAssistantTurnModel';
 import { createLiveAssistantTurnStore } from '../models/liveAssistantTurnStore';
 import { resolveBackgroundStreamOutcome, shouldPreserveStreamInBackground } from './chatStreamModel';
@@ -226,7 +227,7 @@ export function useChatStream({
         // `messages` mid-conversation visibly jumped the pane to the top.
         const finalTurn = liveTurnRef.current?.streamId === finishedStreamId ? liveTurnRef.current : null;
         const committed = finalTurn
-          ? finalizeLiveAssistantTurn(finalTurn, { status: 'completed', now: Date.now() })
+          ? finalizeLiveAssistantTurn(finalTurn, { status: 'unknown', now: Date.now() })
           : null;
         if (committed) {
           setMessages((prevMessages) => prevMessages.concat(committed));
@@ -402,11 +403,19 @@ export function useChatStream({
           if (!stale) {
             flushPendingText(streamId);
           }
+          // A stale stream must not resolve its outcome from the replacement
+          // turn: provider terminal metadata belongs to the turn's stream.
+          const completedTurn = liveTurnRef.current?.streamId === streamId
+            ? liveTurnRef.current
+            : null;
+          const responseStatus = resolveLiveTurnResponseStatus(completedTurn, status);
           const outcome = resolveBackgroundStreamOutcome({
             isStale: stale,
             originChatId,
             isViewingOrigin: selectedBackendChatIdRef?.current === originChatId,
-            resultType: status === 'cancelled' ? 'cancelled' : 'completed',
+            resultType: responseStatus === 'cancelled'
+              ? 'cancelled'
+              : (responseStatus === 'failed' || responseStatus === 'interrupted' ? 'error' : 'completed'),
           });
           if (stale && outcome.action === 'foreground') {
             return;
@@ -479,7 +488,7 @@ export function useChatStream({
           const turn = liveTurnRef.current;
           if (turn) {
             const committed = finalizeLiveAssistantTurn(turn, {
-              status: 'error',
+              status: 'failed',
               now: Date.now(),
               errorMessage: error.message,
             });

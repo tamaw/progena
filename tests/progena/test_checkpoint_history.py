@@ -179,7 +179,7 @@ def _timestamp(second: int) -> str:
 
 def _event(summary: str, created_at_index: int) -> dict[str, Any]:
     return {
-        "summary_message": {"content": summary},
+        "summary_message": {"content": f"<summary>\n{summary}\n</summary>"},
         "cutoff_index": created_at_index - 1,
         "created_at_index": created_at_index,
         "file_path": "/native/private-summary",

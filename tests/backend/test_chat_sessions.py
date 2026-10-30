@@ -320,7 +320,405 @@ class TestGetChatDetail:
             "profile_name": "general",
             "deployment": "final-model",
             "provider_id": "provider-1",
+            "compaction": None,
         }
+
+    def test_aggregates_root_tool_call_and_final_output_usage(self):
+        messages = _messages_from_checkpoint(
+            CheckpointThreadSnapshot(
+                thread_id="thread_output_breakdown",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "look it up"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "Checking.",
+                        "tool_calls": [{"id": "c1", "name": "lookup", "args": {}}],
+                        "usage_metadata": {"output_tokens": 5},
+                        "response_metadata": {"finish_reason": "tool_calls"},
+                    },
+                    {"id": "t1", "type": "tool", "tool_call_id": "c1", "content": "result"},
+                    {
+                        "id": "a2",
+                        "type": "ai",
+                        "content": "Here is the result.",
+                        "response_metadata": {
+                            "finish_reason": "stop",
+                            "token_usage": {"completion_tokens": 7},
+                        },
+                    },
+                ],
+            )
+        )
+
+        answer = messages[-1]
+
+        assert answer.token_count == 12
+        assert answer.final_call_token_count == 7
+        assert answer.response_status == "completed"
+        assert [call["id"] for call in answer.tool_calls] == ["c1"]
+
+    def test_preserves_zero_output_and_marks_missing_output_unknown(self):
+        zero_messages = _messages_from_checkpoint(
+            CheckpointThreadSnapshot(
+                thread_id="thread_zero_output",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "No tokens billed.",
+                        "usage_metadata": {"output_tokens": 0},
+                        "response_metadata": {"finish_reason": "stop"},
+                    },
+                ],
+            )
+        )
+        missing_messages = _messages_from_checkpoint(
+            CheckpointThreadSnapshot(
+                thread_id="thread_missing_output",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "Usage was not supplied.",
+                    },
+                ],
+            )
+        )
+
+        zero = zero_messages[-1]
+        missing = missing_messages[-1]
+
+        assert (zero.token_count, zero.final_call_token_count) == (0, 0)
+        assert zero.response_status == "completed"
+        assert (missing.token_count, missing.final_call_token_count) == (None, None)
+        assert missing.response_status == "unknown"
+
+    def test_retains_empty_provider_failure_with_a_canonical_terminal_row(self):
+        [user, failure] = _messages_from_checkpoint(
+            CheckpointThreadSnapshot(
+                thread_id="thread_content_filter",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "usage_metadata": {"output_tokens": 0},
+                        "response_metadata": {"finish_reason": "content_filter"},
+                    },
+                ],
+            )
+        )
+
+        assert user.content == "answer"
+        assert failure.id == "a1"
+        assert failure.content == "Error: Response failed."
+        assert failure.raw["content"] == ""
+        assert (failure.token_count, failure.final_call_token_count) == (0, 0)
+        assert failure.response_status == "failed"
+
+    def test_uses_existing_work_as_the_terminal_failure_indicator(self):
+        [user, failure] = _messages_from_checkpoint(
+            CheckpointThreadSnapshot(
+                thread_id="thread_failed_tool_work",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [{"id": "c1", "name": "lookup", "args": {}}],
+                        "response_metadata": {"status": "failed"},
+                    },
+                    {"id": "t1", "type": "tool", "tool_call_id": "c1", "content": "result"},
+                ],
+            )
+        )
+
+        assert user.content == "answer"
+        assert failure.content == ""
+        assert failure.response_status == "failed"
+        assert [call["id"] for call in failure.tool_calls] == ["c1"]
+
+    def test_retains_trailing_reasoning_only_usage_without_an_answer_boundary(self):
+        messages = _messages_from_checkpoint(
+            CheckpointThreadSnapshot(
+                thread_id="thread_reasoning_tail",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": [
+                            {
+                                "type": "reasoning",
+                                "summary": [{"type": "summary_text", "text": "I need more time."}],
+                            }
+                        ],
+                        "usage_metadata": {"output_tokens": 7},
+                    },
+                ],
+            )
+        )
+
+        tail = messages[-1]
+
+        assert tail.content == ""
+        assert tail.reasoning_text == "I need more time."
+        assert (tail.token_count, tail.final_call_token_count) == (7, None)
+        assert tail.response_status == "unknown"
+
+    def test_keeps_known_final_usage_when_provider_status_is_unknown(self):
+        messages = _messages_from_checkpoint(
+            CheckpointThreadSnapshot(
+                thread_id="thread_unknown_status_usage",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "Here is the answer.",
+                        "usage_metadata": {"output_tokens": 7},
+                    },
+                ],
+            )
+        )
+
+        answer = messages[-1]
+
+        assert (answer.token_count, answer.final_call_token_count) == (7, 7)
+        assert answer.response_status == "unknown"
+
+    def test_provider_incomplete_status_is_preserved_for_visible_answer(self):
+        messages = _messages_from_checkpoint(
+            CheckpointThreadSnapshot(
+                thread_id="thread_incomplete_status",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "Partial answer.",
+                        "usage_metadata": {"output_tokens": 7},
+                        "response_metadata": {"status": "incomplete"},
+                    },
+                ],
+            )
+        )
+
+        answer = messages[-1]
+
+        assert (answer.token_count, answer.final_call_token_count) == (7, 7)
+        assert answer.response_status == "interrupted"
+
+    def test_missing_tool_call_usage_makes_answer_group_unknown(self):
+        messages = _messages_from_checkpoint(
+            CheckpointThreadSnapshot(
+                thread_id="thread_partial_usage",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "look it up"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [{"id": "c1", "name": "lookup", "args": {}}],
+                        "usage_metadata": {"output_tokens": 6},
+                    },
+                    {"id": "t1", "type": "tool", "tool_call_id": "c1", "content": "result"},
+                    {
+                        "id": "a2",
+                        "type": "ai",
+                        "content": "Here is the result.",
+                        "usage_metadata": {"total_tokens": 99},
+                        "response_metadata": {"finish_reason": "stop"},
+                    },
+                ],
+            )
+        )
+
+        answer = messages[-1]
+
+        assert answer.token_count is None
+        assert answer.final_call_token_count is None
+        assert answer.response_status == "completed"
+
+    def test_response_status_uses_lifecycle_events_and_checkpoint_boundaries(self):
+        def projected_status(messages, index=-1):
+            return _messages_from_checkpoint(
+                CheckpointThreadSnapshot(
+                    thread_id="thread_status",
+                    checkpoint_id="cp-1",
+                    checkpoint_ts="2026-01-01T00:00:00Z",
+                    messages=messages,
+                )
+            )[index].response_status
+
+        assert (
+            projected_status(
+                [
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "Done.",
+                        "response_metadata": {"finish_reason": "stop"},
+                    },
+                ]
+            )
+            == "completed"
+        )
+        assert (
+            projected_status(
+                [
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "Partial.",
+                        "response_metadata": {"status": "cancelled"},
+                    },
+                ]
+            )
+            == "cancelled"
+        )
+        assert (
+            projected_status(
+                [
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "Provider error.",
+                        "response_metadata": {"status": "failed"},
+                    },
+                ]
+            )
+            == "failed"
+        )
+        assert (
+            projected_status(
+                [
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [{"id": "c1", "name": "lookup", "args": {}}],
+                    },
+                ]
+            )
+            == "unknown"
+        )
+        assert (
+            projected_status(
+                [
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": [
+                            {
+                                "type": "reasoning",
+                                "summary": [
+                                    {"type": "summary_text", "text": "**Answer**\n\nNot yet."}
+                                ],
+                            }
+                        ],
+                        "tool_calls": [{"id": "c1", "name": "lookup", "args": {}}],
+                    },
+                    {"id": "t1", "type": "tool", "tool_call_id": "c1", "content": "result"},
+                ]
+            )
+            == "unknown"
+        )
+
+        assert (
+            projected_status(
+                [
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [{"id": "c1", "name": "lookup", "args": {}}],
+                    },
+                    {"id": "u2", "type": "human", "content": "again"},
+                ],
+                -2,
+            )
+            == "interrupted"
+        )
+
+        assert (
+            projected_status(
+                [
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [{"id": "c1", "name": "lookup", "args": {}}],
+                    },
+                    {
+                        "id": "t1",
+                        "type": "tool",
+                        "tool_call_id": "c1",
+                        "content": "lookup failed",
+                        "status": "error",
+                    },
+                ]
+            )
+            == "unknown"
+        )
+
+    def test_reasoning_heading_is_not_an_answer_boundary(self):
+        messages = _messages_from_checkpoint(
+            CheckpointThreadSnapshot(
+                thread_id="thread_reasoning_only",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": [
+                            {
+                                "type": "reasoning",
+                                "summary": [
+                                    {"type": "summary_text", "text": "**Answer**\n\nNot yet."}
+                                ],
+                            }
+                        ],
+                    },
+                    {"id": "u2", "type": "human", "content": "again"},
+                ],
+            )
+        )
+
+        assert messages[-2].content == ""
+        assert messages[-2].response_status == "interrupted"
 
     def test_tool_result_preview_preserves_short_results_and_both_long_ends(self):
         short_result = "x" * 400
@@ -463,6 +861,132 @@ class TestGetChatDetail:
         ]
         calls = detail.messages[1].tool_calls
         assert [call.get("commentary") for call in calls] == ["I'll look at the repo first.", None]
+
+    def test_usage_totals_cover_retained_transcript_before_pagination_and_compaction(self):
+        store = InMemoryDocumentStore()
+        raw_messages = [
+            item
+            for index in range(51)
+            for item in (
+                {"id": f"u{index}", "type": "human", "content": f"question {index}"},
+                {
+                    "id": f"a{index}",
+                    "type": "ai",
+                    "content": f"answer {index}",
+                    "usage_metadata": {"output_tokens": 2, "reasoning_tokens": 1},
+                },
+            )
+        ]
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_usage_totals",
+                checkpoint_id="before-compaction",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=raw_messages,
+            )
+        )
+        _store_session(store, "thread_usage_totals")
+
+        before_compaction = get_chat_detail(store, "thread_usage_totals")
+
+        assert before_compaction is not None
+        assert before_compaction.usage_totals.model_dump() == {
+            "output_tokens": 102,
+            "reasoning_tokens": 51,
+            "output_coverage": "complete",
+            "reasoning_coverage": "complete",
+            "assistant_message_count": 51,
+            "output_token_message_count": 51,
+            "reasoning_token_message_count": 51,
+        }
+        page, has_more = paginate_chat_messages(before_compaction.messages, limit=50)
+        assert len(page) == 50
+        assert has_more is True
+
+        # Native compaction preserves the raw root messages even when the
+        # browser only renders a page and a summary boundary.
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_usage_totals",
+                checkpoint_id="after-compaction",
+                checkpoint_ts="2026-01-01T00:01:00Z",
+                messages=raw_messages,
+            )
+        )
+
+        after_compaction = get_chat_detail(store, "thread_usage_totals")
+
+        assert after_compaction is not None
+        assert after_compaction.usage_totals == before_compaction.usage_totals
+
+    def test_usage_totals_deduplicate_reemissions_and_mark_missing_provider_counts(self):
+        store = InMemoryDocumentStore()
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_partial_usage_totals",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "first persisted emission",
+                        "usage_metadata": {"output_tokens": 2, "reasoning_tokens": 1},
+                    },
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "final persisted emission",
+                        "usage_metadata": {"output_tokens": 5},
+                    },
+                    {
+                        "id": "a2",
+                        "type": "ai",
+                        "content": "output usage unavailable",
+                        "usage_metadata": {"reasoning_tokens": 3},
+                    },
+                ],
+            )
+        )
+        _store_session(store, "thread_partial_usage_totals")
+
+        detail = get_chat_detail(store, "thread_partial_usage_totals")
+
+        assert detail is not None
+        assert detail.usage_totals.model_dump() == {
+            "output_tokens": 5,
+            "reasoning_tokens": 4,
+            "output_coverage": "partial",
+            "reasoning_coverage": "complete",
+            "assistant_message_count": 2,
+            "output_token_message_count": 1,
+            "reasoning_token_message_count": 2,
+        }
+
+    def test_usage_totals_mark_an_unreported_metric_unknown(self):
+        store = InMemoryDocumentStore()
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_unknown_usage_totals",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[{"id": "a1", "type": "ai", "content": "No provider usage."}],
+            )
+        )
+        _store_session(store, "thread_unknown_usage_totals")
+
+        detail = get_chat_detail(store, "thread_unknown_usage_totals")
+
+        assert detail is not None
+        assert detail.usage_totals.model_dump() == {
+            "output_tokens": None,
+            "reasoning_tokens": None,
+            "output_coverage": "unknown",
+            "reasoning_coverage": "unknown",
+            "assistant_message_count": 1,
+            "output_token_message_count": 0,
+            "reasoning_token_message_count": 0,
+        }
 
 
 class TestPatchSessionDocument:

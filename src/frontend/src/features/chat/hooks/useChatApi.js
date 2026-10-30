@@ -161,7 +161,9 @@ export function useChatApi() {
       pending.onError?.(buildDesyncCompletionError(pending.desyncReason));
       setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
     } else {
-      pending.onComplete?.(terminalType === UI_EVENT.CHAT_RESPONSE_CANCELLED ? 'cancelled' : '');
+      pending.onComplete?.(
+        terminalType === UI_EVENT.CHAT_RESPONSE_CANCELLED ? 'cancelled' : 'completed',
+      );
       setConnectionState(deriveConnectionState(pendingStreamsRef.current));
     }
 

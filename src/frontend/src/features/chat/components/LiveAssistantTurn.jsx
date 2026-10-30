@@ -66,8 +66,8 @@ const LiveAssistantTurn = memo(function LiveAssistantTurn({
   if (liveAssistantTurn.assistantMessageId === null && liveAssistantTurn.timelineItems.length === 0) {
     return (
       <>
-        <PendingAssistantCursor />
         {activityRows}
+        <PendingAssistantCursor />
       </>
     );
   }

@@ -12,7 +12,8 @@
  *      create the assistant text row.
  *   3. First text chunk → materialises the assistant text row (assigns
  *      `assistantMessageId`, stamps `assistantTimestamp = now`).
- *   4. Later chunks → update only that assistant row's content/tokenCount.
+ *   4. Later chunks → update only that assistant row's content; provider
+ *      usage remains unknown until the terminal `usage_update`.
  *   5. Completion / error → finalises the turn into a committed message.
  *
  * Kept as a separate module so the state machine can be unit tested without
@@ -33,7 +34,11 @@ export function createLiveAssistantTurn({ streamId, startedAt }) {
     assistantMessageId: null,
     assistantTimestamp: null,
     content: '',
-    tokenCount: 0,
+    // Stream chunks are arbitrary transport frames, not provider tokens.
+    tokenCount: null,
+    finalCallTokenCount: null,
+    usageProvenance: null,
+    responseStatus: 'running',
     reasoningText: '',
     reasoningTokenCount: 0,
     cacheReadTokenCount: 0,
@@ -559,18 +564,54 @@ function applyStreamEventToTimeline(turn, streamEvent) {
     return turn;
   }
 
-  // usage_update is a terminal, non-visual metadata event (Azure's
-  // prompt-cache-read token count for this turn) -- same treatment as
-  // assistant_metadata: apply the value, never render its own timeline row.
+  // Context-only updates arrive during root tool loops; terminal updates add
+  // authoritative response totals/status. Omitted fields leave existing values
+  // untouched; never infer usage from transport chunks.
   if (nextEvent.eventType === 'usage_update') {
+    const metadata = nextEvent.metadata || {};
     const cacheReadTokens = extractCacheReadTokenCount(nextEvent);
-    const contextUsage = normalizeContextUsage(nextEvent.metadata?.context_usage);
-    if (cacheReadTokens === null && !contextUsage) return turn;
-    return {
+    const contextUsage = normalizeContextUsage(metadata.context_usage);
+    const hasOutputTokens = Object.hasOwn(metadata, 'output_tokens');
+    const hasFinalCallOutputTokens = Object.hasOwn(metadata, 'final_call_output_tokens');
+    const hasResponseStatus = Object.hasOwn(metadata, 'response_status');
+    const tokenCount = hasOutputTokens && Number.isSafeInteger(metadata.output_tokens) && metadata.output_tokens >= 0
+      ? metadata.output_tokens
+      : null;
+    const finalCallTokenCount = hasFinalCallOutputTokens
+      && Number.isSafeInteger(metadata.final_call_output_tokens)
+      && metadata.final_call_output_tokens >= 0
+      ? metadata.final_call_output_tokens
+      : null;
+    if (
+      cacheReadTokens === null
+      && !contextUsage
+      && !hasOutputTokens
+      && !hasFinalCallOutputTokens
+      && !hasResponseStatus
+    ) return turn;
+    const hasUsage = hasOutputTokens || hasFinalCallOutputTokens;
+    const next = {
       ...turn,
       ...(cacheReadTokens === null ? {} : { cacheReadTokenCount: cacheReadTokens }),
       ...(contextUsage ? { contextUsage } : {}),
+      ...(hasOutputTokens ? { tokenCount } : {}),
+      ...(hasFinalCallOutputTokens ? { finalCallTokenCount } : {}),
+      ...(hasUsage ? { usageProvenance: 'provider' } : {}),
+      ...(hasResponseStatus ? { responseStatus: providerResponseStatus(metadata.response_status) } : {}),
     };
+    if (!hasUsage && !hasResponseStatus) return next;
+    next.timelineItems = next.timelineItems.map((item) => (
+      item.kind === 'assistant_message'
+        ? {
+          ...item,
+          ...(hasOutputTokens ? { tokenCount } : {}),
+          ...(hasFinalCallOutputTokens ? { finalCallTokenCount } : {}),
+          ...(hasUsage ? { usageProvenance: 'provider' } : {}),
+          ...(hasResponseStatus ? { responseStatus: next.responseStatus } : {}),
+        }
+        : item
+    ));
+    return next;
   }
 
   const next = { ...turn };
@@ -685,7 +726,6 @@ function applyStreamEventToTimeline(turn, streamEvent) {
 export function applyAssistantChunk(turn, chunk, materialiseAt) {
   const next = { ...turn, lastActivity: 'text', pendingCommentary: (turn.pendingCommentary || '') + chunk };
   next.content += chunk;
-  next.tokenCount += 1;
 
   // Materialise the assistant row on first text chunk.
   if (!next.assistantMessageId) {
@@ -704,6 +744,9 @@ export function applyAssistantChunk(turn, chunk, materialiseAt) {
         displayModelName: next.displayModelName,
         displayToolCalls: next.displayToolCalls,
         tokenCount: next.tokenCount,
+        finalCallTokenCount: next.finalCallTokenCount,
+        usageProvenance: next.usageProvenance,
+        responseStatus: next.responseStatus,
         reasoningTokenCount: next.reasoningTokenCount,
         reasoningText: next.reasoningText,
       },
@@ -714,7 +757,7 @@ export function applyAssistantChunk(turn, chunk, materialiseAt) {
     let assistantIndex = -1;
     for (let index = 0; index < timelineItems.length; index += 1) {
       const item = timelineItems[index];
-      if (item.kind === 'assistant_message' && item.id === next.assistantMessageId) {
+      if (item.kind === 'assistant_message' && item.id === turn.assistantMessageId) {
         assistantIndex = index;
         break;
       }
@@ -725,6 +768,9 @@ export function applyAssistantChunk(turn, chunk, materialiseAt) {
         ...item,
         content: next.content,
         tokenCount: next.tokenCount,
+        finalCallTokenCount: next.finalCallTokenCount,
+        usageProvenance: next.usageProvenance,
+        responseStatus: next.responseStatus,
         reasoningTokenCount: next.reasoningTokenCount,
         reasoningText: next.reasoningText,
       };
@@ -828,6 +874,8 @@ export function buildDefaultAssistantTimeline(message) {
   if (!message || message.role !== 'assistant') return undefined;
   const items = [];
   const streamEvents = Array.isArray(message.streamEvents) ? message.streamEvents : [];
+  const hasProviderUsage = message.usageProvenance === 'provider';
+
 
   const todosByCallId = collectTodosByToolCallId(streamEvents);
   const subagentGroups = collectSubagentGroups(streamEvents);
@@ -928,10 +976,22 @@ export function buildDefaultAssistantTimeline(message) {
     timestamp: message.timestamp,
     isStreaming: !!message.isStreaming,
     error: !!message.error,
+    isScheduled: message.isScheduled === true,
     displayAgentName: typeof message.displayAgentName === 'string' ? message.displayAgentName : '',
-    displayModelName: typeof message.displayModelName === 'string' ? message.displayModelName : '',
+    displayModelName: typeof message.displayModelName === 'string' && message.displayModelName
+      ? message.displayModelName
+      : (typeof message.model === 'string' ? message.model : ''),
     displayToolCalls: Array.isArray(message.displayToolCalls) ? message.displayToolCalls : [],
-    tokenCount: Number.isFinite(message.tokenCount) ? message.tokenCount : 0,
+    tokenCount: hasProviderUsage && Number.isSafeInteger(message.tokenCount) && message.tokenCount >= 0
+      ? message.tokenCount
+      : null,
+    finalCallTokenCount: hasProviderUsage
+      && Number.isSafeInteger(message.finalCallTokenCount)
+      && message.finalCallTokenCount >= 0
+      ? message.finalCallTokenCount
+      : null,
+    usageProvenance: hasProviderUsage ? 'provider' : null,
+    responseStatus: typeof message.responseStatus === 'string' ? message.responseStatus : 'unknown',
     reasoningTokenCount: Number.isFinite(message.reasoningTokenCount) ? message.reasoningTokenCount : 0,
     reasoningText: typeof message.reasoningText === 'string' ? message.reasoningText : '',
   });
@@ -966,6 +1026,9 @@ export function toCommittedAssistantMessage(turn) {
     timestamp: turn.assistantTimestamp || turn.startedAt,
     responseTimestamp: turn.responseTimestamp ?? null,
     tokenCount: turn.tokenCount,
+    finalCallTokenCount: turn.finalCallTokenCount,
+    usageProvenance: turn.usageProvenance,
+    responseStatus: turn.responseStatus,
     reasoningTokenCount: turn.reasoningTokenCount,
     cacheReadTokenCount: turn.cacheReadTokenCount,
     contextUsage: turn.contextUsage,
@@ -981,25 +1044,56 @@ export function toCommittedAssistantMessage(turn) {
   };
 }
 
+function terminalResponseStatus(status) {
+  if (status === 'completed' || status === 'success') return 'completed';
+  if (status === 'failed' || status === 'error') return 'failed';
+  if (status === 'cancelled') return 'cancelled';
+  if (status === 'interrupted') return 'interrupted';
+  return 'unknown';
+}
+
+function providerResponseStatus(status) {
+  if (status === 'incomplete') return 'interrupted';
+  return ['running', 'completed', 'failed', 'cancelled', 'interrupted', 'unknown'].includes(status)
+    ? status
+    : 'unknown';
+}
+
+export function resolveLiveTurnResponseStatus(turn, status) {
+  const transportStatus = terminalResponseStatus(status);
+  if (transportStatus === 'failed' || transportStatus === 'cancelled' || transportStatus === 'interrupted') {
+    return transportStatus;
+  }
+  const providerStatus = providerResponseStatus(turn?.responseStatus);
+  if (transportStatus !== 'completed') {
+    return ['completed', 'failed', 'cancelled', 'interrupted'].includes(providerStatus)
+      ? providerStatus : 'unknown';
+  }
+  return providerStatus === 'running' ? 'completed' : providerStatus;
+}
+
 /**
  * Finalise a live assistant turn — freeze it and return a committed message.
  *
  * Rules:
  * - `completed` with visible output → normal message.
  * - `completed` with **no** visible output → "(No response text)" placeholder.
+ * - a provider-reported failure without visible output → a concise failed row.
  * - `cancelled` with no visible output → drop (return null).
  * - `cancelled` with partial visible output → keep, append cancelled suffix once.
- * - `error` → message with `Error: ...` content and `error: true`.
+ * - transport `error` → message with `Error: ...` content and `error: true`.
  */
 export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
   if (!turn) return null;
 
+  const transportStatus = terminalResponseStatus(status);
+  const responseStatus = resolveLiveTurnResponseStatus(turn, status);
   const hasVisibleOutput = (
     turn.content.trim().length > 0
     || hasVisibleTimelineOutput(turn.timelineItems)
   );
 
-  if (status === 'cancelled' && !hasVisibleOutput) {
+  if (responseStatus === 'cancelled' && !hasVisibleOutput) {
     return null;
   }
 
@@ -1007,11 +1101,14 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
   // starts the cache countdown; tool-only or empty turns never do.
   const hasAnswerText = typeof turn.content === 'string' && turn.content.trim().length > 0;
   const finalTurn = {
-    ...turn, isStreaming: false, assistantTimestamp: now || turn.startedAt,
-    responseTimestamp: status === 'completed' && hasAnswerText ? now || turn.startedAt : null,
+    ...turn,
+    isStreaming: false,
+    responseStatus,
+    assistantTimestamp: now || turn.startedAt,
+    responseTimestamp: responseStatus === 'completed' && hasAnswerText ? now || turn.startedAt : null,
   };
 
-  if (status === 'error') {
+  if (responseStatus === 'failed' && transportStatus === 'failed') {
     const errorContent = `Error: ${errorMessage || 'Unknown error'}`;
     const priorContent = typeof turn.content === 'string' ? turn.content : '';
     finalTurn.content = errorContent;
@@ -1026,6 +1123,9 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
           ...item,
           isStreaming: false,
           tokenCount: finalTurn.tokenCount,
+          finalCallTokenCount: finalTurn.finalCallTokenCount,
+          usageProvenance: finalTurn.usageProvenance,
+          responseStatus: finalTurn.responseStatus,
           reasoningTokenCount: finalTurn.reasoningTokenCount,
           reasoningText: finalTurn.reasoningText,
         }
@@ -1047,6 +1147,9 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
         displayModelName: finalTurn.displayModelName,
         displayToolCalls: finalTurn.displayToolCalls,
         tokenCount: finalTurn.tokenCount,
+        finalCallTokenCount: finalTurn.finalCallTokenCount,
+        usageProvenance: finalTurn.usageProvenance,
+        responseStatus: finalTurn.responseStatus,
         reasoningTokenCount: finalTurn.reasoningTokenCount,
         reasoningText: finalTurn.reasoningText,
       });
@@ -1063,6 +1166,9 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
       displayModelName: finalTurn.displayModelName,
       displayToolCalls: finalTurn.displayToolCalls,
       tokenCount: finalTurn.tokenCount,
+      finalCallTokenCount: finalTurn.finalCallTokenCount,
+      usageProvenance: finalTurn.usageProvenance,
+      responseStatus: finalTurn.responseStatus,
       reasoningTokenCount: finalTurn.reasoningTokenCount,
       reasoningText: finalTurn.reasoningText,
     });
@@ -1070,7 +1176,39 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
     return toCommittedAssistantMessage(finalTurn);
   }
 
-  if (status === 'completed' && !hasVisibleOutput) {
+  if (responseStatus === 'failed' && !hasVisibleOutput) {
+    // The transport can complete after a provider content filter or similar
+    // terminal rejection. There is no provider text to preserve, but the
+    // failed terminal state still needs a visible, durable row.
+    finalTurn.content = `Error: ${typeof errorMessage === 'string' && errorMessage.trim() ? errorMessage.trim() : 'Response failed.'}`;
+    finalTurn.error = true;
+    if (!finalTurn.assistantMessageId) {
+      finalTurn.assistantMessageId = `${finalTurn.streamId}-assistant`;
+    }
+    finalTurn.timelineItems = [
+      ...(Array.isArray(finalTurn.timelineItems) ? finalTurn.timelineItems : []),
+      {
+        kind: 'assistant_message',
+        id: `${finalTurn.assistantMessageId}-error`,
+        content: finalTurn.content,
+        timestamp: finalTurn.assistantTimestamp,
+        isStreaming: false,
+        error: true,
+        displayAgentName: finalTurn.displayAgentName || '',
+        displayModelName: finalTurn.displayModelName,
+        displayToolCalls: finalTurn.displayToolCalls,
+        tokenCount: finalTurn.tokenCount,
+        finalCallTokenCount: finalTurn.finalCallTokenCount,
+        usageProvenance: finalTurn.usageProvenance,
+        responseStatus: finalTurn.responseStatus,
+        reasoningTokenCount: finalTurn.reasoningTokenCount,
+        reasoningText: finalTurn.reasoningText,
+      },
+    ];
+    return toCommittedAssistantMessage(finalTurn);
+  }
+
+  if (responseStatus === 'completed' && !hasVisibleOutput) {
     // No text and no visible events — show placeholder so the cursor doesn't vanish.
     finalTurn.content = '(No response text)';
     if (!finalTurn.assistantMessageId) {
@@ -1088,6 +1226,9 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
         displayModelName: finalTurn.displayModelName,
         displayToolCalls: finalTurn.displayToolCalls,
         tokenCount: finalTurn.tokenCount,
+        finalCallTokenCount: finalTurn.finalCallTokenCount,
+        usageProvenance: finalTurn.usageProvenance,
+        responseStatus: finalTurn.responseStatus,
         reasoningTokenCount: finalTurn.reasoningTokenCount,
         reasoningText: finalTurn.reasoningText,
       },
@@ -1095,7 +1236,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
     return toCommittedAssistantMessage(finalTurn);
   }
 
-  if (status === 'cancelled' && hasVisibleOutput) {
+  if (responseStatus === 'cancelled' && hasVisibleOutput) {
     finalTurn.content = finalTurn.content.endsWith(CANCELLED_SUFFIX)
       ? finalTurn.content
       : `${finalTurn.content}${CANCELLED_SUFFIX}`;
@@ -1109,6 +1250,9 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
         isStreaming: false,
         content: finalTurn.content,
         tokenCount: finalTurn.tokenCount,
+        finalCallTokenCount: finalTurn.finalCallTokenCount,
+        usageProvenance: finalTurn.usageProvenance,
+        responseStatus: finalTurn.responseStatus,
         reasoningTokenCount: finalTurn.reasoningTokenCount,
         reasoningText: finalTurn.reasoningText,
       };

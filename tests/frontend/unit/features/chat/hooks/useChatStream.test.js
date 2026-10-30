@@ -20,7 +20,7 @@ vi.mock('@frontend/features/chat/models/liveAssistantTurnModel', async (importOr
 });
 
 import { useChatStream } from '@frontend/features/chat/hooks/useChatStream';
-import { markChatGenerating } from '@frontend/features/chat/state/actions';
+import { clearChatErrored, markChatErrored, markChatGenerating } from '@frontend/features/chat/state/actions';
 import { applyAssistantChunk } from '@frontend/features/chat/models/liveAssistantTurnModel';
 
 afterEach(() => {
@@ -254,6 +254,70 @@ describe('useChatStream', () => {
     expect(hook.liveTurnStore.getSnapshot()).toMatchObject({
       content: 'B first B queued',
     });
+  });
+
+  it('does not resolve a background completion from a newer failed turn', () => {
+    const scheduledFrames = [];
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback) => {
+      scheduledFrames.push(callback);
+      return scheduledFrames.length;
+    }));
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    let now = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => ++now);
+
+    const completionHandlers = [];
+    const streamEventHandlers = [];
+    const dispatch = vi.fn();
+    let committedMessages = [];
+    const setMessages = vi.fn((update) => {
+      committedMessages = update(committedMessages);
+    });
+    const hook = useChatStream({
+      messages: [],
+      setMessages,
+      activeBackendChat: { thread_id: 'thread-a' },
+      selectedBackendChatId: 'thread-a',
+      threadId: 'thread-a',
+      sendMessageStream: vi.fn((content, history, onChunk, onComplete, onError, onStreamEvent) => {
+        completionHandlers.push(onComplete);
+        streamEventHandlers.push(onStreamEvent);
+        return new Promise(() => {});
+      }),
+      cancelStream: vi.fn(),
+      dispatch,
+      getApiUrl: vi.fn(),
+      show: vi.fn(),
+      selectedBackendChatIdRef: { current: 'thread-b' },
+      reloadOpenChat: vi.fn(),
+      onForegroundStreamStarted: vi.fn(),
+      requestForegroundReconciliation: vi.fn(),
+    });
+
+    // A remains in the background while B becomes the live turn. B reports a
+    // provider failure even though its transport completes successfully.
+    void hook.handleSend('A slow response');
+    void hook.handleSend('B failed response');
+    streamEventHandlers[1]({
+      event_type: 'usage_update',
+      metadata: { response_status: 'failed' },
+    });
+    completionHandlers[1]('completed');
+
+    dispatch.mockClear();
+    completionHandlers[0]('completed');
+
+    // A's completion may update A's background card, but must not borrow B's
+    // provider failure and mark A as failed.
+    expect(dispatch).not.toHaveBeenCalledWith(markChatErrored('thread-a'));
+    expect(dispatch).toHaveBeenCalledWith(clearChatErrored('thread-a'));
+
+    scheduledFrames[0]();
+    scheduledFrames[1]();
+    expect(committedMessages).toContainEqual(expect.objectContaining({
+      role: 'assistant',
+      responseStatus: 'failed',
+    }));
   });
 
   it('releases the foreground turn after preserving its stream in the background', () => {

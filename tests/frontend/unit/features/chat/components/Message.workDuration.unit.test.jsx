@@ -10,12 +10,12 @@ vi.mock('react-redux', () => ({
 
 function renderTurn(message) {
   const container = document.createElement('div');
-  container.innerHTML = renderToStaticMarkup(React.createElement(Message, { message }));
+  container.innerHTML = renderToStaticMarkup(<Message message={message} />);
   return container;
 }
 
 describe('Message work duration', () => {
-  it('uses the first nonempty answer boundary after narration becomes tool commentary', () => {
+  it('measures root work through the first nonempty answer after tool commentary', () => {
     const tool = (id, eventType, timestamp) => ({
       kind: 'stream_event',
       id,
@@ -31,17 +31,21 @@ describe('Message work duration', () => {
     const message = {
       id: 'turn',
       role: 'assistant',
+      responseStatus: 'completed',
       timelineItems: [
-        tool('start', 'tool_start', 1000),
-        tool('result', 'tool_result', 1200),
+        tool('start', 'tool_start', 1_000),
+        tool('result', 'tool_result', 1_200),
         // The model's earlier narration was claimed as tool commentary.
-        { kind: 'assistant_message', id: 'commentary', content: '', timestamp: 1300 },
-        { kind: 'assistant_message', id: 'answer', content: 'Finished answer', timestamp: 18000 },
+        { kind: 'assistant_message', id: 'commentary', content: '', timestamp: 1_300 },
+        { kind: 'assistant_message', id: 'answer', content: 'Finished answer', timestamp: 18_000 },
       ],
     };
 
     const visible = renderTurn(message);
-    expect(visible.querySelector('.work-group__title').textContent).toContain('17s');
-    expect(visible.querySelector('.msg--assistant').textContent).toContain('Finished answer');
+    const work = visible.querySelector('section[aria-label="Assistant work"]');
+    const summary = work?.querySelector('button[aria-expanded="false"]');
+
+    expect(summary?.textContent).toContain('Worked for 17s');
+    expect(visible.textContent).toContain('Finished answer');
   });
 });

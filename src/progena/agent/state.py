@@ -9,9 +9,10 @@ edited again, while a new thread picks up the latest revision.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any, NotRequired
 
 from deepagents.graph import DeepAgentState
+from langchain.agents.middleware.types import PrivateStateAttr
 
 
 def merge_routine_revisions(
@@ -28,3 +29,7 @@ class ProgenaAgentState(DeepAgentState):
     # variable) — kept in sync with ROUTINE_REVISIONS_STATE_KEY in
     # src.progena.routines.subagent.
     routine_revisions: Annotated[dict[str, str], merge_routine_revisions]
+    # This private checkpoint field tracks the most recent honest native
+    # compaction comparison. The public descriptor itself stays on AI message
+    # response metadata, where history already reads provider footprints.
+    _context_compaction: Annotated[NotRequired[dict[str, Any] | None], PrivateStateAttr]

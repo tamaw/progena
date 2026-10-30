@@ -102,19 +102,104 @@ Auto-selection should run once after the correlated session snapshot hydrates
 the Redux list, respecting pinned and bucket ordering; it must not reselect on
 unrelated replay or later global updates.
 
+## Message output usage and completed work
+
+Message `tokenCount` is provider-reported output for the root-model calls grouped
+with that reply; `finalCallTokenCount` is the final visible model call's output.
+The tooltip separates the response total, intermediate calls and final call.
+Input and delegated-agent usage are excluded; reasoning is a subset of output,
+not a second amount to add. A known zero is valid. Missing usage remains unknown:
+neither stream-chunk counts nor text-length estimates may become exact output
+usage. A known final-call count remains visible if an earlier call makes the
+whole-response total unavailable.
+
+The existing dedicated-stream `usage_update` carries authoritative nullable
+`output_tokens`, `final_call_output_tokens` and canonical `response_status`.
+Provider/native interruption survives a completed transport callback. Actual
+transport errors and cancellation remain terminal. Canonical reconciliation
+compares usage and status as well as content, so unchanged text can still receive
+correct completed counts.
+
+Scratch history and handoff messages retain exact counts only with
+`usageProvenance: 'provider'`. Legacy local transport-frame counters are cleared
+from both the message and any denormalized assistant timeline rows; text and
+other transcript data remain available. A canonical history read supplies fresh
+provider counts. This does not authorize storing backend transcripts locally.
+
+All assistant rendering uses the same timeline path. Root work is one outer
+keyboard-operable disclosure using the existing work-summary row styling.
+Completed work starts collapsed; the detailed reasoning sections/tool rows stay
+inside. Delegated-agent cards, the answer and conversation-summary markers remain
+outside this disclosure. Native reasoning headings remain verbatim inside;
+they are not rewritten as evidence that an action succeeded.
+
+Work state comes from actual response/provider/native interrupt evidence:
+completed, failed, cancelled, interrupted, or neutral unknown. A failed tool is
+shown as a failure count, not automatically as a failed whole response. Elapsed
+work time remains the transcript span through answer start, not tool CPU time.
+Provider-only failure with no visible answer/work produces a terminal failure
+row even when transport completes normally; canonical reload preserves it.
+Partial answers and visible work keep their failure status without a duplicate
+synthetic row. Background completion may use provider status only from its own
+stream ID, never from the currently selected conversation's live turn.
+
+The conversation header uses backend `session.usage_totals`, not sums over the
+currently loaded message page or streamed reasoning text. These are cumulative
+root output tokens and their reasoning subset; partial coverage is shown as a
+recorded lower bound. Unknown output stays unavailable; unreported reasoning
+displays `0` in the header without changing backend coverage. Selection and accepted canonical
+completion reconciliation replace the totals within the same thread/ownership
+fences as the transcript. The live answer is not added twice.
+Absent reasoning/cache counters normalize to the canonical zero for equivalence,
+so materializing user-message defaults does not retire/remount a frozen answer.
+Unknown output usage remains distinct from reported zero.
+
+The composer circle remains the latest provider-reported context footprint,
+updated through existing context-only `usage_update` events during root tool
+loops. After automatic native compaction, its styled tooltip can show the
+observed input decrease from `context_usage.compaction`. The reduction is
+explicitly not exact tokenizer savings, is available only after comparable
+provider usage arrives, and never subtracts from lifetime header totals.
+The retained summary/recent messages still occupy context; do not reset to zero.
+New ChatGPT reasoning streams attach model attribution only once so chunk merging
+does not concatenate deployment names and hide the circle through a failed
+profile match. Existing malformed historical attribution is not guessed or
+rewritten. Old summaries without recorded comparable footprints do not acquire
+invented savings figures.
+
+Message token labels omit model names. Token, context and cache metric details
+use `ChatInfoTooltip`, a portal reusing the shared `chat-info-tooltip` styling,
+fixed 8px from the viewport top and horizontally clamped. Details are compact
+label/value rows; observed input reductions and cache estimates remain labelled.
+Hover does not introduce a help cursor. Focus exposes the same information;
+Escape, blur/pointer exit and scrolling dismiss it without moving focus.
+
+
+
 ## Conversation summaries
 
 Native summarization uses the existing response-content activity and committed
-chat history. `Summarizing conversation…` is transient model-generation activity;
+chat history. `Compacting conversation` is transient model-generation activity;
 it is never promoted to a completed marker merely because a callback finished.
-Committed `summary_markers` render as keyboard-expandable `Conversation summarized`
-separators with bounded, sanitized Markdown. Their stable scope/anchor identities
-preserve placement and deduplication during paging and canonical reconciliation.
+Committed `summary_markers` render as keyboard-expandable transcript rows with
+an amber dot, shared message header/body styling, and sanitized Markdown.
+The expanded body is the actual generated summary, not its model-facing wrapper.
+Stable scope/anchor identities preserve placement and deduplication during paging
+and canonical reconciliation; collapsed rows do not parse Markdown.
+The committed row is labelled `Conversation compacted`, avoiding regional
+summarise/summarize spelling differences without changing event names.
+
+Transcript gutters keep user messages standalone. Intermediate response rows
+connect to the next response dot across the actual row gap, including expanded
+summaries/work; they stop before another user message. Assistant and pending
+answer dots receive from above and never continue below. Live compaction
+activity precedes the pending answer cursor, so it remains inside the response
+chain rather than following its terminal dot.
 
 Original messages remain visible and searchable. Nested summaries stay inside
 their subagent activity. Completed markers must remain visible with debug events
 filtered out, and when a frozen live owner suppresses its historical answer twin.
-Do not introduce another EventSource, polling, exact duration or savings claims.
+Do not introduce another EventSource, polling, or exact duration/savings claims.
 Tool-output offload and prompt-argument trimming indicators are not implemented.
 
 

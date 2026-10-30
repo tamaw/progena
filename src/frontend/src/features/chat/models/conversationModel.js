@@ -175,21 +175,31 @@ function persistedStreamEvents(streamEvents) {
   ));
 }
 
-// tokenCount/reasoningTokenCount/cacheReadTokenCount/model are deliberately
-// excluded here. The locally-streamed tokenCount is a crude per-chunk
-// counter (see liveAssistantTurnModel.js's `next.tokenCount += 1`), not the
-// backend's real tokenizer-based count, so it never matches the canonical
-// value the reconciliation fetch returns -- and `model` is frequently unset
-// on the local turn. Including either meant every foreground send's own
-// reconciliation looked non-equivalent to its own canonical echo purely on
-// cosmetic metadata, forcing an unwanted swap-and-remount of the row the
-// user is looking at (visible as a "refresh" moments after every reply).
-// Those numbers self-correct the next time the thread is genuinely reloaded
-// (switch/refresh); they aren't worth discarding the row over.
+// Provider usage is part of the rendered terminal result. Once a canonical
+// response arrives, replace a same-content local row when any provider-reported
+// usage/status value differs so live, reloaded, and reconciled views agree.
+function contextUsageRenderSignature(contextUsage) {
+  return {
+    inputTokens: contextUsage?.inputTokens ?? null,
+    outputTokens: contextUsage?.outputTokens ?? null,
+    totalTokens: contextUsage?.totalTokens ?? null,
+    profileName: contextUsage?.profileName ?? '',
+    deployment: contextUsage?.deployment ?? '',
+    providerId: contextUsage?.providerId ?? '',
+    compaction: contextUsage?.compaction ?? null,
+  };
+}
+
 function messageRenderSignature(message) {
   return {
     role: typeof message?.role === 'string' ? message.role : '',
     content: typeof message?.content === 'string' ? message.content : '',
+    tokenCount: message?.tokenCount ?? null,
+    finalCallTokenCount: message?.finalCallTokenCount ?? null,
+    reasoningTokenCount: message?.reasoningTokenCount ?? 0,
+    cacheReadTokenCount: message?.cacheReadTokenCount ?? 0,
+    responseStatus: typeof message?.responseStatus === 'string' ? message.responseStatus : 'unknown',
+    contextUsage: contextUsageRenderSignature(message?.contextUsage),
     reasoningText: typeof message?.reasoningText === 'string' ? message.reasoningText : '',
     agentName: typeof message?.agentName === 'string' ? message.agentName : '',
     streamEvents: persistedStreamEvents(message?.streamEvents).map(eventRenderSignature),
@@ -429,72 +439,6 @@ export function countTokens(messages) {
     (total, message) => total + (Number.isFinite(message?.tokenCount) ? message.tokenCount : 0),
     0,
   );
-}
-
-export function countReasoningTokens(messages) {
-  return messages.reduce((total, message) => {
-    if (message?.role !== 'assistant' && message?.role !== 'ai') return total;
-    return total + (Number.isFinite(message.reasoningTokenCount) ? message.reasoningTokenCount : 0);
-  }, 0);
-}
-
-function estimateReasoningTokens(reasoningText) {
-  const length = typeof reasoningText === 'string' ? reasoningText.trim().length : 0;
-  return length > 0 ? Math.round(length / 4) : 0;
-}
-
-export function committedReasoningTokenDisplay(messages) {
-  let total = countReasoningTokens(messages);
-  let estimated = false;
-  for (const message of messages) {
-    if (message?.role !== 'assistant' && message?.role !== 'ai') continue;
-    if (Number.isFinite(message.reasoningTokenCount) && message.reasoningTokenCount > 0) continue;
-    const estimate = estimateReasoningTokens(message.reasoningText);
-    if (estimate > 0) {
-      total += estimate;
-      estimated = true;
-    }
-  }
-  return { total, estimated };
-}
-
-export function committedReasoningTokenCounts(messages) {
-  const counts = new Map();
-  for (const message of messages) {
-    if (!message?.id || (message.role !== 'assistant' && message.role !== 'ai')) continue;
-    if (Number.isFinite(message.reasoningTokenCount)) {
-      counts.set(message.id, message.reasoningTokenCount);
-    }
-  }
-  return counts;
-}
-
-export function liveReasoningTokenAdjustment(liveAssistantTurn, committedCounts) {
-  if (!liveAssistantTurn) {
-    return { total: 0, estimated: false };
-  }
-
-  const hasCommitted = Boolean(
-    liveAssistantTurn.assistantMessageId
-    && committedCounts.has(liveAssistantTurn.assistantMessageId),
-  );
-  const liveCount = Number.isFinite(liveAssistantTurn.reasoningTokenCount)
-    ? liveAssistantTurn.reasoningTokenCount
-    : 0;
-  const committedCount = hasCommitted
-    ? committedCounts.get(liveAssistantTurn.assistantMessageId)
-    : 0;
-
-  if (liveCount > committedCount) {
-    return { total: liveCount - committedCount, estimated: false };
-  }
-  if (!hasCommitted) {
-    const estimate = estimateReasoningTokens(liveAssistantTurn.reasoningText);
-    if (estimate > 0) {
-      return { total: estimate, estimated: true };
-    }
-  }
-  return { total: 0, estimated: false };
 }
 
 function getFirstMessageTimestamp(messages) {

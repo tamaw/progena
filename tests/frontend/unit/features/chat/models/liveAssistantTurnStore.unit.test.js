@@ -133,4 +133,18 @@ describe('createLiveAssistantTurnStore', () => {
       { ...turn.contextUsage, totalTokens: 140 },
     ]);
   });
+
+  it('publishes a compaction reduction and a savings-only update at the same footprint', () => {
+    const store = createLiveAssistantTurnStore();
+    const snapshots = [];
+    store.subscribeContextUsage(() => snapshots.push(store.getContextUsageSnapshot()));
+    store.set({ contextUsage: { inputTokens: 80000, outputTokens: 1000, totalTokens: 81000 } });
+    store.set({ contextUsage: { inputTokens: 12000, outputTokens: 500, totalTokens: 12500 } });
+    store.set({ contextUsage: {
+      inputTokens: 12000, outputTokens: 500, totalTokens: 12500,
+      compaction: { beforeInputTokens: 80000, afterInputTokens: 12000, freedInputTokens: 68000 },
+    } });
+    expect(snapshots.map((usage) => usage.totalTokens)).toEqual([81000, 12500, 12500]);
+    expect(snapshots.at(-1).compaction.freedInputTokens).toBe(68000);
+  });
 });

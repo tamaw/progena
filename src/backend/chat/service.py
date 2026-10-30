@@ -33,10 +33,13 @@ from src.progena.sessions.messages import (
     extract_context_usage,
     extract_display_metadata,
     extract_message_text,
+    extract_output_token_count,
     extract_reasoning_token_count,
     extract_reasoning_trace,
+    extract_response_status,
     tool_result_failed,
 )
+from src.progena.sessions.models import ResponseStatus
 from src.progena.sessions.titles import ATTACHMENT_CONTEXT_MARKER, display_title
 from src.progena.utils import normalize_utc_timestamp, parse_provider_timestamp
 
@@ -110,6 +113,18 @@ class ReasoningSegment(BaseModel):
     created_at: str | None = None
 
 
+UsageCoverage = Literal["complete", "partial", "unknown"]
+
+
+class ContextCompaction(BaseModel):
+    """One comparable provider-measured context contraction."""
+
+    before_input_tokens: int = Field(ge=0)
+    after_input_tokens: int = Field(ge=0)
+    freed_input_tokens: int = Field(ge=0)
+    measurement: Literal["comparable_provider_footprints"]
+
+
 class ContextUsage(BaseModel):
     """Latest main-agent model call token footprint and optional attribution."""
 
@@ -119,6 +134,20 @@ class ContextUsage(BaseModel):
     profile_name: str | None = None
     deployment: str | None = None
     provider_id: str | None = None
+    compaction: ContextCompaction | None = None
+
+
+class ConversationUsageTotals(BaseModel):
+    """Root assistant output accounting from the retained checkpoint transcript."""
+
+    output_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    output_coverage: UsageCoverage = "unknown"
+    reasoning_coverage: UsageCoverage = "unknown"
+    # Distinct durable root assistant message IDs represented in this projection.
+    assistant_message_count: int = 0
+    output_token_message_count: int = 0
+    reasoning_token_message_count: int = 0
 
 
 class ChatMessage(BaseModel):
@@ -127,7 +156,11 @@ class ChatMessage(BaseModel):
     content: str
     created_at: str | None = None
     reasoning_timestamp: str | None = None
-    token_count: int = 0
+    # Aggregate provider-reported output from every root model call in this answer.
+    token_count: int | None = None
+    # Provider-reported output from the visible terminal model call alone.
+    final_call_token_count: int | None = None
+    response_status: ResponseStatus = "unknown"
     reasoning_token_count: int = 0
     cache_read_token_count: int = 0
     reasoning_text: str = ""
@@ -169,6 +202,8 @@ class ChatSessionSummary(BaseModel):
     # The runtime could not be reached to read this chat's messages, so
     # message_count/preview are unknown (not zero) until it is back.
     history_unavailable: bool = False
+    # Full root transcript accounting; independent of the visible message page.
+    usage_totals: ConversationUsageTotals = Field(default_factory=ConversationUsageTotals)
 
 
 class ChatInterruption(BaseModel):
@@ -348,6 +383,76 @@ def _raw_message_role(raw: Any) -> str:
     return role or "assistant"
 
 
+def _durable_raw_message_id(raw: Any) -> str | None:
+    """Return a persisted LangChain message ID without inventing a page-local one."""
+    raw_id = raw.get("id") if isinstance(raw, dict) else getattr(raw, "id", None)
+    return str(raw_id) if isinstance(raw_id, str) and raw_id else None
+
+
+def _usage_metric_total(
+    values: list[int | None], *, unidentifiable_assistant_count: int
+) -> tuple[int | None, UsageCoverage, int]:
+    known_values = [value for value in values if value is not None]
+    known_count = len(known_values)
+    if not values and not unidentifiable_assistant_count:
+        return 0, "complete", 0
+    if known_count == len(values) and not unidentifiable_assistant_count:
+        return sum(known_values), "complete", known_count
+    if known_count:
+        return sum(known_values), "partial", known_count
+    return None, "unknown", 0
+
+
+def _usage_totals_from_checkpoint(
+    snapshot: CheckpointThreadSnapshot | None,
+) -> ConversationUsageTotals:
+    """Account for the full retained root transcript before any page is sliced.
+
+    Native conversation summaries retain the root LangChain messages.  The
+    checkpoint projection is therefore the canonical full-session source; it
+    intentionally excludes subagent namespaces and does not walk historical
+    checkpoint revisions.  A durable ID is required so repeated persisted
+    emissions cannot inflate the totals.
+    """
+    if snapshot is None or not snapshot.messages_available:
+        return ConversationUsageTotals()
+
+    usage_by_message_id: dict[str, tuple[int | None, int | None]] = {}
+    unidentifiable_assistant_count = 0
+    for raw in snapshot.messages:
+        if _raw_message_role(raw) != "assistant":
+            continue
+        message_id = _durable_raw_message_id(raw)
+        if message_id is None:
+            unidentifiable_assistant_count += 1
+            continue
+        previous_output, previous_reasoning = usage_by_message_id.get(message_id, (None, None))
+        output_tokens = extract_output_token_count(raw)
+        reasoning_tokens = extract_reasoning_token_count(raw)
+        usage_by_message_id[message_id] = (
+            output_tokens if output_tokens is not None else previous_output,
+            reasoning_tokens if reasoning_tokens is not None else previous_reasoning,
+        )
+
+    output_tokens, output_coverage, output_count = _usage_metric_total(
+        [usage[0] for usage in usage_by_message_id.values()],
+        unidentifiable_assistant_count=unidentifiable_assistant_count,
+    )
+    reasoning_tokens, reasoning_coverage, reasoning_count = _usage_metric_total(
+        [usage[1] for usage in usage_by_message_id.values()],
+        unidentifiable_assistant_count=unidentifiable_assistant_count,
+    )
+    return ConversationUsageTotals(
+        output_tokens=output_tokens,
+        reasoning_tokens=reasoning_tokens,
+        output_coverage=output_coverage,
+        reasoning_coverage=reasoning_coverage,
+        assistant_message_count=len(usage_by_message_id),
+        output_token_message_count=output_count,
+        reasoning_token_message_count=reasoning_count,
+    )
+
+
 def _raw_message_created_at(raw: Any) -> str | None:
     if isinstance(raw, dict):
         created_at = raw.get("created_at")
@@ -372,16 +477,20 @@ def _raw_message_created_at(raw: Any) -> str | None:
     return _provider_timestamp(created_at)
 
 
-def _raw_message_token_count(raw: Any) -> int:
-    usage = (
-        raw.get("usage_metadata") if isinstance(raw, dict) else getattr(raw, "usage_metadata", None)
-    )
-    if not isinstance(usage, dict):
-        return 0
-    value = (
-        usage.get("output_tokens") or usage.get("completion_tokens") or usage.get("total_tokens")
-    )
-    return int(value) if isinstance(value, int | float) else 0
+def _answer_response_status(raw: Any) -> ResponseStatus:
+    """Classify a visible final model answer from persisted terminal metadata."""
+    return extract_response_status(raw)
+
+
+def _unfinished_tool_group_status(
+    explicit_status: ResponseStatus | None,
+    *,
+    interrupted_by_next_human: bool,
+) -> ResponseStatus:
+    """Classify a synthetic group only from a persisted terminal boundary."""
+    if explicit_status in {"failed", "cancelled", "interrupted"}:
+        return explicit_status
+    return "interrupted" if interrupted_by_next_human else "unknown"
 
 
 def _raw_message_payload(raw: Any) -> dict[str, Any]:
@@ -464,12 +573,7 @@ CANCELLED_SUFFIX = " [Cancelled]"
 
 def _is_cancelled_reply(raw: Any) -> bool:
     """An assistant reply the runtime saved from a cancelled turn."""
-    metadata = (
-        raw.get("response_metadata")
-        if isinstance(raw, dict)
-        else getattr(raw, "response_metadata", None)
-    )
-    return isinstance(metadata, dict) and metadata.get("status") == "cancelled"
+    return extract_response_status(raw) == "cancelled"
 
 
 def _chat_message_from_raw(
@@ -488,11 +592,21 @@ def _chat_message_from_raw(
     content = _raw_message_content(raw)
     if role == "assistant" and _is_cancelled_reply(raw):
         content = f"{content}{CANCELLED_SUFFIX}" if content else CANCELLED_SUFFIX.strip()
-    if not content and role == "assistant":
-        return None
+    response_status: ResponseStatus = (
+        _answer_response_status(raw) if role == "assistant" else "unknown"
+    )
     reasoning_text = extract_reasoning_trace(raw) or ""
+    if not content and role == "assistant":
+        if response_status != "failed":
+            return None
+        # Retain an otherwise empty provider failure so a reload can expose
+        # its terminal status and authoritative usage. Work/reasoning already
+        # renders its own failed status, so only a truly empty turn needs text.
+        if not tool_calls and not reasoning_text:
+            content = "Error: Response failed."
     created_at = _raw_message_created_at(raw)
     display_metadata = _display_metadata_from_raw(raw)
+    final_call_token_count = extract_output_token_count(raw) if role == "assistant" else None
     return ChatMessage(
         id=_raw_message_id(raw, index),
         role=role,
@@ -502,7 +616,9 @@ def _chat_message_from_raw(
         reasoning_segments=(
             [ReasoningSegment(text=reasoning_text, created_at=created_at)] if reasoning_text else []
         ),
-        token_count=_raw_message_token_count(raw),
+        token_count=extract_output_token_count(raw),
+        final_call_token_count=final_call_token_count,
+        response_status=response_status,
         reasoning_token_count=extract_reasoning_token_count(raw) or 0,
         cache_read_token_count=extract_cache_read_token_count(raw) or 0,
         reasoning_text=reasoning_text,
@@ -521,13 +637,16 @@ def _chat_message_from_raw(
 
 
 def _raw_message_content(raw: Any) -> str:
-    if isinstance(raw, dict):
-        return _strip_attachment_context(
-            _message_text(raw.get("content") or raw.get("message") or raw.get("text"))
+    """Return visible text without treating reasoning blocks as an answer."""
+    text = extract_message_text(raw)
+    if text is None:
+        fallback = (
+            raw.get("message") or raw.get("text")
+            if isinstance(raw, dict)
+            else getattr(raw, "message", None) or getattr(raw, "text", None)
         )
-    return _strip_attachment_context(
-        extract_message_text(raw) or _message_text(getattr(raw, "content", ""))
-    )
+        text = _message_text(fallback)
+    return _strip_attachment_context(text)
 
 
 def _tool_message_duration(raw: Any) -> int | float | None:
@@ -622,7 +741,8 @@ def _messages_from_checkpoint(
 
     messages: list[ChatMessage] = []
     pending_tool_calls: list[dict[str, Any]] = []
-    pending_token_count = 0
+    pending_token_count: int | None = 0
+    pending_terminal_status: ResponseStatus | None = None
     pending_reasoning_token_count = 0
     pending_cache_read_token_count = 0
     pending_reasoning_parts: list[ReasoningSegment] = []
@@ -641,13 +761,17 @@ def _messages_from_checkpoint(
                 synthetic.reasoning_segments = pending_reasoning_parts
                 synthetic.reasoning_timestamp = pending_reasoning_timestamp
                 synthetic.token_count = pending_token_count
+                synthetic.response_status = _unfinished_tool_group_status(
+                    pending_terminal_status, interrupted_by_next_human=True
+                )
                 synthetic.reasoning_token_count = pending_reasoning_token_count
                 synthetic.cache_read_token_count = pending_cache_read_token_count
                 synthetic.context_usage = pending_context_usage
                 messages.append(synthetic)
                 pending_tool_calls = []
-            pending_reasoning_parts = []
             pending_token_count = 0
+            pending_terminal_status = None
+            pending_reasoning_parts = []
             pending_reasoning_token_count = 0
             pending_cache_read_token_count = 0
             pending_reasoning_timestamp = None
@@ -659,7 +783,15 @@ def _messages_from_checkpoint(
                 if (context_usage := extract_context_usage(raw))
                 else None
             )
-            pending_token_count += _raw_message_token_count(raw)
+            output_token_count = extract_output_token_count(raw)
+            pending_token_count = (
+                pending_token_count + output_token_count
+                if pending_token_count is not None and output_token_count is not None
+                else None
+            )
+            raw_response_status = extract_response_status(raw)
+            if raw_response_status in {"failed", "cancelled", "interrupted"}:
+                pending_terminal_status = raw_response_status
             pending_reasoning_token_count += extract_reasoning_token_count(raw) or 0
             pending_cache_read_token_count = (
                 extract_cache_read_token_count(raw) or pending_cache_read_token_count
@@ -699,6 +831,8 @@ def _messages_from_checkpoint(
         message = _chat_message_from_raw(raw, index, tool_calls=tool_calls_to_attach)
         if message is not None:
             if role == "assistant":
+                if any(call["id"] not in tool_results for call in pending_tool_calls):
+                    message.final_call_token_count = None
                 message.reasoning_text = _join_reasoning(pending_reasoning_parts)
                 message.reasoning_segments = pending_reasoning_parts
                 message.token_count = pending_token_count
@@ -706,8 +840,9 @@ def _messages_from_checkpoint(
                 message.cache_read_token_count = pending_cache_read_token_count
                 message.reasoning_timestamp = pending_reasoning_timestamp
                 message.context_usage = pending_context_usage
-                pending_reasoning_parts = []
                 pending_token_count = 0
+                pending_terminal_status = None
+                pending_reasoning_parts = []
                 pending_reasoning_token_count = 0
                 pending_cache_read_token_count = 0
                 pending_reasoning_timestamp = None
@@ -716,9 +851,12 @@ def _messages_from_checkpoint(
                 pending_tool_calls = []
             messages.append(message)
 
-    if pending_tool_calls:
+    if pending_tool_calls or pending_reasoning_parts:
         synthetic = _synthetic_pending_tool_call_message(pending_tool_calls, len(snapshot.messages))
         synthetic.token_count = pending_token_count
+        synthetic.response_status = _unfinished_tool_group_status(
+            pending_terminal_status, interrupted_by_next_human=False
+        )
         synthetic.reasoning_token_count = pending_reasoning_token_count
         synthetic.cache_read_token_count = pending_cache_read_token_count
         synthetic.reasoning_text = _join_reasoning(pending_reasoning_parts)
@@ -816,6 +954,7 @@ def _summary_from_session(
     payload: dict[str, Any],
     *,
     messages: list[ChatMessage],
+    usage_totals: ConversationUsageTotals,
     history_unavailable: bool = False,
 ) -> ChatSessionSummary:
     preview = next((message.content for message in reversed(messages) if message.content), "")
@@ -830,6 +969,7 @@ def _summary_from_session(
         message_count=len(messages),
         preview=preview,
         history_unavailable=history_unavailable,
+        usage_totals=usage_totals,
     )
 
 
@@ -865,6 +1005,7 @@ def list_chat_sessions(
             _summary_from_session(
                 payload,
                 messages=messages,
+                usage_totals=_usage_totals_from_checkpoint(snapshot),
                 history_unavailable=history_unavailable,
             )
         )
@@ -883,7 +1024,11 @@ def get_chat_detail(
     snapshot = store.get_checkpoint_thread_snapshot(thread_id, include_summary_occurrences=True)
     messages = _messages_from_checkpoint(snapshot)
     summary_markers = _summary_markers_from_checkpoint(snapshot, messages)
-    summary = _summary_from_session(payload, messages=messages)
+    summary = _summary_from_session(
+        payload,
+        messages=messages,
+        usage_totals=_usage_totals_from_checkpoint(snapshot),
+    )
     return ChatSessionDetail(
         **summary.model_dump(), messages=messages, summary_markers=summary_markers
     )
@@ -906,7 +1051,10 @@ def get_chat_summary(store: BackendDocumentStore, thread_id: str) -> ChatSession
         history_unavailable = True
     messages = _messages_from_checkpoint(snapshot)
     return _summary_from_session(
-        payload, messages=messages, history_unavailable=history_unavailable
+        payload,
+        messages=messages,
+        usage_totals=_usage_totals_from_checkpoint(snapshot),
+        history_unavailable=history_unavailable,
     )
 
 

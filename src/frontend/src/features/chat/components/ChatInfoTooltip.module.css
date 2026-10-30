@@ -1,0 +1,34 @@
+.control {
+  cursor: inherit;
+}
+
+.control:focus-visible {
+  outline: 2px solid var(--color-focus-ring, var(--color-primary));
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.tooltip:global(.chat-info-tooltip) {
+  position: fixed;
+  top: 8px;
+  bottom: auto;
+  left: 8px;
+  right: auto;
+  max-width: calc(100vw - 16px);
+  opacity: 1;
+  transform: none;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.row > :last-child {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}

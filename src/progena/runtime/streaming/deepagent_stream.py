@@ -37,8 +37,10 @@ from src.progena.sessions.messages import (
     extract_context_usage,
     extract_display_metadata,
     extract_message_text,
+    extract_output_token_count,
     extract_reasoning_token_count,
     extract_reasoning_trace,
+    extract_response_status,
     extract_token_usage,
     get_last_ai_message,
     summarize_message_schema,
@@ -159,6 +161,9 @@ class DeepAgentSSEStream:
         self._counted_usage_by_message_id: dict[str, int] = {}
         self._turn_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         self._counted_token_usage_by_message_id: dict[str, dict[str, int]] = {}
+        self._output_tokens_by_message_id: dict[str, int | None] = {}
+        self._emitted_context_usage_by_message_id: dict[str, dict[str, Any]] = {}
+        self._turn_interrupted = False
         self._summary_thread_id: str | None = None
         # Per-node wall-time tracer (PROGENA_TRACE_TIMING). Reset per
         # stream() invocation so a reused instance does not carry stale
@@ -184,6 +189,9 @@ class DeepAgentSSEStream:
         self._counted_usage_by_message_id.clear()
         self._turn_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         self._counted_token_usage_by_message_id.clear()
+        self._output_tokens_by_message_id.clear()
+        self._emitted_context_usage_by_message_id.clear()
+        self._turn_interrupted = False
 
         additional_kwargs: dict[str, Any] = {
             "created_at": received_at if received_at is not None else time.time()
@@ -412,6 +420,23 @@ class DeepAgentSSEStream:
         # object identity across updates held in state.
         return msg_id if isinstance(msg_id, str) and msg_id else f"obj:{id(msg)}"
 
+    def _live_context_usage_item(self, message: Any) -> dict[str, Any] | None:
+        """Return one changed complete root provider footprint for the live circle."""
+        context_usage = extract_context_usage(message)
+        if context_usage is None:
+            return None
+        key = self._message_usage_key(message)
+        previous = self._emitted_context_usage_by_message_id.get(key)
+        if previous == context_usage:
+            return None
+        self._emitted_context_usage_by_message_id[key] = context_usage
+        return {
+            "type": "stream_event",
+            "event_type": "usage_update",
+            "content": "",
+            "metadata": {"context_usage": context_usage},
+        }
+
     def _accumulate_reasoning_usage(self, messages: Any) -> None:
         """Accumulate only positive per-message reasoning-usage deltas."""
         if not isinstance(messages, list):
@@ -432,18 +457,40 @@ class DeepAgentSSEStream:
             self._turn_reasoning_tokens += count - previous
 
     def _accumulate_token_usage(self, messages: Any) -> None:
-        """Accumulate only positive per-message input/output/total deltas."""
+        """Track latest provider output alongside cumulative billing deltas."""
         if not isinstance(messages, list):
             return
-        for msg in messages:
+        # Native tool-call repair can re-emit the full message history. Only
+        # calls after its latest user boundary belong to this displayed turn.
+        last_user_index = -1
+        for index in range(len(messages) - 1, -1, -1):
+            candidate = messages[index]
+            msg_type = (
+                candidate.get("type")
+                if isinstance(candidate, dict)
+                else getattr(candidate, "type", None)
+            )
+            role = (
+                candidate.get("role")
+                if isinstance(candidate, dict)
+                else getattr(candidate, "role", None)
+            )
+            if msg_type == "human" or role == "user":
+                last_user_index = index
+                break
+        for index, msg in enumerate(messages):
             msg_type = msg.get("type") if isinstance(msg, dict) else getattr(msg, "type", None)
             role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
             if msg_type != "ai" and role != "assistant":
                 continue
+            key = self._message_usage_key(msg)
+            if index > last_user_index:
+                self._output_tokens_by_message_id[key] = extract_output_token_count(msg)
+            else:
+                self._output_tokens_by_message_id.pop(key, None)
             usage = extract_token_usage(msg)
             if usage is None:
                 continue
-            key = self._message_usage_key(msg)
             previous = self._counted_token_usage_by_message_id.get(key, {})
             updated = dict(previous)
             for name, count in usage.items():
@@ -454,6 +501,8 @@ class DeepAgentSSEStream:
             self._counted_token_usage_by_message_id[key] = updated
 
     async def _handle_update_event(self, event: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
+        if event.get("__interrupt__"):
+            self._turn_interrupted = True
         for node_name, node_output in event.items():
             output_info = (
                 list(node_output.keys()) if isinstance(node_output, dict) else type(node_output)
@@ -481,10 +530,19 @@ class DeepAgentSSEStream:
                 }
 
             display_metadata: dict[str, Any] = {}
+            live_context_usage_item: dict[str, Any] | None = None
             if "messages" in node_output:
                 last_msg = get_last_ai_message(node_output.get("messages"))
                 if last_msg is not None:
                     display_metadata = extract_display_metadata(last_msg)
+                    live_context_usage_item = self._live_context_usage_item(last_msg)
+
+            # Every complete root provider response updates the active-context
+            # circle as soon as its node commits. This event intentionally
+            # contains context only: it must not reset terminal output, status,
+            # or aggregate billing fields while a tool loop is still running.
+            if live_context_usage_item is not None:
+                yield live_context_usage_item
 
             # Emit assistant_metadata once per changed payload, before the
             # node_update event so the frontend can label the assistant row
@@ -561,7 +619,28 @@ class DeepAgentSSEStream:
         cache_read_tokens = (
             extract_cache_read_token_count(last_ai_msg) if last_ai_msg is not None else None
         )
-        usage_metadata: dict[str, Any] = {}
+        output_counts = self._output_tokens_by_message_id.values()
+        output_tokens = (
+            sum(count for count in output_counts if count is not None)
+            if output_counts and all(count is not None for count in output_counts)
+            else None
+        )
+        last_calls = (
+            last_ai_msg.get("tool_calls")
+            if isinstance(last_ai_msg, dict)
+            else getattr(last_ai_msg, "tool_calls", None)
+        )
+        usage_metadata: dict[str, Any] = {
+            "output_tokens": output_tokens,
+            "final_call_output_tokens": (
+                extract_output_token_count(last_ai_msg)
+                if not last_calls and extract_message_text(last_ai_msg)
+                else None
+            ),
+            "response_status": (
+                "interrupted" if self._turn_interrupted else extract_response_status(last_ai_msg)
+            ),
+        }
         if turn_usage is not None:
             usage_metadata["usage"] = turn_usage
         context_usage = extract_context_usage(last_ai_msg)

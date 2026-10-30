@@ -529,6 +529,9 @@ async def test_chatgpt_ainvoke_uses_responses_stream_and_replays_final_reasoning
             [SystemMessage(content="Follow policy."), HumanMessage(content="Hi")]
         )
 
+    # Aggregated stream metadata must still identify the original connection.
+    assert message.response_metadata["progena_provider"]["id"] == "chatgpt-connection"
+    assert message.response_metadata["insights"]["deployment"] == "gpt-test"
     assert requests[0].url.path == "/v1/responses"
     payload = json.loads(requests[0].content)
     assert payload["store"] is False

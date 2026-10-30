@@ -1,4 +1,4 @@
-"""The /sessions/ mount: listing, reading, searching, and editing session documents."""
+"""The /conversations/ mount: listing, reading, searching, and editing session documents."""
 
 from __future__ import annotations
 
@@ -236,14 +236,14 @@ async def test_mount_serves_sessions_through_the_agent_filesystem(
     filesystem = create_progena_backend(project_root=tmp_path, state_manager=sessions.state_manager)
     await sessions.session("aaaaaaaa-live", title="Weekend plans")
 
-    listing = await filesystem.als("/sessions/")
+    listing = await filesystem.als("/conversations/")
     [path] = [entry["path"] for entry in listing.entries or []]
     read = await filesystem.aread(path, 0, 100)
-    found = await filesystem.agrep("<@progena>", "/sessions/", "*_weekend-plans_*")
-    globbed = await filesystem.aglob("*.md", "/sessions/")
+    found = await filesystem.agrep("<@progena>", "/conversations/", "*_weekend-plans_*")
+    globbed = await filesystem.aglob("*.md", "/conversations/")
     written = await filesystem.awrite(path, "x")
 
-    assert re.fullmatch(r"/sessions/\d{4}-\d{2}-\d{2}_weekend-plans_aaaaaaaa\.md", path)
+    assert re.fullmatch(r"/conversations/\d{4}-\d{2}-\d{2}_weekend-plans_aaaaaaaa\.md", path)
     assert read.file_data is not None and "<user> hello" in read.file_data["content"]
     assert [match["path"] for match in found.matches] == [path]
     assert [match["path"] for match in globbed.matches or []] == [path]

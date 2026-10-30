@@ -132,15 +132,43 @@ describe('conversation summary markers', () => {
             summary: '## Condensed context\n\nEarlier details.',
             scope: { kind: 'conversation', id: 'thread-1' },
           }]}
+          streamEventFilter={() => false}
         />
       </Provider>,
     );
 
-    const text = container.textContent;
-    expect(text).toContain('Conversation summarized');
-    expect(text.indexOf('Before summary')).toBeLessThan(text.indexOf('Conversation summarized'));
-    expect(text.indexOf('Conversation summarized')).toBeLessThan(text.indexOf('After summary'));
-    expect(container.querySelector('details')).not.toBeNull();
+    const marker = container.querySelector('[data-summary-scope]');
+    expect(marker).not.toBeNull();
+    expect(container.querySelector('.msg--user').compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(marker.compareDocumentPosition(container.querySelector('.msg--assistant')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('keeps live compaction before the pending answer that terminates the response chain', () => {
+    const store = configureStore({
+      reducer: () => ({ uiData: { preferences: { agentName: 'Progena' } } }),
+    });
+    const liveStore = createLiveAssistantTurnStore({
+      ...createLiveAssistantTurn({ streamId: 'pending-compaction', startedAt: 1 }),
+      isStreaming: true,
+      summaryActivities: [{
+        id: 'compacting',
+        scope: { kind: 'conversation', id: 'thread-1' },
+      }],
+    });
+    const container = document.createElement('div');
+    container.innerHTML = renderToStaticMarkup(
+      <Provider store={store}>
+        <ChatMessages
+          messages={[{ id: 'question', role: 'user', content: 'Continue the work.' }]}
+          liveTurnStore={liveStore}
+        />
+      </Provider>,
+    );
+    const activity = container.querySelector('article[role="status"]');
+    const answer = container.querySelector('[aria-label="Assistant is responding"]');
+    expect(activity).not.toBeNull();
+    expect(answer).not.toBeNull();
+    expect(activity.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('keeps a committed marker visible after the frozen live owner', () => {
@@ -178,9 +206,7 @@ describe('conversation summary markers', () => {
       </Provider>,
     );
 
-    expect(container.textContent.indexOf('Frozen answer')).toBeLessThan(
-      container.textContent.indexOf('Conversation summarized'),
-    );
+    expect(container.querySelector('.msg--assistant').compareDocumentPosition(container.querySelector('[data-summary-scope]')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 
@@ -246,8 +272,8 @@ describe('conversation summary marker render stability', () => {
       });
       const cards = host.querySelectorAll('.subagent-card');
       expect(cards).toHaveLength(2);
-      expect(cards[0].textContent).toContain('Conversation summarized');
-      expect(cards[1].textContent).not.toContain('Conversation summarized');
+      expect(cards[0].querySelector('[data-summary-scope]')).not.toBeNull();
+      expect(cards[1].querySelector('[data-summary-scope]')).toBeNull();
       useMermaidRender.mockClear();
 
       await act(async () => {

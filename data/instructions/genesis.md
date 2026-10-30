@@ -89,7 +89,7 @@ and domain rules:
 - `/instructions/` for validated instruction templates.
 - `/canvases/` for canvas files and `/artifacts/` for data files (CSV, JSON,
   text) that canvases visualise.
-- `/sessions/` only for its allowed front-matter fields; session bodies are
+- `/conversations/` only for its allowed front-matter fields; session bodies are
   read-only.
 - `/runs/` for read-only routine, workflow, and schedule execution transcripts.
 - `/shared/`, when mounted, for plain files exchanged with A2A agents that mount

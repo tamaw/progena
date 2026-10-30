@@ -18,7 +18,7 @@ import { derivePageContext, formatPageContextBlock } from '../../lib/pageContext
 import { PanelIconButton, TopNavPane } from '../../components/panels/PanelFrame';
 import { quickChatMemory } from './models/quickChatMemory';
 import { createLiveAssistantTurnStore } from './models/liveAssistantTurnStore';
-import { applyAssistantChunk, applyAssistantMetadata, applyAssistantStreamEvent, createLiveAssistantTurn, finalizeLiveAssistantTurn } from './models/liveAssistantTurnModel';
+import { applyAssistantChunk, applyAssistantMetadata, applyAssistantStreamEvent, createLiveAssistantTurn, finalizeLiveAssistantTurn, resolveLiveTurnResponseStatus } from './models/liveAssistantTurnModel';
 import { loadQuickChatHistory, toQuickChatInputHistory } from './models/quickChatStreamModel';
 import { createQuickChatPromotion, persistQuickChatHandoff } from './models/quickChatPromotionModel';
 import { latestContextUsage, resolveComposerCacheExpiry, resolveComposerContextUsage } from './models/contextWindowModel';
@@ -236,7 +236,7 @@ export function QuickChatPanel({
         const streamId = `spectate_${completedRequestId}`;
         const turn = activeStreamIdRef.current === streamId ? liveTurnRef.current : null;
         const committed = turn
-          ? finalizeLiveAssistantTurn(turn, { status: 'completed', now: Date.now() })
+          ? finalizeLiveAssistantTurn(turn, { status: 'unknown', now: Date.now() })
           : null;
         if (committed) {
           setHistory((current) => current.concat(committed));
@@ -480,8 +480,8 @@ export function QuickChatPanel({
         },
         (status) => {
           terminalReceived = true;
-          terminalStatus = status === 'cancelled' ? 'cancelled' : 'completed';
-          commitLiveTurn(terminalStatus);
+          terminalStatus = resolveLiveTurnResponseStatus(liveTurnRef.current, status);
+          commitLiveTurn(status);
         },
         (streamError) => {
           terminalReceived = true;
@@ -489,7 +489,7 @@ export function QuickChatPanel({
           terminalError = streamError.message;
           if (isStale()) return;
           setError(streamError.message);
-          commitLiveTurn('error', streamError.message);
+          commitLiveTurn('failed', streamError.message);
         },
         (streamEvent) => {
           if (isStale()) return;
@@ -506,15 +506,15 @@ export function QuickChatPanel({
       );
 
       if (!terminalReceived && !isStale()) {
-        terminalStatus = 'completed';
-        commitLiveTurn('completed');
+        terminalStatus = 'unknown';
+        commitLiveTurn('unknown');
       }
     } catch (sendError) {
       terminalStatus = 'failed';
       terminalError = sendError.message;
       if (sendError.name !== 'AbortError' && !isStale()) {
         setError(sendError.message);
-        commitLiveTurn('error', sendError.message);
+        commitLiveTurn('failed', sendError.message);
       }
     } finally {
       if (ownStreamIdRef.current === streamId) {

@@ -20,7 +20,7 @@ _SLUG_CHARS = 40
 
 
 def slug(title: str) -> str:
-    """Lower-case, dash-separated, at most 40 characters (as ``/sessions/`` names)."""
+    """Lower-case, dash-separated, at most 40 characters (as ``/conversations/`` names)."""
     text = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
     return text[:_SLUG_CHARS].rstrip("-") or "run"
 
