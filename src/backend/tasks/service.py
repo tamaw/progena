@@ -867,7 +867,9 @@ def broadcast_kanban_snapshot(
     """Broadcast the current Tasks board to /api/ui/stream subscribers."""
     state_reader = monitoring_state.get_state_reader()
     payload = (board or _kanban_board_response(state_reader)).model_dump(mode="json")
-    return events_stream.broadcast_ui_event("kanban.snapshot", payload, request_id=request_id)
+    return events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.KANBAN_SNAPSHOT, payload, request_id=request_id
+    )
 
 
 def broadcast_task_content(
@@ -882,7 +884,9 @@ def broadcast_task_content(
         card = _find_kanban_card(state_reader, card_id)
         content = _read_task_content(state_reader, card)
     return events_stream.broadcast_ui_event(
-        "task.content.updated", content.model_dump(mode="json"), request_id=request_id
+        events_contracts.UiEvent.TASK_CONTENT_UPDATED,
+        content.model_dump(mode="json"),
+        request_id=request_id,
     )
 
 
@@ -896,5 +900,7 @@ def broadcast_task_activity(
     state_reader = monitoring_state.get_state_reader()
     payload = activity or _task_activity_response(state_reader, card_id)
     return events_stream.broadcast_ui_event(
-        "task.activity.updated", payload.model_dump(mode="json"), request_id=request_id
+        events_contracts.UiEvent.TASK_ACTIVITY_UPDATED,
+        payload.model_dump(mode="json"),
+        request_id=request_id,
     )

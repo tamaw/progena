@@ -12,6 +12,7 @@ import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
 import src.backend.http.requests as http_requests
 import src.backend.storage.documents as storage_documents
+from src.backend.events import contracts as events_contracts
 from src.progena.documents.types import DocumentType
 from src.progena.workflows.ports import (
     document_create_input_schema,
@@ -88,6 +89,8 @@ async def get_document_types(
         for item in sorted(types.values(), key=lambda item: item.label.lower())
     ]
     events_stream.broadcast_ui_event(
-        "document_types.snapshot", {"items": items}, request_id=request_id
+        events_contracts.UiEvent.DOCUMENT_TYPES_SNAPSHOT, {"items": items}, request_id=request_id
     )
-    return http_contracts.acknowledgement_response(request_id, ["document_types.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.DOCUMENT_TYPES_SNAPSHOT]
+    )

@@ -18,28 +18,23 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from ..runtime.instance import RUNTIME_INSTANCE_ID
+from ..threads import routine_session_from_thread
 from ..utils import utcnow_isoformat
 from .events import persist_run_event
+from .lifecycle import (
+    ROUTINE_RUN_CONTROL_PENDING_STATUSES,
+    ROUTINE_RUN_CONTROL_TERMINAL_STATUSES,
+    ROUTINE_RUN_EXECUTING_STATUSES,
+    RoutineRunStatus,
+    RoutineRunStatusValue,
+)
 
 RoutineControlAction = Literal["stop", "cancel"]
-_EXECUTING_STATUSES = frozenset({"started", "stopping", "cancelling"})
-_PENDING_STATUSES = frozenset({"stopping", "cancelling"})
-_TERMINAL_STATUSES = frozenset({"stopped", "cancelled", "completed", "failed"})
 
 
 def routine_run_control_key(agent_id: str, session_id: str) -> str:
     """Return the shared backend/runtime durable-control document key."""
     return f"routine_run_control:{agent_id}:{session_id}"
-
-
-def routine_session_from_thread(thread_id: str, agent_id: str | None = None) -> str:
-    """Validate a routine thread id and return its logical session id."""
-    parts = thread_id.split(":")
-    if len(parts) != 4 or parts[0] != "routine" or not all(parts[1:]):
-        raise ValueError(f"not a routine run thread_id: {thread_id!r}")
-    if agent_id is not None and parts[1] != agent_id:
-        raise ValueError("routine thread does not belong to the requested agent")
-    return parts[3]
 
 
 class RoutineRunControlConflict(RuntimeError):
@@ -132,7 +127,9 @@ class RoutineRunController:
         return (scope.agent_id, scope.thread_id)
 
     @staticmethod
-    def _payload(scope: RoutineExecutionScope, status: str, **extra: Any) -> dict[str, Any]:
+    def _payload(
+        scope: RoutineExecutionScope, status: RoutineRunStatusValue, **extra: Any
+    ) -> dict[str, Any]:
         return {
             "agent_id": scope.agent_id,
             "thread_id": scope.thread_id,
@@ -155,9 +152,9 @@ class RoutineRunController:
         if not control:
             return
         status = str(control.get("status") or "")
-        if status == "cancelled":
+        if status == RoutineRunStatus.CANCELLED:
             raise RoutineRunCancelled("routine run was cancelled and cannot be resumed")
-        if status == "stopped":
+        if status == RoutineRunStatus.STOPPED:
             if resume_thread_id != scope.thread_id:
                 raise RoutineRunControlConflict(
                     "stopped routine runs must resume their exact checkpoint thread"
@@ -168,14 +165,14 @@ class RoutineRunController:
                 raise RoutineRunControlConflict(
                     "stopped routine run is already claimed by another resume"
                 )
-        elif status == "paused":
+        elif status == RoutineRunStatus.PAUSED:
             if not allow_paused:
                 raise RoutineRunControlConflict(
                     "paused routine run requires its pending continuation path"
                 )
-        elif status in _PENDING_STATUSES or status == "running":
+        elif status in ROUTINE_RUN_CONTROL_PENDING_STATUSES or status == "running":
             raise RoutineRunControlConflict("routine run is already active")
-        elif status in _TERMINAL_STATUSES:
+        elif status in ROUTINE_RUN_CONTROL_TERMINAL_STATUSES:
             raise RoutineRunControlConflict("routine run is already terminal")
 
     async def release_resume_claim(self, execution: dict[str, Any]) -> None:
@@ -218,7 +215,7 @@ class RoutineRunController:
     async def record_started(self, execution: dict[str, Any]) -> None:
         """Persist ``started`` naming this process as the execution's owner."""
         execution["runtime_instance"] = RUNTIME_INSTANCE_ID
-        await persist_run_event(self._state_manager, execution, "started")
+        await persist_run_event(self._state_manager, execution, RoutineRunStatus.STARTED)
 
     async def _settle_previous_process_run(
         self, scope: RoutineExecutionScope, action: RoutineControlAction
@@ -237,9 +234,11 @@ class RoutineRunController:
             if event.get("agent_id") == scope.agent_id and event.get("thread_id") == scope.thread_id
         ]
         latest = max(events, key=lambda event: str(event.get("timestamp") or ""), default=None)
-        if latest is None or latest.get("status") not in _EXECUTING_STATUSES:
+        if latest is None or latest.get("status") not in ROUTINE_RUN_EXECUTING_STATUSES:
             raise RoutineRunControlConflict("no matching active routine run")
-        started = next((event for event in events if event.get("status") == "started"), None)
+        started = next(
+            (event for event in events if event.get("status") == RoutineRunStatus.STARTED), None
+        )
         if started is None or started.get("runtime_instance") == RUNTIME_INSTANCE_ID:
             raise RoutineRunControlConflict("no matching active routine run")
         control = await self._load_control(scope.agent_id, scope.session_id)
@@ -247,10 +246,11 @@ class RoutineRunController:
             raise RoutineRunControlConflict("routine run session belongs to another attempt")
         cancel = (
             action == "cancel"
-            or latest.get("status") == "cancelling"
-            or (control or {}).get("status") in {"cancelling", "cancelled"}
+            or latest.get("status") == RoutineRunStatus.CANCELLING
+            or (control or {}).get("status")
+            in {RoutineRunStatus.CANCELLING, RoutineRunStatus.CANCELLED}
         )
-        status = "cancelled" if cancel else "stopped"
+        status = RoutineRunStatus.CANCELLED if cancel else RoutineRunStatus.STOPPED
         payload = self._payload(scope, status)
         await self._save_control(payload)
         await persist_run_event(self._state_manager, payload, status)
@@ -259,7 +259,7 @@ class RoutineRunController:
     async def assert_not_cancelled(self, agent_id: str, session_id: str) -> None:
         """Reject every continuation path after logical-run cancellation."""
         control = await self._load_control(agent_id, session_id)
-        if control and control.get("status") == "cancelled":
+        if control and control.get("status") == RoutineRunStatus.CANCELLED:
             raise RoutineRunCancelled("routine run was cancelled and cannot be resumed")
 
     async def assert_startable(
@@ -413,7 +413,9 @@ class RoutineRunController:
             await self._discard(entry)
             raise
 
-    async def complete_execution(self, execution: dict[str, Any], status: str) -> None:
+    async def complete_execution(
+        self, execution: dict[str, Any], status: RoutineRunStatusValue
+    ) -> None:
         """Close normal task ownership after its caller has selected its outcome."""
         raw_scope = self._identity(execution)
         key = (raw_scope.agent_id, raw_scope.thread_id, raw_scope.request_id)
@@ -430,7 +432,7 @@ class RoutineRunController:
 
     async def fail_execution(self, execution: dict[str, Any]) -> None:
         """Release ownership for a real graph error without masking that error."""
-        await self.complete_execution(execution, "failed")
+        await self.complete_execution(execution, RoutineRunStatus.FAILED)
 
     async def _discard(self, entry: _ActiveExecution) -> None:
         """Forget shutdown-owned tasks without writing a user-control outcome."""
@@ -450,7 +452,7 @@ class RoutineRunController:
         """Persist every affected terminal lifecycle after root-task unwinding."""
         assert entry.intent is not None
         root_key = entry.root_key or self._key(entry.scope)
-        payloads: list[tuple[dict[str, Any], str]] = []
+        payloads: list[tuple[dict[str, Any], RoutineRunStatusValue]] = []
         async with self._lock:
             root = self._active.get(root_key) or entry
             root_intent = root.intent or entry.intent
@@ -459,9 +461,9 @@ class RoutineRunController:
             ]
             for candidate in affected:
                 status = (
-                    "cancelled"
+                    RoutineRunStatus.CANCELLED
                     if root_intent == "cancel" or candidate.intent == "cancel"
-                    else "stopped"
+                    else RoutineRunStatus.STOPPED
                 )
                 key = self._key(candidate.scope)
                 if self._active.get(key) is candidate:
@@ -529,11 +531,11 @@ class RoutineRunController:
             if entry.intent == "cancel" or root.intent == "cancel" or action == "cancel":
                 entry.intent = "cancel"
                 root.intent = "cancel"
-                status = "cancelling"
+                status = RoutineRunStatus.CANCELLING
             else:
                 entry.intent = "stop"
                 root.intent = "stop"
-                status = "stopping"
+                status = RoutineRunStatus.STOPPING
             payload = self._payload(entry.scope, status)
             root_key = root.root_key or self._key(root.scope)
             for candidate in self._active.values():

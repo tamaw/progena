@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 /**
  * Checkpoint-backed token usage snapshots. Each range/profile query owns a
  * cache entry so a late SSE response cannot replace the view the user chose.
@@ -45,7 +46,7 @@ export const fetchTokenUsage = createAcknowledgedThunk(
 );
 
 export const eventHandlers = {
-  'insights.token_usage.snapshot': (state, payload) => {
+  [UI_EVENT.INSIGHTS_TOKEN_USAGE_SNAPSHOT]: (state, payload) => {
     const query = normalizeInsightsQuery(payload);
     const key = insightsQueryKey(query);
     const request = state.insights.requests[key];

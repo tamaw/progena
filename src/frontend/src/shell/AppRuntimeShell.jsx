@@ -15,14 +15,16 @@ import { Header } from './Header';
 import { PrimaryNav } from './PrimaryNav';
 import { PanelHost } from './PanelHost';
 import { quickChatMemory } from '../features/chat/models/quickChatMemory';
+import { BROWSER_EVENT, BROWSER_STORAGE_KEY, dispatchQuickChatInlineStatus } from '../lib/browserContracts';
+
 
 // Only these panels persist as preferences.pinnedPanel. The hidden event
 // debugger may dock for this session, but never restores itself on reload.
 const PINNABLE_PANELS = new Set(['quickChat', 'alerts', 'insights']);
 
-const SIDEBAR_COLLAPSED_STORAGE_KEY = 'progena_sidebar_collapsed';
+const SIDEBAR_COLLAPSED_STORAGE_KEY = BROWSER_STORAGE_KEY.SIDEBAR_COLLAPSED;
 
-const PINNED_PANEL_STORAGE_KEY = 'progena_pinned_panel';
+const PINNED_PANEL_STORAGE_KEY = BROWSER_STORAGE_KEY.PINNED_PANEL;
 
 // A workspace switch remounts every page (see App.jsx's key={workspaceHost}),
 // which resets QuickChatPanel's own useState -- but this object lives at
@@ -30,7 +32,7 @@ const PINNED_PANEL_STORAGE_KEY = 'progena_pinned_panel';
 // it needs its own explicit reset or a reopened panel would resume the
 // previous backend's scratch conversation.
 if (typeof window !== 'undefined') {
-  window.addEventListener('progena:workspace-switched', () => {
+  window.addEventListener(BROWSER_EVENT.WORKSPACE_SWITCHED, () => {
     quickChatMemory.history = [];
     quickChatMemory.threadId = null;
     quickChatMemory.mode = null;
@@ -282,17 +284,13 @@ export function AppRuntimeShell() {
       const inline = event.detail?.inline === true;
       const clientId = typeof event.detail?.clientId === 'string' ? event.detail.clientId : null;
       if (inline && quickChatInlineBusyRef.current) {
-        window.dispatchEvent(new CustomEvent('progena:quick-chat-inline-status', {
-          detail: { clientId, status: 'failed', error: 'Another quick-chat edit is already running.' },
-        }));
+        dispatchQuickChatInlineStatus({ clientId, status: 'failed', error: 'Another quick-chat edit is already running.' });
         return;
       }
       if (prompt) {
         if (pendingQuickChatRef.current) {
           if (inline) {
-            window.dispatchEvent(new CustomEvent('progena:quick-chat-inline-status', {
-              detail: { clientId, status: 'failed', error: 'Quick chat is busy. Try again when it finishes.' },
-            }));
+            dispatchQuickChatInlineStatus({ clientId, status: 'failed', error: 'Quick chat is busy. Try again when it finishes.' });
           } else {
             quickChatSubmissionIdRef.current += 1;
             setQuickChatDraft({ id: quickChatSubmissionIdRef.current, message: prompt });
@@ -323,10 +321,8 @@ export function AppRuntimeShell() {
         setActivePanel('quickChat');
       }
     };
-    window.addEventListener('progena:open-quick-chat', handleOpenQuickChat);
-    return () => {
-      window.removeEventListener('progena:open-quick-chat', handleOpenQuickChat);
-    };
+    window.addEventListener(BROWSER_EVENT.OPEN_QUICK_CHAT, handleOpenQuickChat);
+    return () => window.removeEventListener(BROWSER_EVENT.OPEN_QUICK_CHAT, handleOpenQuickChat);
   }, []);
 
   const handleQuickChatSubmit = useCallback((event) => {
@@ -358,9 +354,7 @@ export function AppRuntimeShell() {
   const handleQuickChatInlineSettled = useCallback((clientId, status, error) => {
     quickChatInlineBusyRef.current = false;
     setQuickChatInlineActive(false);
-    window.dispatchEvent(new CustomEvent('progena:quick-chat-inline-status', {
-      detail: { clientId, status, error },
-    }));
+    dispatchQuickChatInlineStatus({ clientId, status, error });
   }, []);
   const handleOpenPanel = useCallback(() => {}, []);
   return (

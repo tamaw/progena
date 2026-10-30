@@ -12,6 +12,7 @@ import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
 import src.backend.http.requests as http_requests
 import src.backend.monitoring.state as monitoring_state
+from src.backend.events import contracts as events_contracts
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +128,12 @@ async def get_logs(
         "source_groups": source_groups,
         "folders": state_reader.get_log_folders(),
     }
-    events_stream.broadcast_ui_event("logs.page.loaded", page_payload, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["logs.page.loaded"])
+    events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.LOGS_PAGE_LOADED, page_payload, request_id=request_id
+    )
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.LOGS_PAGE_LOADED]
+    )
 
 
 @router.get(
@@ -144,11 +149,13 @@ async def get_log_sources(
     source_groups = state_reader.get_log_sources()
     folders = state_reader.get_log_folders()
     events_stream.broadcast_ui_event(
-        "logs.sources.loaded",
+        events_contracts.UiEvent.LOGS_SOURCES_LOADED,
         {"source_groups": source_groups, "folders": folders},
         request_id=request_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["logs.sources.loaded"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.LOGS_SOURCES_LOADED]
+    )
 
 
 @router.get("/logs/export", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
@@ -197,7 +204,9 @@ async def export_logs(
 
     entries = result["entries"]
     events_stream.broadcast_ui_event(
-        "logs.export.started", {"format": format, "total": len(entries)}, request_id=request_id
+        events_contracts.UiEvent.LOGS_EXPORT_STARTED,
+        {"format": format, "total": len(entries)},
+        request_id=request_id,
     )
 
     # Broadcast entries as chunked events (batches of 100)
@@ -205,19 +214,19 @@ async def export_logs(
     for i in range(0, len(entries), chunk_size):
         chunk = entries[i : i + chunk_size]
         events_stream.broadcast_ui_event(
-            "logs.export.chunk",
+            events_contracts.UiEvent.LOGS_EXPORT_CHUNK,
             {"format": format, "index": i // chunk_size, "entries": chunk, "total": len(entries)},
             request_id=request_id,
         )
 
     events_stream.broadcast_ui_event(
-        "logs.export.completed",
+        events_contracts.UiEvent.LOGS_EXPORT_COMPLETED,
         {"format": format, "total": len(entries)},
         request_id=request_id,
     )
 
-    event_types = ["logs.export.started"]
+    event_types: list[str] = [events_contracts.UiEvent.LOGS_EXPORT_STARTED]
     if entries:
-        event_types.append("logs.export.chunk")
-    event_types.append("logs.export.completed")
+        event_types.append(events_contracts.UiEvent.LOGS_EXPORT_CHUNK)
+    event_types.append(events_contracts.UiEvent.LOGS_EXPORT_COMPLETED)
     return http_contracts.acknowledgement_response(request_id, event_types)

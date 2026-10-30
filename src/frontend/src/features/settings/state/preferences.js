@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../../realtime/eventVocabulary';
 /**
  * Preferences domain: the backend-persisted user profile (display name,
  * timezone, UI/UX settings: theme, nav-rail collapse, pinned panel,
@@ -99,7 +100,7 @@ export const savePreferences = createAcknowledgedThunk(
 );
 
 export const eventHandlers = {
-  'preferences.snapshot': (state, payload) => {
+  [UI_EVENT.PREFERENCES_SNAPSHOT]: (state, payload) => {
     applyPreferences(state, payload);
   },
 };

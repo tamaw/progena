@@ -20,7 +20,7 @@ from src.backend.plugins.marketplaces import (
     set_cached_catalog,
 )
 from src.progena.plugins.marketplaces import validate_marketplaces_payload
-from src.progena.plugins.sources import PluginFetchError, fetch_marketplace
+from src.progena.plugins.sources import PluginFetchError, PluginFetchErrorKind, fetch_marketplace
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,13 @@ def _catalog_to_dict(catalog: Any) -> dict[str, Any]:
     }
 
 
+def _plugin_fetch_status(error: PluginFetchError, default: int) -> int:
+    """Translate a typed source failure into this endpoint's HTTP contract."""
+    if error.kind is PluginFetchErrorKind.RATE_LIMIT:
+        return 429
+    return error.status or default
+
+
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_marketplaces(
     request: Request,
@@ -50,7 +57,9 @@ async def get_marketplaces(
     request_id = _request_correlation_id(request, x_request_id)
     snapshot = await asyncio.to_thread(load_marketplaces)
     broadcast_marketplaces_snapshot(snapshot, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["marketplaces.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.MARKETPLACES_SNAPSHOT]
+    )
 
 
 @router.put("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
@@ -68,7 +77,9 @@ async def replace_marketplaces(
 
     saved = await asyncio.to_thread(save_marketplaces, normalized["marketplaces"])
     broadcast_marketplaces_snapshot(saved, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["marketplaces.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.MARKETPLACES_SNAPSHOT]
+    )
 
 
 @router.get(
@@ -95,12 +106,16 @@ async def browse_marketplace_plugins(
         try:
             catalog = await fetch_marketplace(source_url)
         except PluginFetchError as exc:
-            status_code = 429 if "rate limit exceeded" in str(exc).lower() else 400
-            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=_plugin_fetch_status(exc, 400),
+                detail=str(exc),
+            ) from exc
         set_cached_catalog(name, catalog)
 
     broadcast_plugin_catalog_snapshot(name, _catalog_to_dict(catalog), request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["plugin.catalog.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.PLUGIN_CATALOG_SNAPSHOT]
+    )
 
 
 def broadcast_marketplaces_snapshot(
@@ -117,7 +132,9 @@ def broadcast_marketplaces_snapshot(
     document read and keep the event consistent with the HTTP response.
     """
     payload = plugins_marketplaces.load_marketplaces() if marketplaces is None else marketplaces
-    return events_stream.broadcast_ui_event("marketplaces.snapshot", payload, request_id=request_id)
+    return events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.MARKETPLACES_SNAPSHOT, payload, request_id=request_id
+    )
 
 
 def broadcast_plugin_catalog_snapshot(
@@ -132,7 +149,7 @@ def broadcast_plugin_catalog_snapshot(
     drives this event.
     """
     return events_stream.broadcast_ui_event(
-        "plugin.catalog.snapshot",
+        events_contracts.UiEvent.PLUGIN_CATALOG_SNAPSHOT,
         {"name": name, "catalog": catalog},
         request_id=request_id,
     )

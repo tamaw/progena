@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 /**
  * Instructions: the agents' markdown instructions, kept live by UI stream
  * events. The list carries front matter summaries; one instruction's content,
@@ -70,7 +71,7 @@ export const restoreInstructionRevision = createAcknowledgedThunk(
 );
 
 export const eventHandlers = {
-  'instructions.snapshot': (state, payload) => {
+  [UI_EVENT.INSTRUCTIONS_SNAPSHOT]: (state, payload) => {
     const slice = state.instructions;
     slice.items = Array.isArray(payload.instructions) ? payload.instructions : [];
     slice.loaded = true;
@@ -80,17 +81,17 @@ export const eventHandlers = {
       slice.requestId = null;
     }
   },
-  'instruction.loaded': (state, payload) => {
+  [UI_EVENT.INSTRUCTION_LOADED]: (state, payload) => {
     if (typeof payload?.path === 'string' && payload.path) {
       state.instructions.byPath[payload.path] = payload;
       completeKeyedRequest(state.instructions.contentRequestByPath, payload.path, payload.request_id);
     }
   },
-  'instruction.revisions.loaded': (state, payload) => {
+  [UI_EVENT.INSTRUCTION_REVISIONS_LOADED]: (state, payload) => {
     state.instructions.revisionsByPath[payload.path] = Array.isArray(payload.revisions) ? payload.revisions : [];
     completeKeyedRequest(state.instructions.revisionsRequestByPath, payload.path, payload.request_id);
   },
-  'instruction.revision.loaded': (state, payload) => {
+  [UI_EVENT.INSTRUCTION_REVISION_LOADED]: (state, payload) => {
     const key = revisionKey(payload.path, payload.revision_id);
     state.instructions.revisionByKey[key] = payload;
     completeKeyedRequest(state.instructions.revisionRequestByKey, key, payload.request_id);

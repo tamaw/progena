@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 /**
  * Tasks domain: the kanban board plus per-card brief content and activity logs,
  * kept live by `kanban.snapshot` / `task.content.updated` / `task.activity.updated`
@@ -70,7 +71,7 @@ export const reducers = {
 };
 
 export const eventHandlers = {
-  'kanban.snapshot': (state, payload) => {
+  [UI_EVENT.KANBAN_SNAPSHOT]: (state, payload) => {
     state.tasks.board = payload || null;
     state.tasks.loaded = true;
     if (!state.tasks.loading || payload.request_id === state.tasks.requestId) {
@@ -79,13 +80,13 @@ export const eventHandlers = {
       state.tasks.requestId = null;
     }
   },
-  'task.content.updated': (state, payload) => {
+  [UI_EVENT.TASK_CONTENT_UPDATED]: (state, payload) => {
     const cardId = cardIdOf(payload);
     if (cardId) {
       state.tasks.contentById[cardId] = payload;
     }
   },
-  'task.activity.updated': (state, payload) => {
+  [UI_EVENT.TASK_ACTIVITY_UPDATED]: (state, payload) => {
     const cardId = cardIdOf(payload);
     if (cardId) {
       state.tasks.activityById[cardId] = payload;

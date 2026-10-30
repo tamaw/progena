@@ -1,9 +1,11 @@
+import { UI_EVENT } from '../../../realtime/eventVocabulary';
 /**
  * Agents domain: the agent roster plus the active (selected) agent detail and
  * graph, kept live by `agents.snapshot` / `agent.upserted` / `agent.selected` /
  * `agent.graph.updated` events on /api/ui/stream.
  */
 import { createSelector } from '@reduxjs/toolkit';
+import { ROUTINE_RUN_STATUS, routineRunStatusEvent } from '../../../realtime/eventVocabulary';
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from '../../../store/async';
 
 export const initialState = {
@@ -204,10 +206,15 @@ export function isRunLifecycleNewer(left, right) {
   );
 }
 
-const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'paused', 'stopped', 'cancelled']);
+const TERMINAL_RUN_STATUSES = new Set(ROUTINE_RUN_STATUS.TERMINAL);
 // "interrupted" is derived from a dead owner, not persisted; the attempt can
 // still settle (Continue settles it stopped, Cancel run settles it cancelled).
-const INTERRUPTED_EXITS = new Set(['interrupted', 'stopped', 'cancelled']);
+const INTERRUPTED_EXITS = new Set([
+  'interrupted',
+  ...ROUTINE_RUN_STATUS.CONTROL.filter(
+    (status) => !ROUTINE_RUN_STATUS.CONTROL_PENDING.includes(status),
+  ),
+]);
 
 function applyRunLifecycle(state, payload) {
   if (!payload?.request_id || !payload?.agent_id) return false;
@@ -222,22 +229,22 @@ function applyRunLifecycle(state, payload) {
 }
 
 export const eventHandlers = {
-  ...Object.fromEntries(['enqueued', 'started', 'stopping', 'cancelling', 'paused', 'completed', 'failed', 'stopped', 'cancelled', 'interrupted'].map((status) => [
-    `agent.routine.run.${status}`, (state, payload, event) => {
+  ...Object.fromEntries([...ROUTINE_RUN_STATUS.VALUES, 'interrupted'].map((status) => [
+    routineRunStatusEvent(status), (state, payload, event) => {
       const changed = applyRunLifecycle(state, { ...payload, status });
       if (changed && ['completed', 'failed'].includes(status)) {
         state.agents.lastRunNotification = { ...payload, status, seq: event.seq };
       }
     },
   ])),
-  'agent.routine.control.updated': (state, payload) => {
+  [UI_EVENT.AGENT_ROUTINE_CONTROL_UPDATED]: (state, payload) => {
     // payload.request_id is the control operation; the attempt is payload.run.
     if (payload?.run) applyRunLifecycle(state, payload.run);
   },
-  'agent.routine.lifecycle.snapshot': (state, payload) => {
+  [UI_EVENT.AGENT_ROUTINE_LIFECYCLE_SNAPSHOT]: (state, payload) => {
     for (const run of payload.runs || []) applyRunLifecycle(state, run);
   },
-  'agents.snapshot': (state, payload) => {
+  [UI_EVENT.AGENTS_SNAPSHOT]: (state, payload) => {
     replaceAgentList(state.agents, payload.agents);
     state.agents.loaded = true;
     if (!state.agents.loading || payload.request_id === state.agents.requestId) {
@@ -246,10 +253,10 @@ export const eventHandlers = {
       state.agents.requestId = null;
     }
   },
-  'agent.upserted': (state, payload) => {
+  [UI_EVENT.AGENT_UPSERTED]: (state, payload) => {
     upsertAgent(state.agents, payload.agent);
   },
-  'agent.deleted': (state, payload) => {
+  [UI_EVENT.AGENT_DELETED]: (state, payload) => {
     const agentId = payload.agent_id;
     if (typeof agentId !== 'string') return;
     delete state.agents.byId[agentId];
@@ -260,7 +267,7 @@ export const eventHandlers = {
     }
     // Runs and immutable revision caches remain available after live deletion.
   },
-  'agent.selected': (state, payload) => {
+  [UI_EVENT.AGENT_SELECTED]: (state, payload) => {
     // Guard against a superseded *selection*, not a superseded request. More
     // than one request for the same agent is normal -- a stream reconnect
     // re-asks -- and keying this on request_id made each new ask invalidate
@@ -280,7 +287,7 @@ export const eventHandlers = {
     state.agents.active.error = null;
     state.agents.active.requestId = null;
   },
-  'agent.graph.updated': (state, payload) => {
+  [UI_EVENT.AGENT_GRAPH_UPDATED]: (state, payload) => {
     const { agent_id: agentId, graph } = payload;
     if (agentId && state.agents.byId[agentId]) {
       state.agents.byId[agentId] = { ...state.agents.byId[agentId], graph };
@@ -289,12 +296,12 @@ export const eventHandlers = {
       state.agents.active.detail = { ...state.agents.active.detail, graph };
     }
   },
-  'agent.skill.content.updated': (state, payload) => {
+  [UI_EVENT.AGENT_SKILL_CONTENT_UPDATED]: (state, payload) => {
     if (typeof payload?.path === 'string' && payload.path) {
       state.agents.skillsByPath[payload.path] = payload;
     }
   },
-  'agent.routine.runs.loaded': (state, payload) => {
+  [UI_EVENT.AGENT_ROUTINE_RUNS_LOADED]: (state, payload) => {
     if (typeof payload?.agent_id !== 'string' || !payload.agent_id) return;
     const runs = Array.isArray(payload.runs) ? payload.runs : [];
     const hasMore = Boolean(payload.has_more);
@@ -312,17 +319,17 @@ export const eventHandlers = {
       state.agents.runsByAgentId[payload.agent_id] = { items: runs, hasMore };
     }
   },
-  'agent.routine.revisions.loaded': (state, payload) => {
+  [UI_EVENT.AGENT_ROUTINE_REVISIONS_LOADED]: (state, payload) => {
     if (typeof payload?.agent_id === 'string' && payload.agent_id) {
       state.agents.revisionsByAgentId[payload.agent_id] = Array.isArray(payload.revisions) ? payload.revisions : [];
     }
   },
-  'agent.routine.revision.loaded': (state, payload) => {
+  [UI_EVENT.AGENT_ROUTINE_REVISION_LOADED]: (state, payload) => {
     if (typeof payload?.agent_id === 'string' && payload.agent_id && typeof payload?.revision_id === 'string' && payload.revision_id) {
       state.agents.revisionContentByKey[`${payload.agent_id}:${payload.revision_id}`] = payload.graph;
     }
   },
-  'agent.routine.run_state.loaded': (state, payload) => {
+  [UI_EVENT.AGENT_ROUTINE_RUN_STATE_LOADED]: (state, payload) => {
     if (typeof payload?.thread_id === 'string' && payload.thread_id) {
       state.agents.runStateByThreadId[payload.thread_id] = payload;
     }

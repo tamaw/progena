@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useConfig } from '../../context/ConfigContext';
@@ -6,9 +7,10 @@ import { clearCanvasSubscription, reportCanvasStatus, requestCanvasData, request
 import { fetchDocumentTypes, selectDocumentTypes, selectDocumentTypesState } from '../documents/state';
 import { subscribeUiEvent } from '../../realtime/realtimeEvents';
 import { buildCanvasSrcdoc, normalizeCanvasTheme } from './canvasHostModel';
+import { CANVAS_PROTOCOL } from './canvasProtocol';
 import styles from './CanvasHost.module.css';
 
-const CHANNEL = 'progena-canvas';
+const { channel: CHANNEL, message: MESSAGE, method: METHOD } = CANVAS_PROTOCOL;
 
 function hostTheme() {
   const computed = getComputedStyle(document.documentElement);
@@ -22,7 +24,7 @@ function hostTheme() {
 export default function CanvasHost({ summary, files, canvasesUrl }) {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
-  const documentTypesUrl = getApiUrl('documentTypes');
+  const documentTypesUrl = getApiUrl(METHOD.DOCUMENT_TYPES);
   const iframeRef = useRef(null);
   const subscribedRef = useRef(false);
   const [srcdoc, setSrcdoc] = useState('');
@@ -70,7 +72,7 @@ export default function CanvasHost({ summary, files, canvasesUrl }) {
   // The srcdoc carries the theme at build time; later light/dark switches are
   // pushed live so canvases restyle without remounting (and losing their state).
   const postTheme = useCallback(() => {
-    iframeRef.current?.contentWindow?.postMessage({ channel: CHANNEL, type: 'theme', theme: hostTheme() }, '*');
+    iframeRef.current?.contentWindow?.postMessage({ channel: CHANNEL, type: MESSAGE.THEME, theme: hostTheme() }, '*');
   }, []);
   useEffect(() => {
     const observer = new MutationObserver(postTheme);
@@ -79,8 +81,8 @@ export default function CanvasHost({ summary, files, canvasesUrl }) {
   }, [postTheme]);
 
   useEffect(() => subscribeUiEvent((event) => {
-    if (event?.type !== 'canvas.document.event' || event?.payload?.name !== name) return;
-    iframeRef.current?.contentWindow?.postMessage({ channel: CHANNEL, type: 'event', event: event.payload.event }, '*');
+    if (event?.type !== UI_EVENT.CANVAS_DOCUMENT_EVENT || event?.payload?.name !== name) return;
+    iframeRef.current?.contentWindow?.postMessage({ channel: CHANNEL, type: MESSAGE.EVENT, event: event.payload.event }, '*');
   }), [name]);
 
   useEffect(() => () => {
@@ -95,25 +97,25 @@ export default function CanvasHost({ summary, files, canvasesUrl }) {
       if (event.source !== iframeRef.current?.contentWindow || event.data?.channel !== CHANNEL) return;
       const message = event.data;
       const reply = (payload, error) => iframeRef.current?.contentWindow?.postMessage({
-        channel: CHANNEL, type: 'reply', requestId: message.requestId, payload, error: error ? String(error.message || error) : undefined,
+        channel: CHANNEL, type: MESSAGE.REPLY, requestId: message.requestId, payload, error: error ? String(error.message || error) : undefined,
       }, '*');
-      if (message.type === 'mounted') {
+      if (message.type === MESSAGE.MOUNTED) {
         report('loaded');
         return;
       }
-      if (message.type === 'error') {
+      if (message.type === MESSAGE.ERROR) {
         report('error', [message.error || { message: 'Canvas execution failed' }]);
         return;
       }
-      if (message.type !== 'request') return;
+      if (message.type !== MESSAGE.REQUEST) return;
       try {
-        if (message.method === 'documents') {
+        if (message.method === METHOD.DOCUMENTS) {
           reply(await requestCanvasDocuments({ canvasesUrl, name, body: message.payload }));
-        } else if (message.method === 'data') {
+        } else if (message.method === METHOD.DATA) {
           reply(await requestCanvasData({ canvasesUrl, name, body: message.payload }));
-        } else if (message.method === 'documentTypes') {
+        } else if (message.method === METHOD.DOCUMENT_TYPES) {
           reply(documentTypes);
-        } else if (message.method === 'subscribe') {
+        } else if (message.method === METHOD.SUBSCRIBE) {
           const events = Array.isArray(message.payload?.events) ? message.payload.events : [];
           if (!subscribedRef.current) subscribedRef.current = true;
           reply(await updateCanvasSubscription({ canvasesUrl, name, body: { events } }));

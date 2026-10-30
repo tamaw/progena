@@ -236,7 +236,9 @@ def _broadcast_widget_refresh(
             refreshed_widget if item.get("id") == refreshed_widget.get("id") else item
             for item in items
         ]
-    events_stream.broadcast_ui_event("widgets.updated", {"items": items}, request_id=request_id)
+    events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.WIDGETS_UPDATED, {"items": items}, request_id=request_id
+    )
 
 
 def _find_widget_payload(
@@ -608,7 +610,7 @@ def broadcast_schedule_snapshot(
         for item in state_reader.get_schedule()
     ]
     return events_stream.broadcast_ui_event(
-        "schedule.snapshot", {"items": items}, request_id=request_id
+        events_contracts.UiEvent.SCHEDULE_SNAPSHOT, {"items": items}, request_id=request_id
     )
 
 
@@ -625,5 +627,5 @@ def broadcast_widgets_snapshot(
         items = [_widget_to_response(widget) for widget in state_reader.get_widgets()]
     payload = [item.model_dump(mode="json") for item in items]
     return events_stream.broadcast_ui_event(
-        "widgets.updated", {"items": payload}, request_id=request_id
+        events_contracts.UiEvent.WIDGETS_UPDATED, {"items": payload}, request_id=request_id
     )

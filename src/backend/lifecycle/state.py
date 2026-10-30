@@ -19,10 +19,6 @@ logger = logging.getLogger(__name__)
 
 SOURCE_TELEGRAM = "telegram"
 
-
-SOURCE_UI = "ui"
-
-
 config = ChatServerConfig.from_env()
 
 

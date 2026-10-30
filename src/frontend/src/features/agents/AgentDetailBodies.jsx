@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { useDispatch, useSelector } from 'react-redux';
 import useEntityDraft from '../../hooks/useEntityDraft';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
@@ -319,7 +320,7 @@ function AgentSkillRow({ agentId, skillPath, agentsUrl }) {
     const operation = dispatch(updateAgentSkillContent({ agentsUrl, skillPath, content: draftContent }));
     draftControls.trackSave(ticket, {
       requestId: operation.requestId,
-      events: ['agent.skill.content.updated'],
+      events: [UI_EVENT.AGENT_SKILL_CONTENT_UPDATED],
     });
     try {
       await operation.unwrap();

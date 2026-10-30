@@ -148,6 +148,17 @@ describe('forkLaneEdgePosition', () => {
 // itself as unreachable on every graph that used "Join branches" -- Run
 // stayed permanently disabled for any routine containing one.
 describe('validateWorkingGraph', () => {
+  it.each(['__seed__', '__project_output__', '__start__', '__end__'])(
+    'rejects the reserved execution node ID %s before saving',
+    (id) => {
+      expect(validateWorkingGraph([{ id, kind: 'noop' }], [], id)).toContain(`${id} is reserved.`);
+    },
+  );
+
+  it('allows ordinary node IDs containing underscores', () => {
+    expect(validateWorkingGraph([{ id: 'user_step', kind: 'noop' }], [], 'user_step')).toEqual([]);
+  });
+
   const routerJoinGraph = {
     nodes: [
       { id: 'gate', kind: 'eval' },

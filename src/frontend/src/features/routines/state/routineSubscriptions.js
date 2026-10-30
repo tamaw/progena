@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../../realtime/eventVocabulary';
 import { createOperationRequestId, requestAcknowledged } from '../../../store/http';
 import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realtimeClient';
 import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
@@ -21,7 +22,7 @@ function submit(watch, subscribed) {
 
 // Re-register after reconnect; the server removes interests with dead sockets.
 subscribeUiEvent((event) => {
-  if (event.type === 'connection.ready' && activeWatch) {
+  if (event.type === UI_EVENT.CONNECTION_READY && activeWatch) {
     void submit(activeWatch, true).catch(() => {});
   }
 });

@@ -3,6 +3,8 @@ import { useDispatch, useSelector, useStore } from 'react-redux';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../../lib/routes';
 import { useConfig } from '../../context/ConfigContext';
+import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
+
 import { selectRealtime } from '../../realtime/realtimeSlice';
 import { fetchKnowledge, saveKnowledge, selectKnowledgeBases, selectKnowledgePage, selectKnowledgePages, selectKnowledgeRevision, selectKnowledgeRevisions, selectKnowledgeState } from './state';
 import KnowledgePagesTab from './KnowledgePagesTab';
@@ -197,9 +199,7 @@ export default function KnowledgePage() {
   // /config/knowledge.json (managing-knowledge skill) and the new base appears
   // here live via the knowledge.snapshot event.
   const openCreateChat = () => {
-    window.dispatchEvent(
-      new CustomEvent('progena:open-quick-chat', { detail: { mode: 'knowledge-create' } }),
-    );
+    dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.KNOWLEDGE_CREATE });
   };
 
   const requestDelete = () => {

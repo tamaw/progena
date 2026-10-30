@@ -19,6 +19,7 @@ from ..instructions.templates import (
     parse_instruction_template,
     render_instruction_template,
 )
+from ..threads import routine_agent_thread_id
 from .approvals import approval_decision_id
 from .control_nodes import _foreach_items
 from .graph import RoutineNode
@@ -112,7 +113,7 @@ def _build_object_agent_node(
             context = getattr(runtime, "context", None) if runtime is not None else None
             correlation = (context or {}).get("request_id") or "routine"
             invoke_kwargs["config"] = {
-                "configurable": {"thread_id": f"routine-agent:{correlation}:{node.id}"}
+                "configurable": {"thread_id": routine_agent_thread_id(correlation, node.id)}
             }
         if config.get("model_profile"):
             invoke_kwargs.setdefault("config", {}).setdefault("configurable", {})[

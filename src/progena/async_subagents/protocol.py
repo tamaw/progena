@@ -18,6 +18,7 @@ from src.progena.documents.values import make_json_safe
 from src.progena.llm.structured import validate_against_schema
 from src.progena.runtime.conversation_gate import ConversationTurnGate
 from src.progena.sessions.context import reset_current_thread_id, set_current_thread_id
+from src.progena.threads import object_agent_thread_id
 
 from ..routines.messages import extract_json_object, normalize_message_content
 from ..utils import utcnow_isoformat
@@ -193,7 +194,8 @@ class ObjectAgentProtocol:
         if (
             owner is None
             or not prompt.strip()
-            or owner.checkpoint_thread_id != f"object-agent:{owner.assistant_id}:{owner.thread_id}"
+            or owner.checkpoint_thread_id
+            != object_agent_thread_id(owner.assistant_id, owner.thread_id)
         ):
             return False
         runnable = self._resolve_agent(owner.assistant_id)
@@ -382,7 +384,7 @@ class ObjectAgentProtocol:
         thread_id, run_id = run["thread_id"], run["run_id"]
         values: dict[str, Any] = {}
         error = None
-        checkpoint_thread = f"object-agent:{run['assistant_id']}:{thread_id}"
+        checkpoint_thread = object_agent_thread_id(run["assistant_id"], thread_id)
         owner_token = _current_object_agent_owner.set(
             ObjectAgentOwner(
                 assistant_id=str(run["assistant_id"]),

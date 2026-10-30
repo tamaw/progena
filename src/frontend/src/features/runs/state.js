@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { createSelector } from '@reduxjs/toolkit';
 import { withQuery } from '../../store/http';
 import { runDurationMs } from './runFormat';
@@ -175,7 +176,7 @@ function markSnapshotsStale(state, row) {
 }
 
 export const eventHandlers = {
-  'runs.snapshot': (state, payload) => {
+  [UI_EVENT.RUNS_SNAPSHOT]: (state, payload) => {
     const entry = Object.entries(state.runs.requests)
       .find(([, request]) => request?.requestId === payload.request_id);
     if (!entry) return;
@@ -213,7 +214,7 @@ export const eventHandlers = {
     // but release it only once its correlated snapshot has reached the cache.
     state.runs.requests[key].resync = false;
   },
-  'run.updated': (state, payload) => {
+  [UI_EVENT.RUN_UPDATED]: (state, payload) => {
     const row = payload.run;
     const key = rowKey(row);
     if (!key) return;
@@ -226,7 +227,7 @@ export const eventHandlers = {
     }
     markSnapshotsStale(state, row);
   },
-  'run.deleted': (state, payload) => {
+  [UI_EVENT.RUN_DELETED]: (state, payload) => {
     const key = traceKey(payload.kind, payload.run_id);
     if (!key) return;
     for (const request of Object.values(state.runs.requests)) {
@@ -242,14 +243,14 @@ export const eventHandlers = {
     }
     delete state.runs.traces[key];
   },
-  'run.trace.loaded': (state, payload) => {
+  [UI_EVENT.RUN_TRACE_LOADED]: (state, payload) => {
     const key = traceKey(payload.trace?.kind, payload.trace?.run_id);
     const request = key ? state.runs.traceRequests[key] : null;
     if (!key || !request?.requestId || payload.request_id !== request.requestId) return;
     state.runs.traces[key] = payload.trace;
     completeKeyedRequest(state.runs.traceRequests, key, payload.request_id);
   },
-  'run.trace.updated': (state, payload) => {
+  [UI_EVENT.RUN_TRACE_UPDATED]: (state, payload) => {
     const key = traceKey(payload.trace?.kind, payload.trace?.run_id);
     if (!key) return;
     // Targeted trace events are ordered on the canonical stream. A subscription

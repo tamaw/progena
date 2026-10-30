@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
@@ -232,7 +233,7 @@ export default function AgentsPage() {
   const renameConfirmed = useSelector((state) => (
     renameIntent?.requestId
       && state.realtime?.receivedRequestEvents?.[renameIntent.requestId]?.some(
-        (event) => event.type === 'agents.snapshot',
+        (event) => event.type === UI_EVENT.AGENTS_SNAPSHOT,
       )
   ));
   const [newAgentOpen, setNewAgentOpen] = useState(false);
@@ -299,7 +300,7 @@ export default function AgentsPage() {
     const requestId = createUuid();
     trackCreateDraftSave(ticket, {
       requestId,
-      events: ['agents.snapshot'],
+      events: [UI_EVENT.AGENTS_SNAPSHOT],
     });
     try {
       await requestAcknowledged(`${agentsUrl}/object`, {
@@ -396,7 +397,7 @@ export default function AgentsPage() {
     );
     trackObjectDraftSave(ticket, {
       requestId: operation.requestId,
-      events: ['agents.snapshot'],
+      events: [UI_EVENT.AGENTS_SNAPSHOT],
     });
     try {
       await operation.unwrap();

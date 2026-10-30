@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../../realtime/eventVocabulary';
 /**
  * MCP domain: external MCP servers, kept live by `mcp.snapshot` events on
  * /api/ui/stream and seeded via REST when the Tools page mounts. The list
@@ -32,7 +33,7 @@ export const fetchMcpServerDetail = createAcknowledgedThunk('uiData/fetchMcpServ
 });
 
 export const eventHandlers = {
-  'mcp.snapshot': (state, payload) => {
+  [UI_EVENT.MCP_SNAPSHOT]: (state, payload) => {
     state.mcp.servers = Array.isArray(payload.items) ? payload.items : [];
     state.mcp.loaded = true;
     if (!state.mcp.loading || payload.request_id === state.mcp.requestId) {
@@ -41,7 +42,7 @@ export const eventHandlers = {
       state.mcp.requestId = null;
     }
   },
-  'mcp.server.detail.updated': (state, payload) => {
+  [UI_EVENT.MCP_SERVER_DETAIL_UPDATED]: (state, payload) => {
     if (typeof payload?.id === 'string' && payload.id) {
       state.mcp.detailById[payload.id] = payload;
       completeKeyedRequest(state.mcp.detailRequestById, payload.id, payload.request_id);

@@ -56,7 +56,12 @@ class AsyncSubagentTrackingMiddleware(AgentMiddleware):
             )
         if tasks:
             await self._persist_async_tasks(request, tool_name, tasks, result)
-            _emit_async_subagent_events(request, tool_name, tasks)
+            _emit_async_subagent_events(
+                request,
+                tool_name,
+                tasks,
+                result_payload=_extract_check_result_payload(result),
+            )
         return result
 
     def wrap_tool_call(
@@ -249,20 +254,33 @@ def _emit_async_subagent_events(
     request: ToolCallRequest,
     tool_name: str,
     tasks: dict[str, dict[str, Any]],
+    *,
+    result_payload: dict[str, Any] | None = None,
 ) -> None:
     parent_thread_id = _tool_thread_id(request)
     raw_args = request.tool_call.get("args", {})
-    for task in tasks.values():
+    tool_call_id = str(request.tool_call.get("id") or "")
+    for task_key, task in tasks.items():
         agent_name = str(task.get("agent_name") or raw_args.get("subagent_type") or "")
-        task_id = str(task.get("task_id") or "")
+        task_id = str(task.get("task_id") or task_key)
         status = str(task.get("status") or "")
         metadata = {
             "subagent_name": agent_name,
             "task_id": task_id,
             "status": status,
         }
+        if tool_call_id:
+            metadata["tool_call_id"] = tool_call_id
         if parent_thread_id:
             metadata["thread_id"] = parent_thread_id
+        if status == "success" and isinstance(task.get("summary"), str):
+            metadata["result_preview"] = task["summary"]
+        if status == "error" and isinstance(task.get("last_error"), str):
+            metadata["error"] = task["last_error"]
+        if status == "success" and result_payload and "result" in result_payload:
+            metadata["result_preview"] = str(result_payload["result"] or "")
+        if status == "error" and result_payload and "error" in result_payload:
+            metadata["error"] = str(result_payload["error"] or "")
         if tool_name == "start_async_task":
             emit_stream_event(
                 {"event_type": "async_subagent_start", "content": agent_name, "metadata": metadata}
@@ -275,12 +293,11 @@ def _emit_async_subagent_events(
             emit_stream_event(
                 {"event_type": "async_subagent_cancel", "content": agent_name, "metadata": metadata}
             )
-        elif tool_name in {"check_async_task", "list_async_tasks"} and status in {
-            "success",
-            "error",
-            "cancelled",
-            "interrupted",
-        }:
-            emit_stream_event(
-                {"event_type": "async_subagent_result", "content": agent_name, "metadata": metadata}
+        elif tool_name in {"check_async_task", "list_async_tasks"}:
+            event_type = (
+                "async_subagent_pause" if status == "interrupted" else "async_subagent_result"
             )
+            if status in {"success", "error", "cancelled", "interrupted"}:
+                emit_stream_event(
+                    {"event_type": event_type, "content": agent_name, "metadata": metadata}
+                )

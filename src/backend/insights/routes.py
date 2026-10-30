@@ -9,6 +9,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 
 import src.backend.http.contracts as http_contracts
+from src.backend.events import contracts as events_contracts
 from src.backend.http.requests import BroadcastUiEvent, request_correlation_id
 from src.backend.insights.service import build_token_usage_snapshot
 from src.backend.storage.documents import BackendDocumentStore
@@ -40,9 +41,11 @@ def create_insights_router(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        broadcast("insights.token_usage.snapshot", snapshot, request_id=request_id)
+        broadcast(
+            events_contracts.UiEvent.INSIGHTS_TOKEN_USAGE_SNAPSHOT, snapshot, request_id=request_id
+        )
         return http_contracts.acknowledgement_response(
-            request_id, ["insights.token_usage.snapshot"]
+            request_id, [events_contracts.UiEvent.INSIGHTS_TOKEN_USAGE_SNAPSHOT]
         )
 
     return router

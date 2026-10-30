@@ -37,6 +37,7 @@ from src.progena.llm.structured import validate_against_schema
 from src.progena.settings.policies import PolicyValues, resolve_execution_policy
 
 from ..instructions.templates import instruction_relative_path
+from ..threads import parse_routine_thread_id, routine_session_from_thread, routine_thread_id
 from ..utils import utcnow
 from .approvals import (
     approval_decision_id,
@@ -52,11 +53,11 @@ from .controls import (
     RoutineRunControlExit,
     RoutineRunController,
     current_routine_execution_scope,
-    routine_session_from_thread,
 )
 from .events import persist_run_event, routine_run_output
 from .factory import compile_routine_graph
 from .graph import RoutineContext, validate_routine_graph_payload
+from .lifecycle import RoutineRunStatus
 from .revisions import RoutineRevisionReader
 
 logger = logging.getLogger(__name__)
@@ -216,7 +217,9 @@ def create_routine_executor(
         resume_thread_id = str(state.get("_routine_resume_thread_id") or "").strip() or None
         requested_session_id = str(state.get("_interactive_session_id") or "").strip() or None
         if resume_thread_id:
-            resumed_routine_id, _resume_revision_id = _parse_routine_thread_id(resume_thread_id)
+            resumed_routine_id, _resume_revision_id, _session_id = parse_routine_thread_id(
+                resume_thread_id
+            )
             if resumed_routine_id != routine_id:
                 raise ValueError("resume thread does not belong to this routine")
             initial_session_id = routine_session_from_thread(resume_thread_id, routine_id)
@@ -225,7 +228,7 @@ def create_routine_executor(
         if initial_session_id:
             await routine_controls.assert_not_cancelled(routine_id, initial_session_id)
         if resume_thread_id:
-            resumed_routine_id, revision_id = _parse_routine_thread_id(resume_thread_id)
+            resumed_routine_id, revision_id, _session_id = parse_routine_thread_id(resume_thread_id)
             if resumed_routine_id != routine_id:
                 raise ValueError("resume thread does not belong to this routine")
             if revision_id is None:
@@ -258,7 +261,7 @@ def create_routine_executor(
             run_thread_id = resume_thread_id
         else:
             session_id = requested_session_id or uuid.uuid4().hex
-            run_thread_id = f"routine:{routine_id}:{revision_id or 'unpinned'}:{session_id}"
+            run_thread_id = routine_thread_id(routine_id, revision_id, session_id)
         run_config: RunnableConfig = {"configurable": {"thread_id": run_thread_id}}
         # This guard is intentionally before lifecycle ``started``: a cancelled
         # logical session must not look like a fresh attempted continuation.
@@ -501,7 +504,9 @@ def create_routine_executor(
     async def _execute(state: dict) -> dict:
         resume_thread_id = str(state.get("_routine_resume_thread_id") or "").strip() or None
         if resume_thread_id:
-            resumed_routine_id, _revision_id = _parse_routine_thread_id(resume_thread_id)
+            resumed_routine_id, _revision_id, _session_id = parse_routine_thread_id(
+                resume_thread_id
+            )
             if resumed_routine_id != routine_id:
                 raise ValueError("resume thread does not belong to this routine")
             session_id = routine_session_from_thread(resume_thread_id, routine_id)
@@ -554,13 +559,15 @@ def create_routine_executor(
             # A resume that failed before owning its checkpoint leaves it stopped.
             await active_controls.release_resume_claim(execution)
             cast(Any, exc).routine_invocation = dict(execution)
-            await persist_run_event(state_manager, {**execution, "error": str(exc)}, "failed")
+            await persist_run_event(
+                state_manager, {**execution, "error": str(exc)}, RoutineRunStatus.FAILED
+            )
             cast(Any, exc).routine_lifecycle_reported = True
             raise
         finally:
             var_child_runnable_config.reset(token)
         paused = bool(result.get("_routine_paused"))
-        status = "paused" if paused else "completed"
+        status = RoutineRunStatus.PAUSED if paused else RoutineRunStatus.COMPLETED
         await active_controls.complete_execution(execution, status)
         await persist_run_event(
             state_manager,
@@ -693,20 +700,6 @@ def create_routine_subagent(
     return {"name": routine_id, "description": description, "runnable": RunnableLambda(_run)}
 
 
-def _parse_routine_thread_id(thread_id: str) -> tuple[str, str | None]:
-    """Split a ``routine:<routine_id>:<revision_id>:<uuid>`` thread_id.
-
-    Returns ``(routine_id, revision_id)``; ``revision_id`` is ``None`` when
-    the run was against the live (unpinned) document (see the ``'unpinned'``
-    sentinel written by ``create_routine_subagent``'s ``_run``).
-    """
-    parts = thread_id.split(":")
-    if len(parts) != 4 or parts[0] != "routine":
-        raise ValueError(f"not a routine run thread_id: {thread_id!r}")
-    _, routine_id, revision_id, _run_uuid = parts
-    return routine_id, (None if revision_id == "unpinned" else revision_id)
-
-
 def _pause_details(interrupts: Any) -> dict[str, Any]:
     """What a paused run's lifecycle event says it is waiting for.
 
@@ -729,7 +722,7 @@ async def _load_pinned_routine_graph(
     thread_id: str, state_manager: Any, revision_reader: RoutineRevisionReader
 ) -> tuple[Any, Any]:
     """Return the graph a routine thread ran against and its instruction loader."""
-    routine_id, revision_id = _parse_routine_thread_id(thread_id)
+    routine_id, revision_id, _session_id = parse_routine_thread_id(thread_id)
     graph_doc: dict[str, Any] | None = None
     if revision_id is not None:
         graph_doc = await revision_reader.fetch(routine_id, revision_id)
@@ -781,7 +774,7 @@ async def _resume_routine_thread(
     to share create_routine_subagent's per-invocation compile cache).
     """
     routine_controls = routine_controls or RoutineRunController(state_manager)
-    routine_id, revision_id = _parse_routine_thread_id(thread_id)
+    routine_id, revision_id, _session_id = parse_routine_thread_id(thread_id)
     session_id = routine_session_from_thread(thread_id, routine_id)
     await routine_controls.assert_not_cancelled(routine_id, session_id)
     graph, instruction_loader = await _load_pinned_routine_graph(
@@ -881,11 +874,13 @@ async def _resume_routine_thread(
         raise
     except Exception as exc:
         await active_controls.fail_execution(execution)
-        await persist_run_event(state_manager, {**execution, "error": str(exc)}, "failed")
+        await persist_run_event(
+            state_manager, {**execution, "error": str(exc)}, RoutineRunStatus.FAILED
+        )
         cast(Any, exc).routine_lifecycle_reported = True
         raise
     interrupts = result.get("__interrupt__") if isinstance(result, dict) else None
-    status = "paused" if interrupts else "completed"
+    status = RoutineRunStatus.PAUSED if interrupts else RoutineRunStatus.COMPLETED
     await active_controls.complete_execution(execution, status)
     await persist_run_event(
         state_manager,
@@ -903,7 +898,7 @@ async def _resume_routine_thread(
             "question": question,
         }
     return {
-        "status": "completed",
+        "status": RoutineRunStatus.COMPLETED,
         "thread_id": thread_id,
         "messages": [str(getattr(m, "content", m)) for m in (result.get("messages") or [])],
     }

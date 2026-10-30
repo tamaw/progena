@@ -22,6 +22,7 @@ import src.backend.workflows.acp_results as acp_results
 import src.backend.workflows.models as workflows_models
 import src.backend.workflows.runtime as workflows_runtime
 import src.backend.workflows.service as workflows_service
+from src.backend.events import contracts as events_contracts
 from src.progena.cron import cron_error, next_cron_time, timezone_name
 from src.progena.utils import utcnow
 from src.progena.workflows.documents import default_workflow_definition, workflow_id_from_path
@@ -88,11 +89,13 @@ async def get_workflows(
         storage_documents.get_default_document_store()
     )
     events_stream.broadcast_ui_event(
-        "workflows.snapshot",
+        events_contracts.UiEvent.WORKFLOWS_SNAPSHOT,
         {"items": [item.model_dump(mode="json") for item in items]},
         request_id=request_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["workflows.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.WORKFLOWS_SNAPSHOT]
+    )
 
 
 @router.get(
@@ -115,9 +118,13 @@ async def get_workflow_content(
         raise HTTPException(status_code=404, detail="Workflow not found")
     payload = workflows_runtime._workflow_content_response(definition)
     events_stream.broadcast_ui_event(
-        "workflow.updated", payload.model_dump(mode="json", by_alias=True), request_id=request_id
+        events_contracts.UiEvent.WORKFLOW_UPDATED,
+        payload.model_dump(mode="json", by_alias=True),
+        request_id=request_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["workflow.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.WORKFLOW_UPDATED]
+    )
 
 
 @router.put(
@@ -148,10 +155,12 @@ async def put_workflow_content(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     payload = workflows_runtime._workflow_content_response(definition)
     events_stream.broadcast_ui_event(
-        "workflow.updated", payload.model_dump(mode="json", by_alias=True), request_id=request_id
+        events_contracts.UiEvent.WORKFLOW_UPDATED,
+        payload.model_dump(mode="json", by_alias=True),
+        request_id=request_id,
     )
     events_stream.broadcast_ui_event(
-        "workflows.snapshot",
+        events_contracts.UiEvent.WORKFLOWS_SNAPSHOT,
         {
             "items": [
                 item.model_dump(mode="json")
@@ -163,7 +172,8 @@ async def put_workflow_content(
         request_id=request_id,
     )
     return http_contracts.acknowledgement_response(
-        request_id, ["workflow.updated", "workflows.snapshot"]
+        request_id,
+        [events_contracts.UiEvent.WORKFLOW_UPDATED, events_contracts.UiEvent.WORKFLOWS_SNAPSHOT],
     )
 
 
@@ -188,10 +198,12 @@ async def create_workflow(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     payload = workflows_runtime._workflow_content_response(definition)
     events_stream.broadcast_ui_event(
-        "workflow.updated", payload.model_dump(mode="json", by_alias=True), request_id=request_id
+        events_contracts.UiEvent.WORKFLOW_UPDATED,
+        payload.model_dump(mode="json", by_alias=True),
+        request_id=request_id,
     )
     events_stream.broadcast_ui_event(
-        "workflows.snapshot",
+        events_contracts.UiEvent.WORKFLOWS_SNAPSHOT,
         {
             "items": [
                 item.model_dump(mode="json")
@@ -203,7 +215,8 @@ async def create_workflow(
         request_id=request_id,
     )
     return http_contracts.acknowledgement_response(
-        request_id, ["workflow.updated", "workflows.snapshot"]
+        request_id,
+        [events_contracts.UiEvent.WORKFLOW_UPDATED, events_contracts.UiEvent.WORKFLOWS_SNAPSHOT],
     )
 
 
@@ -228,10 +241,12 @@ async def delete_workflow(
         raise HTTPException(status_code=404, detail="Workflow not found")
     workflows_service.delete_workflow_definition(store, workflow_id)
     events_stream.broadcast_ui_event(
-        "workflow.deleted", {"workflow_id": workflow_id}, request_id=request_id
+        events_contracts.UiEvent.WORKFLOW_DELETED,
+        {"workflow_id": workflow_id},
+        request_id=request_id,
     )
     events_stream.broadcast_ui_event(
-        "workflows.snapshot",
+        events_contracts.UiEvent.WORKFLOWS_SNAPSHOT,
         {
             "items": [
                 item.model_dump(mode="json")
@@ -241,7 +256,8 @@ async def delete_workflow(
         request_id=request_id,
     )
     return http_contracts.acknowledgement_response(
-        request_id, ["workflow.deleted", "workflows.snapshot"]
+        request_id,
+        [events_contracts.UiEvent.WORKFLOW_DELETED, events_contracts.UiEvent.WORKFLOWS_SNAPSHOT],
     )
 
 
@@ -273,11 +289,14 @@ async def pause_workflow(
     await workflows_runtime.get_workflow_executor().pause_workflow(updated.id)
     payload = workflows_runtime._workflow_content_response(updated)
     events_stream.broadcast_ui_event(
-        "workflow.updated", payload.model_dump(mode="json", by_alias=True), request_id=request_id
+        events_contracts.UiEvent.WORKFLOW_UPDATED,
+        payload.model_dump(mode="json", by_alias=True),
+        request_id=request_id,
     )
     workflows_runtime.broadcast_workflows_snapshot(request_id=request_id)
     return http_contracts.acknowledgement_response(
-        request_id, ["workflow.updated", "workflows.snapshot"]
+        request_id,
+        [events_contracts.UiEvent.WORKFLOW_UPDATED, events_contracts.UiEvent.WORKFLOWS_SNAPSHOT],
     )
 
 
@@ -309,11 +328,14 @@ async def resume_workflow(
     await workflows_runtime.get_workflow_executor().resume_workflow(updated.id)
     payload = workflows_runtime._workflow_content_response(updated)
     events_stream.broadcast_ui_event(
-        "workflow.updated", payload.model_dump(mode="json", by_alias=True), request_id=request_id
+        events_contracts.UiEvent.WORKFLOW_UPDATED,
+        payload.model_dump(mode="json", by_alias=True),
+        request_id=request_id,
     )
     workflows_runtime.broadcast_workflows_snapshot(request_id=request_id)
     return http_contracts.acknowledgement_response(
-        request_id, ["workflow.updated", "workflows.snapshot"]
+        request_id,
+        [events_contracts.UiEvent.WORKFLOW_UPDATED, events_contracts.UiEvent.WORKFLOWS_SNAPSHOT],
     )
 
 
@@ -328,7 +350,9 @@ async def get_workflow_runs(
     request_id = http_requests.request_correlation_id(request, x_request_id)
     items = workflows_service.list_workflow_runs(storage_documents.get_default_document_store())
     workflows_runtime.broadcast_workflow_runs_snapshot(items, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["workflow.runs.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.WORKFLOW_RUNS_SNAPSHOT]
+    )
 
 
 @router.post(
@@ -369,7 +393,7 @@ async def trigger_workflow(
     refreshed = workflows_service.get_workflow_run(store, run.run_id) or run
     run_payload = refreshed.model_dump(mode="json")
     events_stream.broadcast_ui_event(
-        "workflow.run.started",
+        events_contracts.UiEvent.WORKFLOW_RUN_STARTED,
         {
             "workflow_id": workflow_id,
             "run_id": refreshed.run_id,
@@ -378,7 +402,9 @@ async def trigger_workflow(
         },
         request_id=request_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["workflow.run.started"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.WORKFLOW_RUN_STARTED]
+    )
 
 
 @router.post(
@@ -404,11 +430,13 @@ async def resolve_workflow_approval(
     if run is None:
         raise HTTPException(status_code=409, detail="Workflow run is not awaiting approval")
     events_stream.broadcast_ui_event(
-        "workflow.run.updated",
+        events_contracts.UiEvent.WORKFLOW_RUN_UPDATED,
         {"workflow_id": workflow_id, "run_id": run_id, "run": run.model_dump(mode="json")},
         request_id=request_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["workflow.run.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.WORKFLOW_RUN_UPDATED]
+    )
 
 
 @router.post(
@@ -431,7 +459,7 @@ async def action_run(
         raise HTTPException(status_code=502, detail=f"Agent action failed: {exc}") from exc
     if body.broadcast_response:
         events_stream.broadcast_ui_event(
-            "agent_message",
+            events_contracts.UiEvent.AGENT_MESSAGE,
             {
                 "content": response_text,
                 "metadata": {"widget_id": body.widget_id, "action": "run", "thread_id": thread_id},
@@ -443,7 +471,9 @@ async def action_run(
     schedules_service._broadcast_widget_refresh(
         monitoring_state.get_state_reader(), request_id=request_id
     )
-    return http_contracts.acknowledgement_response(request_id, ["widgets.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.WIDGETS_UPDATED]
+    )
 
 
 @router.post(
@@ -493,7 +523,7 @@ async def action_generate(
 
     chat_threads.complete_thread(thread_id, response.response, widget_id=body.widget_id)
     events_stream.broadcast_ui_event(
-        "action.generate.sent",
+        events_contracts.UiEvent.ACTION_GENERATE_SENT,
         {
             "thread_id": thread_id,
             "widget_id": body.widget_id,
@@ -502,7 +532,7 @@ async def action_generate(
         request_id=request_id,
     )
     events_stream.broadcast_ui_event(
-        "agent_message",
+        events_contracts.UiEvent.AGENT_MESSAGE,
         {
             "content": response.response,
             "metadata": {"widget_id": body.widget_id, "action": "generate", "thread_id": thread_id},
@@ -515,5 +545,6 @@ async def action_generate(
         monitoring_state.get_state_reader(), request_id=request_id
     )
     return http_contracts.acknowledgement_response(
-        request_id, ["action.generate.sent", "widgets.updated"]
+        request_id,
+        [events_contracts.UiEvent.ACTION_GENERATE_SENT, events_contracts.UiEvent.WIDGETS_UPDATED],
     )

@@ -39,7 +39,9 @@ async def list_knowledge_bases(
     request_id = _request_correlation_id(request, x_request_id)
     bases = await asyncio.to_thread(snapshot_bases)
     broadcast_knowledge_snapshot(bases, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["knowledge.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.KNOWLEDGE_SNAPSHOT]
+    )
 
 
 @router.put("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
@@ -64,7 +66,9 @@ async def replace_knowledge_bases(
     await asyncio.to_thread(save_bases, new_bases)
     bases = await asyncio.to_thread(snapshot_bases)
     broadcast_knowledge_snapshot(bases, request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["knowledge.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.KNOWLEDGE_SNAPSHOT]
+    )
 
 
 _REQUEST_ID_HEADER = Header(default=None, alias="X-Operation-Id")
@@ -79,7 +83,9 @@ async def _require_base(base_id: str) -> None:
 async def _broadcast_pages(base_id: str, request_id: str) -> None:
     pages = await asyncio.to_thread(list_pages, base_id)
     events_stream.broadcast_ui_event(
-        "knowledge.pages.snapshot", {"base_id": base_id, "pages": pages}, request_id=request_id
+        events_contracts.UiEvent.KNOWLEDGE_PAGES_SNAPSHOT,
+        {"base_id": base_id, "pages": pages},
+        request_id=request_id,
     )
 
 
@@ -93,7 +99,9 @@ async def get_knowledge_pages(
     request_id = _request_correlation_id(request, x_request_id)
     await _require_base(base_id)
     await _broadcast_pages(base_id, request_id)
-    return http_contracts.acknowledgement_response(request_id, ["knowledge.pages.snapshot"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.KNOWLEDGE_PAGES_SNAPSHOT]
+    )
 
 
 @router.get(
@@ -112,9 +120,13 @@ async def get_knowledge_page(
     if page is None:
         raise HTTPException(status_code=404, detail="Knowledge page not found.")
     events_stream.broadcast_ui_event(
-        "knowledge.page.loaded", {"base_id": base_id, **page}, request_id=request_id
+        events_contracts.UiEvent.KNOWLEDGE_PAGE_LOADED,
+        {"base_id": base_id, **page},
+        request_id=request_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["knowledge.page.loaded"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.KNOWLEDGE_PAGE_LOADED]
+    )
 
 
 @router.get(
@@ -134,7 +146,7 @@ async def list_knowledge_page_revisions(
     store = get_default_document_store()
     revisions = await asyncio.to_thread(store.list_knowledge_page_revisions, base_id, path)
     events_stream.broadcast_ui_event(
-        "knowledge.page.revisions.loaded",
+        events_contracts.UiEvent.KNOWLEDGE_PAGE_REVISIONS_LOADED,
         {
             "base_id": base_id,
             "path": path,
@@ -144,7 +156,9 @@ async def list_knowledge_page_revisions(
         },
         request_id=request_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["knowledge.page.revisions.loaded"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.KNOWLEDGE_PAGE_REVISIONS_LOADED]
+    )
 
 
 @router.get(
@@ -171,7 +185,7 @@ async def get_knowledge_page_revision(
     except ValueError:
         front_matter = None
     events_stream.broadcast_ui_event(
-        "knowledge.page.revision.loaded",
+        events_contracts.UiEvent.KNOWLEDGE_PAGE_REVISION_LOADED,
         {
             "base_id": base_id,
             "path": path,
@@ -181,7 +195,9 @@ async def get_knowledge_page_revision(
         },
         request_id=request_id,
     )
-    return http_contracts.acknowledgement_response(request_id, ["knowledge.page.revision.loaded"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.KNOWLEDGE_PAGE_REVISION_LOADED]
+    )
 
 
 def broadcast_knowledge_snapshot(
@@ -200,7 +216,7 @@ def broadcast_knowledge_snapshot(
     """
     payload = knowledge_service.snapshot_bases() if bases is None else bases
     return events_stream.broadcast_ui_event(
-        "knowledge.snapshot", {"bases": payload}, request_id=request_id
+        events_contracts.UiEvent.KNOWLEDGE_SNAPSHOT, {"bases": payload}, request_id=request_id
     )
 
 
@@ -210,7 +226,7 @@ def broadcast_knowledge_pages_snapshot(
     from src.backend.knowledge.pages import list_pages
 
     return events_stream.broadcast_ui_event(
-        "knowledge.pages.snapshot",
+        events_contracts.UiEvent.KNOWLEDGE_PAGES_SNAPSHOT,
         {"base_id": base_id, "pages": list_pages(base_id)},
         request_id=request_id,
     )

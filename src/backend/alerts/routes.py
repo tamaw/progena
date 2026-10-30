@@ -14,6 +14,7 @@ import src.backend.events.documents as events_documents
 import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
 import src.backend.http.requests as http_requests
+from src.backend.events import contracts as events_contracts
 from src.progena.documents.kinds import ALERT_KEY_PREFIX
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,9 @@ async def get_alerts(
     """
     request_id = http_requests.request_correlation_id(request, x_request_id)
     broadcast_alerts_state(request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["alerts.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.ALERTS_UPDATED]
+    )
 
 
 @router.post(
@@ -53,7 +56,9 @@ async def mark_viewed_alerts(
     request_id = http_requests.request_correlation_id(request, x_request_id)
     alerts_service.mark_alerts_viewed(body.alert_ids if body else None)
     broadcast_alerts_state(request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["alerts.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.ALERTS_UPDATED]
+    )
 
 
 @router.post(
@@ -78,7 +83,9 @@ async def dismiss_alert(
 
     alerts_service.mark_alerts_viewed([alert_id])
     broadcast_alerts_state(request_id=request_id)
-    return http_contracts.acknowledgement_response(request_id, ["alerts.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.ALERTS_UPDATED]
+    )
 
 
 @router.post(
@@ -106,7 +113,9 @@ async def respond_to_alert(
     broadcast_alerts_state(request_id=request_id)
     logger.info("Alert %s responded with: %s", alert_id, response)
 
-    return http_contracts.acknowledgement_response(request_id, ["alerts.updated"])
+    return http_contracts.acknowledgement_response(
+        request_id, [events_contracts.UiEvent.ALERTS_UPDATED]
+    )
 
 
 _alert_relay: Callable[[alerts_service.AlertInfo], Coroutine[Any, Any, None]] | None = None
@@ -148,7 +157,7 @@ async def _publish_alert_document(typed: events_documents.TypedDocumentEvent) ->
 def broadcast_alert(alert: alerts_service.AlertInfo):
     """Broadcast a new alert to all subscribers."""
     events_stream.broadcast_ui_event(
-        "alert",
+        events_contracts.UiEvent.ALERT,
         {
             "id": alert.id,
             "type": alert.type,
@@ -162,4 +171,6 @@ def broadcast_alert(alert: alerts_service.AlertInfo):
 
 def broadcast_alerts_state(*, request_id: str | None = None) -> None:
     """Broadcast full alert payload updates to subscribers."""
-    events_stream.broadcast_ui_event("alerts.updated", _alerts_payload(), request_id=request_id)
+    events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.ALERTS_UPDATED, _alerts_payload(), request_id=request_id
+    )

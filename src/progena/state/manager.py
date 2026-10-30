@@ -17,6 +17,7 @@ from src.progena.documents.types import DocumentType
 from src.progena.inbox.store import InboxStore
 from src.progena.knowledge.store import KnowledgeStore
 from src.progena.mcp.store import MCPStore
+from src.progena.orchestration.background import BACKGROUND_TASKS_DOCUMENT_KEY
 from src.progena.orchestration.state import BackgroundTaskEntry
 from src.progena.orchestration.store import BackgroundStore
 from src.progena.persistence.documents import StateDocuments
@@ -51,7 +52,7 @@ class StateManager:
         "current_state": "current_state.json",
         "a2a_tasks": "a2a_tasks.json",
         "async_subagent_tasks": "async_subagent_tasks.json",
-        "background_tasks": "background_tasks.json",
+        BACKGROUND_TASKS_DOCUMENT_KEY: f"{BACKGROUND_TASKS_DOCUMENT_KEY}.json",
         "registry": "agents.json",
     }
 
@@ -60,7 +61,7 @@ class StateManager:
     # change notifications to stay coherent and a flush on close/commit can
     # never overwrite another writer's update. ``repo:<id>`` documents are
     # likewise always read from and written straight to the store.
-    READ_THROUGH_DOCUMENTS: frozenset[str] = frozenset({"repo_scan", "background_tasks"})
+    READ_THROUGH_DOCUMENTS: frozenset[str] = frozenset({"repo_scan", BACKGROUND_TASKS_DOCUMENT_KEY})
 
     def __init__(
         self,
@@ -161,7 +162,7 @@ class StateManager:
             },
             "a2a_tasks": [],
             "async_subagent_tasks": [],
-            "background_tasks": [],
+            BACKGROUND_TASKS_DOCUMENT_KEY: [],
             "schedule_runs": [],
             "registry": {},
             "mcp": default_mcp_config_payload(),

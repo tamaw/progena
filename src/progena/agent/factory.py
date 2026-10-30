@@ -62,7 +62,7 @@ from src.progena.llm.provider_context import (
     current_provider_turn,
 )
 from src.progena.routines.approvals import approval_lock
-from src.progena.routines.controls import RoutineRunController, routine_session_from_thread
+from src.progena.routines.controls import RoutineRunController
 from src.progena.routines.graph import validate_routine_graph_payload
 from src.progena.routines.revisions import (
     NullRoutineRevisionReader,
@@ -74,6 +74,7 @@ from src.progena.routines.subagent import (
     resolve_routine_document,
     resume_routine_thread,
 )
+from src.progena.threads import parse_routine_thread_id, routine_default_session_id
 
 logger = logging.getLogger(__name__)
 
@@ -469,8 +470,7 @@ async def create_progena_agent(
         """
         resume_thread_id = str(state.get("_routine_resume_thread_id") or "").strip() or None
         if resume_thread_id:
-            routine_session_from_thread(resume_thread_id)
-            routine_id = resume_thread_id.split(":")[1]
+            routine_id, _revision_id, _session_id = parse_routine_thread_id(resume_thread_id)
             if routine_id != routine_id_or_name:
                 resolved = await resolve_routine_document(state_manager, routine_id_or_name)
                 if resolved is None or resolved[0] != routine_id:
@@ -510,7 +510,7 @@ async def create_progena_agent(
 
         if current_provider_turn() is not None:
             return await invoke()
-        session_id = str(state.get("thread_id") or f"routine:{routine_id}")
+        session_id = str(state.get("thread_id") or routine_default_session_id(routine_id))
         turn = await ProviderTurn.create(config.llm, session_id=session_id, resolve_default=False)
         with activate_provider_turn(turn):
             return await invoke()

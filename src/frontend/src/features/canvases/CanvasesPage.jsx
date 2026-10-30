@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useConfig } from '../../context/ConfigContext';
+import { dispatchQuickChatOpen } from '../../lib/browserContracts';
+
 import PageShell from '../../components/layout/PageShell';
 import DetailPane from '../../components/layout/DetailPane';
 import {
@@ -49,9 +51,7 @@ function CanvasRow({ canvas, selected, onSelect }) {
   );
 }
 
-const openCanvasChat = (draft) => window.dispatchEvent(
-  new CustomEvent('progena:open-quick-chat', { detail: { draft } }),
-);
+const openCanvasChat = (draft) => dispatchQuickChatOpen({ draft });
 
 export default function CanvasesPage() {
   const { name } = useParams();

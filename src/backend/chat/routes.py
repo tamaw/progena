@@ -32,6 +32,7 @@ from src.backend.chat.service import (
     paginate_chat_messages,
     patch_session_document,
 )
+from src.backend.events import contracts as events_contracts
 from src.backend.http.requests import BroadcastUiEvent
 from src.backend.http.requests import request_correlation_id as _strict_request_correlation_id
 from src.backend.integrations.runtime_history import RuntimeUnavailable
@@ -41,6 +42,14 @@ from src.progena.documents.kinds import SESSION_KEY_PREFIX
 logger = logging.getLogger(__name__)
 
 RUNTIME_UNAVAILABLE_DETAIL = "Progena runtime is unavailable; chat history cannot be loaded"
+_CHAT_ROUTE_ORIGIN_PREFIX = "chat-route:"
+
+
+def _request_id_from_chat_route_origin(origin: str | None) -> str | None:
+    if origin is None or not origin.startswith(_CHAT_ROUTE_ORIGIN_PREFIX):
+        return None
+    request_id = origin.removeprefix(_CHAT_ROUTE_ORIGIN_PREFIX)
+    return request_id or None
 
 
 def request_correlation_id(request: Request, header_request_id: str | None) -> str:
@@ -79,7 +88,7 @@ async def broadcast_chat_sessions_snapshot(
         include_archived=include_archived,
     )
     broadcast_ui_event(
-        "chat.sessions.snapshot",
+        events_contracts.UiEvent.CHAT_SESSIONS_SNAPSHOT,
         response.model_dump(),
         scope="chat",
         request_id=request_id,
@@ -150,7 +159,9 @@ def create_chat_router(
         """Acknowledge chat list requests and publish the list on the UI stream."""
         request_id = request_correlation_id(request, x_request_id)
         await broadcast_snapshot(include_archived=include_archived, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["chat.sessions.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.CHAT_SESSIONS_SNAPSHOT]
+        )
 
     @router.get(
         "/chats/{thread_id}",
@@ -183,20 +194,24 @@ def create_chat_router(
             }
         )
         broadcast_ui_event(
-            "chat.session.upserted",
+            events_contracts.UiEvent.CHAT_SESSION_UPSERTED,
             {"session": detail.model_dump()},
             scope="chat",
             request_id=request_id,
         )
         broadcast_ui_event(
-            "chat.session.selected",
+            events_contracts.UiEvent.CHAT_SESSION_SELECTED,
             {"session": detail.model_dump()},
             scope="chat",
             session_id=thread_id,
             request_id=request_id,
         )
         return http_contracts.acknowledgement_response(
-            request_id, ["chat.session.upserted", "chat.session.selected"]
+            request_id,
+            [
+                events_contracts.UiEvent.CHAT_SESSION_UPSERTED,
+                events_contracts.UiEvent.CHAT_SESSION_SELECTED,
+            ],
         )
 
     @router.get(
@@ -221,13 +236,15 @@ def create_chat_router(
         )
         response = ChatMessagesPageResponse(thread_id=thread_id, messages=page, has_more=has_more)
         broadcast_ui_event(
-            "chat.messages.page.loaded",
+            events_contracts.UiEvent.CHAT_MESSAGES_PAGE_LOADED,
             response.model_dump(),
             scope="chat",
             session_id=thread_id,
             request_id=request_id,
         )
-        return http_contracts.acknowledgement_response(request_id, ["chat.messages.page.loaded"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.CHAT_MESSAGES_PAGE_LOADED]
+        )
 
     @router.patch(
         "/chats/{thread_id}",
@@ -243,17 +260,28 @@ def create_chat_router(
         """Update session document metadata (title/pinned/archived) via atomic merge."""
         request_id = request_correlation_id(http_request, x_request_id)
 
-        def _patch() -> dict | None:
-            return patch_session_document(get_document_store(), thread_id, request)
+        def _patch() -> chat_service.ChatSessionPatchResult | None:
+            with storage_documents.document_write_origin(
+                f"{_CHAT_ROUTE_ORIGIN_PREFIX}{request_id}"
+            ):
+                return patch_session_document(get_document_store(), thread_id, request)
 
         # Only the session document is touched, so a rename works while the
         # runtime (and with it the transcript) is unavailable.
-        if await off_loop(_patch) is None:
+        patched = await off_loop(_patch)
+        if patched is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
-        # The document-event handler broadcasts the snapshot and metadata.updated
-        # event so the sidebar updates live for all clients.
+        if not patched.changed:
+            await broadcast_snapshot(request_id=request_id)
+            return http_contracts.acknowledgement_response(
+                request_id, [events_contracts.UiEvent.CHAT_SESSIONS_SNAPSHOT]
+            )
         return http_contracts.acknowledgement_response(
-            request_id, ["chat.session.metadata.updated", "chat.sessions.snapshot"]
+            request_id,
+            [
+                events_contracts.UiEvent.CHAT_SESSION_METADATA_UPDATED,
+                events_contracts.UiEvent.CHAT_SESSIONS_SNAPSHOT,
+            ],
         )
 
     @router.delete(
@@ -271,13 +299,19 @@ def create_chat_router(
 
         def _delete() -> bool:
             store = get_document_store()
-            return delete_session_document(store, thread_id)
+            with storage_documents.document_write_origin(
+                f"{_CHAT_ROUTE_ORIGIN_PREFIX}{request_id}"
+            ):
+                return delete_session_document(store, thread_id)
 
         if not await off_loop(_delete):
             raise HTTPException(status_code=404, detail="Chat session not found")
-        # The document-event handler broadcasts the snapshot and deleted event.
         return http_contracts.acknowledgement_response(
-            request_id, ["chat.session.deleted", "chat.sessions.snapshot"]
+            request_id,
+            [
+                events_contracts.UiEvent.CHAT_SESSION_DELETED,
+                events_contracts.UiEvent.CHAT_SESSIONS_SNAPSHOT,
+            ],
         )
 
     return router
@@ -312,35 +346,43 @@ async def _publish_chat_session_document_event(typed: events_documents.TypedDocu
     event = typed.event
     if not event.key.startswith(SESSION_KEY_PREFIX):
         return
+    request_id = _request_id_from_chat_route_origin(event.origin)
     thread_id = event.key[len(SESSION_KEY_PREFIX) :]
-    # Always push the refreshed roster so every client stays in sync.
-    await _broadcast_chat_sessions_snapshot()
     if event.op == "deleted":
+        await _broadcast_chat_sessions_snapshot(request_id=request_id)
         events_stream.broadcast_ui_event(
-            "chat.session.deleted",
+            events_contracts.UiEvent.CHAT_SESSION_DELETED,
             {"thread_id": thread_id},
             scope="chat",
             session_id=thread_id,
+            request_id=request_id,
         )
         return
+    await _broadcast_chat_sessions_snapshot(request_id=request_id)
     summary = await asyncio.to_thread(
         chat_service.get_chat_summary, storage_documents.get_default_document_store(), thread_id
     )
     if summary is None:
         return
     events_stream.broadcast_ui_event(
-        "chat.session.created" if event.op == "created" else "chat.session.metadata.updated",
+        events_contracts.UiEvent.CHAT_SESSION_CREATED
+        if event.op == "created"
+        else events_contracts.UiEvent.CHAT_SESSION_METADATA_UPDATED,
         {"session": summary.model_dump()},
         scope="chat",
         session_id=thread_id,
+        request_id=request_id,
     )
 
 
-async def _broadcast_chat_sessions_snapshot(include_archived: bool = True):
+async def _broadcast_chat_sessions_snapshot(
+    include_archived: bool = True, request_id: str | None = None
+):
     return await broadcast_chat_sessions_snapshot(
         get_document_store=storage_documents.get_default_document_store,
         broadcast_ui_event=events_stream.broadcast_ui_event,
         include_archived=include_archived,
+        request_id=request_id,
     )
 
 

@@ -1,3 +1,4 @@
+import { UI_EVENT } from '../../realtime/eventVocabulary';
 /**
  * Inbox domain: agent-to-user messages written as /inbox/<id>.md files in the
  * runtime, kept live by `inbox.snapshot` / `inbox.message.upserted` /
@@ -66,10 +67,10 @@ export const archiveInboxMessage = createAcknowledgedThunk('uiData/archiveInboxM
 ));
 
 export const eventHandlers = {
-  'inbox.snapshot': (state, payload) => {
+  [UI_EVENT.INBOX_SNAPSHOT]: (state, payload) => {
     applyInboxSnapshot(state.inbox, payload);
   },
-  'inbox.message.upserted': (state, payload) => {
+  [UI_EVENT.INBOX_MESSAGE_UPSERTED]: (state, payload) => {
     const message = payload.message;
     const messageId = typeof message?.id === 'string' ? message.id : null;
     if (!messageId) {
@@ -80,7 +81,7 @@ export const eventHandlers = {
     }
     state.inbox.byId[messageId] = { ...(state.inbox.byId[messageId] || {}), ...message };
   },
-  'inbox.message.deleted': (state, payload) => {
+  [UI_EVENT.INBOX_MESSAGE_DELETED]: (state, payload) => {
     const messageId = payload.message_id;
     if (!messageId || !state.inbox.byId[messageId]) {
       return;

@@ -43,6 +43,7 @@ from src.progena.runs.schedule import render_schedule, schedule_title
 from src.progena.runs.workflow import render_workflow, workflow_title
 from src.progena.runtime.instance import RUNTIME_INSTANCE_ID, RUNTIME_STARTED_AT
 from src.progena.runtime.ownership import parse_timestamp, schedule_run_interrupted
+from src.progena.workflows.documents import is_workflow_owned_routine_session
 
 _READ_ONLY = "Runs are read-only."
 _KINDS: dict[str, RunKind] = {directory: kind for kind, directory in RUN_DIRECTORIES.items()}
@@ -336,7 +337,7 @@ def _is_child(event: dict[str, Any]) -> bool:
     """Runs started by a workflow step or a routine node live inside their parent."""
     if isinstance(event.get("parent"), dict) and event["parent"]:
         return True
-    return str(event.get("session_id") or "").startswith("workflow_run_")
+    return is_workflow_owned_routine_session(str(event.get("session_id") or ""))
 
 
 def _when(value: Any) -> datetime:

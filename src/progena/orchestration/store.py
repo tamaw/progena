@@ -17,13 +17,13 @@ class BackgroundStore:
 
     async def get_background_tasks(self) -> list[BackgroundTaskEntry]:
         """Return all background task entries."""
-        payload = await self._access.get("background_tasks")
+        payload = await self._access.get(background_store.BACKGROUND_TASKS_DOCUMENT_KEY)
         return [BackgroundTaskEntry.model_validate(item) for item in payload]
 
     async def save_background_tasks(self, tasks: list[BackgroundTaskEntry]) -> None:
         """Persist all background task entries."""
         await self._access.save(
-            "background_tasks",
+            background_store.BACKGROUND_TASKS_DOCUMENT_KEY,
             [task.model_dump(mode="json") for task in tasks],
         )
 
@@ -41,12 +41,16 @@ class BackgroundStore:
         async with await AsyncConnection.connect(
             self._access.database_url, autocommit=True
         ) as conn:
-            await conn.execute("SELECT pg_advisory_lock(hashtextextended('background_tasks', 0))")
+            await conn.execute(
+                "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
+                (background_store.BACKGROUND_TASKS_ADVISORY_LOCK_KEY,),
+            )
             try:
                 yield
             finally:
                 await conn.execute(
-                    "SELECT pg_advisory_unlock(hashtextextended('background_tasks', 0))"
+                    "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+                    (background_store.BACKGROUND_TASKS_ADVISORY_LOCK_KEY,),
                 )
 
     async def enqueue_background_task(self, task: BackgroundTaskEntry) -> None:

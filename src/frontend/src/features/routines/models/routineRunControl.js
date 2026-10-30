@@ -1,12 +1,15 @@
+import { ROUTINE_RUN_STATUS } from '../../../realtime/eventVocabulary';
+
 export const STOP_ESCALATION_MS = 5_000;
 
+// "interrupted" is derived when a runtime owner exits; it is not persisted in
+// the shared lifecycle vocabulary but is terminal for the renderer.
 export const ROUTINE_RUN_TERMINAL_STATUSES = new Set([
-  'completed', 'failed', 'paused', 'stopped', 'cancelled', 'interrupted',
+  ...ROUTINE_RUN_STATUS.TERMINAL,
+  'interrupted',
 ]);
 
-export const ROUTINE_RUN_ACTIVE_STATUSES = new Set([
-  'enqueued', 'started', 'stopping', 'cancelling',
-]);
+export const ROUTINE_RUN_ACTIVE_STATUSES = new Set(ROUTINE_RUN_STATUS.ACTIVE);
 
 export function isRoutineRunTerminal(status) {
   return ROUTINE_RUN_TERMINAL_STATUSES.has(status);

@@ -19,6 +19,7 @@ from pydantic import BaseModel
 import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
 import src.backend.storage.documents as storage_documents
+from src.backend.events import contracts as events_contracts
 from src.backend.http.requests import BroadcastUiEvent
 from src.backend.http.requests import request_correlation_id as _request_correlation_id
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
@@ -122,7 +123,9 @@ def broadcast_inbox_snapshot(
     request_id: str | None = None,
 ) -> InboxSnapshotResponse:
     response = inbox_snapshot_response(get_document_store=get_document_store)
-    broadcast_ui_event("inbox.snapshot", response.model_dump(), request_id=request_id)
+    broadcast_ui_event(
+        events_contracts.UiEvent.INBOX_SNAPSHOT, response.model_dump(), request_id=request_id
+    )
     return response
 
 
@@ -167,7 +170,7 @@ def create_inbox_router(
             raise HTTPException(status_code=500, detail="Inbox message could not be loaded")
         store.save_document(PROGENA_STATE_PREFIX, _message_key(message_id), payload)
         broadcast_ui_event(
-            "inbox.message.upserted",
+            events_contracts.UiEvent.INBOX_MESSAGE_UPSERTED,
             {"message": message.model_dump()},
             request_id=request_id,
         )
@@ -182,7 +185,9 @@ def create_inbox_router(
         """Acknowledge inbox list requests and publish the snapshot on the UI stream."""
         request_id = _request_correlation_id(request, x_request_id)
         broadcast_snapshot(request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["inbox.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.INBOX_SNAPSHOT]
+        )
 
     @router.post(
         "/inbox/{message_id}/read",
@@ -204,7 +209,9 @@ def create_inbox_router(
             payload["read_at"] = datetime.now(UTC).isoformat() if read else None
 
         mutate_message(message_id, mutate, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["inbox.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.INBOX_SNAPSHOT]
+        )
 
     @router.post(
         "/inbox/{message_id}/archive",
@@ -225,7 +232,9 @@ def create_inbox_router(
             payload["archived"] = archived
 
         mutate_message(message_id, mutate, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["inbox.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.INBOX_SNAPSHOT]
+        )
 
     @router.post(
         "/inbox/{message_id}/decision",
@@ -247,7 +256,9 @@ def create_inbox_router(
             payload["read_at"] = datetime.now(UTC).isoformat()
 
         mutate_message(message_id, mutate, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["inbox.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.INBOX_SNAPSHOT]
+        )
 
     @router.delete(
         "/inbox/{message_id}",
@@ -265,12 +276,14 @@ def create_inbox_router(
         load_message(store, message_id)
         store.delete_document(PROGENA_STATE_PREFIX, _message_key(message_id))
         broadcast_ui_event(
-            "inbox.message.deleted",
+            events_contracts.UiEvent.INBOX_MESSAGE_DELETED,
             {"message_id": message_id},
             request_id=request_id,
         )
         broadcast_snapshot(request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["inbox.snapshot"])
+        return http_contracts.acknowledgement_response(
+            request_id, [events_contracts.UiEvent.INBOX_SNAPSHOT]
+        )
 
     return router
 
