@@ -179,6 +179,13 @@ The expanded body is the actual generated summary, not its model-facing wrapper.
 Stable scope/anchor identities preserve placement and deduplication during paging
 and canonical reconciliation; collapsed rows do not parse Markdown.
 
+Transcript gutters keep user messages standalone. Intermediate response rows
+connect to the next response dot across the actual row gap, including expanded
+summaries/work; they stop before another user message. Assistant and pending
+answer dots receive from above and never continue below. Live compaction
+activity precedes the pending answer cursor, so it remains inside the response
+chain rather than following its terminal dot.
+
 Original messages remain visible and searchable. Nested summaries stay inside
 their subagent activity. Completed markers must remain visible with debug events
 filtered out, and when a frozen live owner suppresses its historical answer twin.

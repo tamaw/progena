@@ -144,6 +144,34 @@ describe('conversation summary markers', () => {
     expect(container.querySelector('details')).not.toBeNull();
   });
 
+  it('keeps live compaction before the pending answer that terminates the response chain', () => {
+    const store = configureStore({
+      reducer: () => ({ uiData: { preferences: { agentName: 'Progena' } } }),
+    });
+    const liveStore = createLiveAssistantTurnStore({
+      ...createLiveAssistantTurn({ streamId: 'pending-compaction', startedAt: 1 }),
+      isStreaming: true,
+      summaryActivities: [{
+        id: 'compacting',
+        scope: { kind: 'conversation', id: 'thread-1' },
+      }],
+    });
+    const container = document.createElement('div');
+    container.innerHTML = renderToStaticMarkup(
+      <Provider store={store}>
+        <ChatMessages
+          messages={[{ id: 'question', role: 'user', content: 'Continue the work.' }]}
+          liveTurnStore={liveStore}
+        />
+      </Provider>,
+    );
+    const activity = container.querySelector('article[role="status"]');
+    const answer = container.querySelector('[aria-label="Assistant is responding"]');
+    expect(activity).not.toBeNull();
+    expect(answer).not.toBeNull();
+    expect(activity.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('keeps a committed marker visible after the frozen live owner', () => {
     const store = configureStore({
       reducer: () => ({ uiData: { preferences: { agentName: 'Progena' } } }),
