@@ -21,6 +21,7 @@ import src.backend.schedules.models as schedules_models
 import src.backend.settings.preferences_store as preferences_store
 import src.backend.storage.documents as storage_documents
 from src.progena.cron import timezone_name as valid_timezone_name
+from src.progena.documents.kinds import SESSION_KEY_PREFIX
 from src.progena.documents.types import DOCUMENT_OPERATIONS
 from src.progena.runtime import ownership
 from src.progena.schedules.engine import Scheduler, parse_schedule_datetime
@@ -88,6 +89,7 @@ def _schedule_item_to_info(
         timezone=raw.get("timezone"),
         last_run_status=last_run_status,
         runs=runs or [],
+        conversation_id=raw.get("conversation_id") or None,
     )
 
 
@@ -216,6 +218,70 @@ def _delete_schedule_entry(state_reader: monitoring_state.StateReader, schedule_
         )
 
     return _delete_document_entry(entries=schedule_data, entry_id=schedule_id, save=_save)
+
+
+def validate_destination(conversation_id: str | None) -> str | None:
+    """Return a usable destination chat id, ``None`` for standalone, or raise.
+
+    A schedule may only deliver into an existing, unarchived chat: a deleted chat
+    is never recreated and an archived one is not woken.
+    """
+    normalized = (conversation_id or "").strip() or None
+    if normalized is None:
+        return None
+    session = monitoring_state.get_state_reader().document_store.get_document(
+        storage_documents.PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{normalized}"
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail="Destination chat not found")
+    if isinstance(session.payload, dict) and session.payload.get("archived"):
+        raise HTTPException(status_code=409, detail="Destination chat is archived")
+    return normalized
+
+
+def _conversation_schedule_ids(schedule_data: dict[str, Any], conversation_id: str) -> list[str]:
+    return [
+        schedule_id
+        for schedule_id, entry in schedule_data.items()
+        if isinstance(entry, dict) and entry.get("conversation_id") == conversation_id
+    ]
+
+
+def _save_and_broadcast_schedules(
+    state_reader: monitoring_state.StateReader, schedule_data: dict[str, Any]
+) -> None:
+    state_reader.document_store.save_document(
+        storage_documents.PROGENA_STATE_PREFIX, "schedule", schedule_data
+    )
+    _broadcast_widget_refresh(state_reader)
+    broadcast_schedule_snapshot()
+
+
+def pause_conversation_schedules(conversation_id: str) -> int:
+    """Pause every schedule delivering to an archived chat; unarchiving never resumes them."""
+    state_reader = monitoring_state.get_state_reader()
+    schedule_data = _read_schedule_config(state_reader)
+    schedule_ids = _conversation_schedule_ids(schedule_data, conversation_id)
+    if not schedule_ids:
+        return 0
+    now = utcnow().isoformat()
+    for schedule_id in schedule_ids:
+        schedule_data[schedule_id].update({"enabled": False, "paused": True, "updated_at": now})
+    _save_and_broadcast_schedules(state_reader, schedule_data)
+    return len(schedule_ids)
+
+
+def delete_conversation_schedules(conversation_id: str) -> int:
+    """Delete every schedule delivering to a deleted chat."""
+    state_reader = monitoring_state.get_state_reader()
+    schedule_data = _read_schedule_config(state_reader)
+    schedule_ids = _conversation_schedule_ids(schedule_data, conversation_id)
+    if not schedule_ids:
+        return 0
+    for schedule_id in schedule_ids:
+        del schedule_data[schedule_id]
+    _save_and_broadcast_schedules(state_reader, schedule_data)
+    return len(schedule_ids)
 
 
 def _broadcast_widget_refresh(
@@ -470,6 +536,7 @@ def _build_schedule_entry(
     preference_timezone: str,
     enabled: bool,
     created_at: str,
+    conversation_id: str | None = None,
 ) -> dict:
     normalized_type, cron_expression, scheduled_at = _resolve_schedule_expression(
         schedule_type,
@@ -492,6 +559,7 @@ def _build_schedule_entry(
         "last_run_status": "idle",
         "created_at": created_at,
         "updated_at": created_at,
+        "conversation_id": conversation_id,
     }
     if cron_expression is not None:
         entry["cron_expression"] = cron_expression

@@ -14,7 +14,7 @@ import { reportFailure } from '../../../lib/failures';
 import { createUuid } from '../../../lib/uuid';
 import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession } from '../state/actions';
 import { deleteChatSession, fetchChatMessages, requestChatSessionDetail, requestChatSessionReconciliation, selectActiveChatSession, selectActiveChatSessionState, selectChatReconciliationState, selectChatSessions, selectChatSessionsState, updateChatSessionMetadata } from '../state/chats';
-import { savePreferences, selectAgentName, selectPreferences, selectPreferencesSaveRequest } from '../../settings/state/preferences';
+import { savePreferences, selectPreferences, selectPreferencesSaveRequest } from '../../settings/state/preferences';
 import { selectModelProfiles } from '../../settings/state/modelProfiles';
 import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
 import ChatInput from '../components/ChatInput';
@@ -38,6 +38,7 @@ import { latestContextUsage, resolveComposerCacheExpiry, resolveComposerContextU
 import { quickChatMemory } from '../models/quickChatMemory';
 import { mergeConversationSummaryMarkers, normalizeConversationSummaryMarkers } from '../models/conversationSummaryModel';
 import { BROWSER_EVENT } from '../../../lib/browserContracts';
+import { reconcileIncomingChatEvent } from '../models/chatEventReconciliation';
 
 function alignSummaryMarkerAnchors(markers, canonicalMessages, renderedMessages) {
   if (!Array.isArray(markers) || !Array.isArray(canonicalMessages) || !Array.isArray(renderedMessages)) {
@@ -70,7 +71,6 @@ function ConversationPage() {
   const activeBackendChatState = useSelector(selectActiveChatSessionState);
   const chatReconciliationState = useSelector(selectChatReconciliationState);
   const preferences = useSelector(selectPreferences);
-  const agentName = useSelector(selectAgentName);
   const modelProfiles = useSelector(selectModelProfiles);
   const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
   const initialQuickChatHandoffRef = useRef(undefined);
@@ -228,8 +228,6 @@ function ConversationPage() {
   const backendChatSessionsRef = useRef(backendChatSessions);
   const pendingOpenThreadIdRef = useRef(null);
   const selectionIntentRef = useRef(null);
-  // Track recently added scheduled messages to deduplicate.
-  const recentScheduledContent = useRef(new Set());
   const foregroundOwnershipTokenRef = useRef(0);
   const reconciliationIntentRef = useRef(null);
   // A draft may acquire a session document while its first response is still
@@ -357,7 +355,6 @@ function ConversationPage() {
         retireForegroundStream();
         setMessages([]);
         setOldestMessageCursor(null);
-        recentScheduledContent.current.clear();
       }
       materializedDraftThreadIdRef.current = null;
       selectedBackendChatIdRef.current = null;
@@ -718,7 +715,6 @@ function ConversationPage() {
       || null;
 
     activeStreamIdRef.current = null;
-    recentScheduledContent.current.clear();
     pinTranscriptToTail(messagesContainerRef.current, isPinnedToBottomRef);
     setMessages(backendMessages);
     setSummaryMarkers(normalizeConversationSummaryMarkers(activeBackendChat.summary_markers));
@@ -846,76 +842,31 @@ function ConversationPage() {
     }
   }, []);
 
-  // Handle chat events (from /chat SSE stream)
+  // The canonical history is committed before these global events are emitted.
+  // Reload it instead of manufacturing an assistant row from an SSE payload.
   const handleChatEvent = useCallback((event) => {
-    if (!event?.data) return;
-
-    // Handle scheduled/background messages from the agent.
-    // Prefer agent_message/agent_question over scheduled_response as they have cleaner content.
-    if (
-      event.type === UI_EVENT.AGENT_MESSAGE
-      || event.type === UI_EVENT.AGENT_QUESTION
-      || event.type === UI_EVENT.SCHEDULED_RESPONSE
-    ) {
-      const content = event.data?.content || '';
-      const metadata = event.data?.metadata || {};
-      const isQuestion = event.type === UI_EVENT.AGENT_QUESTION;
-
-      // Clean up the content (remove "SAY: " prefix if present)
-      let cleanContent = content;
-      if (cleanContent.startsWith('SAY: ')) {
-        cleanContent = cleanContent.slice(5);
-      }
-
-      if (cleanContent) {
-        // Deduplicate: check if we recently added a message with the same content
-        const contentKey = cleanContent.slice(0, 100);
-        if (recentScheduledContent.current.has(contentKey)) {
-          // Already added this message, skip
-          return;
-        }
-
-        // Mark as recently added (auto-expire after 5 seconds)
-        recentScheduledContent.current.add(contentKey);
-        setTimeout(() => {
-          recentScheduledContent.current.delete(contentKey);
-        }, 5000);
-
-        const scheduledMessage = {
-          id: `msg_${Date.now()}_scheduled`,
-          role: 'assistant',
-          content: cleanContent,
-          timestamp: Date.now(),
-          isScheduled: true,
-          isQuestion,
-          scheduleId: metadata?.schedule_id,
-          originalRequest: metadata?.original_request,
-        };
-
-        setMessages(prev => [...prev, scheduledMessage]);
-
-        // Show a notification
-        show(
-          isQuestion ? 'warning' : 'info',
-          metadata?.title || (isQuestion ? `Question from ${agentName}` : 'Scheduled Message'),
-          metadata?.schedule_id
-            ? `Reminder: ${cleanContent.slice(0, 50)}...`
-            : cleanContent.slice(0, 100)
-        );
-      }
-    }
-
-    if (event.type === 'message_queued') {
+    reconcileIncomingChatEvent({
+      event,
+      openThreadId: selectedBackendChatIdRef.current,
+      isGenerating,
+      reloadOpenChat,
+      show,
+    });
+    if (event?.type === 'message_queued') {
       show(
         'info',
         'Message queued',
         event.data?.content || 'A previous message is still running; your message will be handled next.'
       );
     }
-  }, [agentName, show]);
+  }, [isGenerating, reloadOpenChat, show]);
 
   useEffect(() => subscribeUiEvent((event) => {
-    handleChatEvent({ type: event?.type, data: event?.payload });
+    handleChatEvent({
+      type: event?.type,
+      data: event?.payload,
+      sessionId: event?.session_id,
+    });
   }), [handleChatEvent]);
 
   // Sending is an explicit "take me to the conversation" -- the user's own
@@ -980,7 +931,6 @@ function ConversationPage() {
 
   const dismissCurrentSession = useCallback(({ clearRoute = false } = {}) => {
     activeStreamIdRef.current = null;
-    recentScheduledContent.current.clear();
     setMessages([]);
     setSummaryMarkers([]);
     setIsGenerating(false);
@@ -1091,7 +1041,6 @@ function ConversationPage() {
     // the fresh draft's composer is not left disabled by that old response.
     preserveStreamInBackground();
     retireForegroundStream();
-    recentScheduledContent.current.clear();
 
     try {
       let archiveError = null;

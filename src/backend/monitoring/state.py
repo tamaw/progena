@@ -1519,6 +1519,7 @@ class StateReader:
                     "last_run_at": schedule_item.raw.get("last_run"),
                     "last_run_status": schedule_item.raw.get("last_run_status", "idle"),
                     "timezone": schedule_item.raw.get("timezone", "UTC"),
+                    "conversation_id": schedule_item.raw.get("conversation_id") or None,
                     "updated_at": schedule_item.raw.get("updated_at")
                     or schedule_item.raw.get("created_at"),
                 }

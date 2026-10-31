@@ -334,6 +334,10 @@ export function normalizeBackendChatMessage(message, index) {
     attachments: Array.isArray(message.attachments) ? message.attachments : [],
     raw,
     contextUsage: normalizeContextUsage(message.context_usage),
+    scheduled: role === 'user' && message.scheduled && typeof message.scheduled === 'object'
+      ? message.scheduled
+      : null,
+    isScheduled: role === 'user' && Boolean(message.scheduled && typeof message.scheduled === 'object'),
   };
 
   // Attach a synthetic fallback timeline for backend-loaded messages.

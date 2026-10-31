@@ -1,11 +1,11 @@
 import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector, useStore } from 'react-redux';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../../lib/routes';
 import { scheduleRunDetail, scheduleRunStatus } from './scheduleRunsModel';
 import { createUuid } from '../../lib/uuid';
-import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
+import Modal from '../../components/Modal';
 
 import {
   PaneEmptyState,
@@ -45,6 +45,7 @@ import { fetchSchedules, selectSchedulesState } from './state';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { selectRealtimeConnected } from '../../realtime/realtimeSlice';
 import { selectAgentName, selectPreferences } from '../settings/state/preferences';
+import { fetchChatSessions, selectChatSessions, selectChatSessionsState } from '../chat/state/chats';
 
 const SCHEDULE_FILTERS = ['All', 'Active', 'Paused', 'Completed'];
 const SCHEDULE_SORTS = ['Type', 'Next', 'Status'];
@@ -265,7 +266,19 @@ function compareSchedules(a, b, sortMode) {
   return String(a.name || '').localeCompare(String(b.name || ''));
 }
 
-function ScheduleRow({ schedule, selected, onSelect, timeZone }) {
+function conversationIdFor(schedule) {
+  return typeof schedule?.conversation_id === 'string' && schedule.conversation_id
+    ? schedule.conversation_id
+    : null;
+}
+
+function destinationLabel(schedule, chatsById) {
+  const conversationId = conversationIdFor(schedule);
+  if (!conversationId) return 'Standalone';
+  return chatsById.get(conversationId)?.title || 'Chat deleted';
+}
+
+function ScheduleRow({ schedule, selected, onSelect, timeZone, chatsById }) {
   const status = statusOf(schedule);
   const presentation = statusPresentation(schedule);
   return (
@@ -281,7 +294,9 @@ function ScheduleRow({ schedule, selected, onSelect, timeZone }) {
       <span className="sess-row__age">
         {status === 'completed' ? 'completed' : schedule.paused ? 'paused' : formatRelative(schedule.next_run, timeZone)}
       </span>
-      <span className="sess-row__title">{cadenceFor(schedule, timeZone) || '—'}</span>
+      <span className="sess-row__title">
+        {[cadenceFor(schedule, timeZone), destinationLabel(schedule, chatsById)].filter(Boolean).join(' · ') || '—'}
+      </span>
     </button>
   );
 }
@@ -290,7 +305,7 @@ function SchedulesPage() {
   const navigate = useNavigate();
   const dispatch = useDispatch();
   const { show } = useNotifications();
-  const { retriggerSchedule } = useSchedulesApi();
+  const { createSchedule, retriggerSchedule } = useSchedulesApi();
   const { getApiUrl } = useConfig();
   const { updateWidget, deleteWidget } = useWidgetsApi();
   const { scheduleId: urlScheduleId } = useParams();
@@ -312,6 +327,27 @@ function SchedulesPage() {
   const agentName = useSelector(selectAgentName);
   const preferenceTimezone = useSelector((state) => selectPreferences(state).timezone);
   const realtimeConnected = useSelector(selectRealtimeConnected);
+  const chatSessions = useSelector(selectChatSessions);
+  const chatSessionsState = useSelector(selectChatSessionsState);
+  const availableChats = useMemo(
+    () => chatSessions.filter((session) => !session.archived),
+    [chatSessions],
+  );
+  const chatsById = useMemo(
+    () => new Map(chatSessions.map((session) => [session.thread_id, session])),
+    [chatSessions],
+  );
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createFailure, setCreateFailure] = useState(null);
+  const [createDraft, setCreateDraft] = useState({
+    name: '',
+    instruction: '',
+    expression: '',
+    scheduleType: 'cron',
+    timezone: '',
+    conversationId: '',
+  });
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
@@ -328,6 +364,12 @@ function SchedulesPage() {
       void requestSchedules();
     }
   }, [realtimeConnected, requestSchedules]);
+
+  useEffect(() => {
+    if (realtimeConnected && !chatSessionsState.loaded && !chatSessionsState.loading) {
+      dispatch(fetchChatSessions({ chatsUrl: getApiUrl('chats'), includeArchived: true }));
+    }
+  }, [chatSessionsState.loaded, chatSessionsState.loading, dispatch, getApiUrl, realtimeConnected]);
 
 
   const store = useStore();
@@ -413,6 +455,7 @@ function SchedulesPage() {
   const scheduleScopeKey = selectedSchedule?.id ?? null;
   const intentKey = entityDraftKey('schedule', scheduleScopeKey, 'intent');
   const triggerKey = entityDraftKey('schedule', scheduleScopeKey, 'trigger');
+  const destinationKey = entityDraftKey('schedule', scheduleScopeKey, 'destination');
   const [intentDraft, setIntentDraft, intentDraftControls] = useEntityDraft(
     intentKey,
     { editing: false, text: selectedSchedule?.message || '' },
@@ -421,6 +464,13 @@ function SchedulesPage() {
     triggerKey,
     { editing: false, text: selectedSchedule ? cadenceFor(selectedSchedule, selectedScheduleTimezone) : '' },
   );
+  const [destinationDraft, setDestinationDraft, destinationDraftControls] = useEntityDraft(
+    destinationKey,
+    { editing: false, conversationId: conversationIdFor(selectedSchedule) || '' },
+  );
+  const selectedDestinationChat = conversationIdFor(selectedSchedule)
+    ? chatsById.get(conversationIdFor(selectedSchedule)) || null
+    : null;
   const {
     beginSave: beginIntentSave,
     clear: clearIntentDraft,
@@ -437,18 +487,70 @@ function SchedulesPage() {
     saving: triggerSaving,
     trackSave: trackTriggerSave,
   } = triggerDraftControls;
+  const {
+    beginSave: beginDestinationSave,
+    clear: clearDestinationDraft,
+    error: destinationSaveError,
+    failSave: failDestinationSave,
+    saving: destinationSaving,
+    trackSave: trackDestinationSave,
+  } = destinationDraftControls;
   const pauseAction = useUiAction(scheduleScopeKey);
   const deleteConfirmation = useConfirmAction(scheduleScopeKey);
   const { run: runPauseAction } = pauseAction;
   const { request: requestScheduleDelete } = deleteConfirmation;
   const editingIntent = Boolean(intentDraft.editing);
   const editingTrigger = Boolean(triggerDraft.editing);
+  const editingDestination = Boolean(destinationDraft.editing);
 
   const reportActionFailure = useCallback((operation, result) => {
     if (!result?.ok && result?.error) {
       reportFailure(show, operation, result.error);
     }
   }, [show]);
+
+  const closeCreate = useCallback(() => {
+    if (createBusy) return;
+    setCreateOpen(false);
+    setCreateFailure(null);
+  }, [createBusy]);
+
+  const submitCreate = useCallback(async (event) => {
+    event.preventDefault();
+    const name = createDraft.name.trim();
+    const instruction = createDraft.instruction.trim();
+    const expression = createDraft.expression.trim();
+    if (!name || !instruction || !expression) {
+      setCreateFailure('Enter a name, instruction, and schedule expression.');
+      return;
+    }
+    setCreateBusy(true);
+    setCreateFailure(null);
+    try {
+      await createSchedule({
+        name,
+        instruction,
+        expression,
+        schedule_type: createDraft.scheduleType,
+        ...(createDraft.timezone.trim() ? { timezone: createDraft.timezone.trim() } : {}),
+        conversation_id: createDraft.conversationId || null,
+      }, { requestId: createUuid() });
+      setCreateOpen(false);
+      setCreateDraft({
+        name: '',
+        instruction: '',
+        expression: '',
+        scheduleType: 'cron',
+        timezone: '',
+        conversationId: '',
+      });
+    } catch (error) {
+      setCreateFailure(error);
+      reportFailure(show, 'Create schedule', error);
+    } finally {
+      setCreateBusy(false);
+    }
+  }, [createDraft, createSchedule, show]);
 
   const commitTitle = useCallback(async (nextTitle, { ticket, trackSave, failSave }) => {
     if (!selectedSchedule) return { ok: false, skipped: true };
@@ -600,6 +702,52 @@ function SchedulesPage() {
     triggerSaving,
   ]);
 
+  const startDestinationEdit = useCallback(() => {
+    if (!selectedSchedule) return;
+    setDestinationDraft((current) => ({ ...current, editing: true }));
+  }, [selectedSchedule, setDestinationDraft]);
+
+  const cancelDestinationEdit = useCallback(() => {
+    if (!destinationSaving) clearDestinationDraft();
+  }, [clearDestinationDraft, destinationSaving]);
+
+  const saveDestinationEdit = useCallback(async () => {
+    if (!selectedSchedule || destinationSaving) return;
+    const target = selectedSchedule;
+    const conversationId = destinationDraft.conversationId || null;
+    if (conversationId === conversationIdFor(target)) {
+      cancelDestinationEdit();
+      return;
+    }
+    const ticket = beginDestinationSave();
+    if (!ticket) return;
+    const requestId = createUuid();
+    trackDestinationSave(ticket, {
+      requestId,
+      events: [UI_EVENT.SCHEDULE_SNAPSHOT],
+    });
+    try {
+      await updateWidget(
+        `schedule:${target.id}`,
+        { conversation_id: conversationId },
+        { requestId },
+      );
+    } catch (error) {
+      failDestinationSave(ticket, error);
+      reportFailure(show, 'Save schedule destination', error);
+    }
+  }, [
+    beginDestinationSave,
+    cancelDestinationEdit,
+    destinationDraft.conversationId,
+    destinationSaving,
+    failDestinationSave,
+    selectedSchedule,
+    show,
+    trackDestinationSave,
+    updateWidget,
+  ]);
+
   return (
     <PageShell className="schedules-page">
       <PaneList label="Schedules" className="schedules-pane">
@@ -609,7 +757,8 @@ function SchedulesPage() {
           onFilterChange={setActiveFilter}
           actionLabel="+ New"
           onAction={() => {
-            dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.SCHEDULE_CREATE });
+            setCreateFailure(null);
+            setCreateOpen(true);
           }}
         />
         <PaneListToolbar>
@@ -644,6 +793,7 @@ function SchedulesPage() {
                 schedule={schedule}
                 selected={selectedSchedule?.id === schedule.id}
                 timeZone={effectiveScheduleTimezone(schedule, preferenceTimezone)}
+                chatsById={chatsById}
                 onSelect={() => navigate(buildEntityPath('/schedules', schedule.id, schedule.name), { replace: true })}
               />
             )}
@@ -910,6 +1060,84 @@ function SchedulesPage() {
 
               <section className="agents-section">
                 <header className="agents-section__head">
+                  <h2>Destination</h2>
+                  <div>
+                    {editingDestination ? (
+                      <>
+                        <button
+                          type="button"
+                          className="task-btn task-btn--secondary"
+                          onClick={cancelDestinationEdit}
+                          disabled={destinationSaving}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="task-btn task-btn--primary"
+                          onClick={() => { void saveDestinationEdit(); }}
+                          disabled={destinationSaving}
+                        >
+                          Save
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="task-btn task-btn--secondary"
+                        onClick={startDestinationEdit}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
+                </header>
+                {editingDestination ? (
+                  <label className="sidebar-modal__field">
+                    Chat destination
+                    <select
+                      aria-label="Schedule destination"
+                      value={destinationDraft.conversationId}
+                      disabled={destinationSaving}
+                      onChange={(event) => setDestinationDraft((current) => ({
+                        ...current,
+                        conversationId: event.target.value,
+                      }))}
+                    >
+                      <option value="">Standalone</option>
+                      {availableChats.map((chat) => (
+                        <option key={chat.thread_id} value={chat.thread_id}>{chat.title || 'Untitled chat'}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <div className="agents-connection-list">
+                    <div className="agents-connection-row">
+                      <span className="agents-connection-row__icon">ch</span>
+                      <div className="agents-connection-row__body">
+                        {conversationIdFor(selectedSchedule) && selectedDestinationChat ? (
+                          <Link to={buildEntityPath('/chat', selectedDestinationChat.thread_id, selectedDestinationChat.title)}>
+                            {selectedDestinationChat.title || 'Untitled chat'}
+                          </Link>
+                        ) : (
+                          <strong>{destinationLabel(selectedSchedule, chatsById)}</strong>
+                        )}
+                        <p>
+                          {conversationIdFor(selectedSchedule)
+                            ? selectedDestinationChat ? 'Deliver into this chat' : 'The destination chat was deleted'
+                            : 'Runs outside a chat'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {editingDestination && destinationSaveError ? (
+                  <InlineFailure failure={destinationSaveError} operation="Save schedule destination" />
+                ) : null}
+              </section>
+
+              <section className="agents-section">
+                <header className="agents-section__head">
                   <h2>Recent runs</h2>
                 </header>
                 {recentScheduleRuns.length ? (
@@ -960,6 +1188,95 @@ function SchedulesPage() {
           onClose={deleteConfirmation.close}
           onConfirm={() => { void deleteConfirmation.confirm(); }}
         />
+      ) : null}
+      {createOpen ? (
+        <Modal
+          className="sidebar-modal"
+          backdropClassName="sidebar-modal-backdrop"
+          ariaLabel="Create schedule"
+          busy={createBusy}
+          onClose={closeCreate}
+        >
+          <form onSubmit={submitCreate}>
+            <header className="sidebar-modal__head">
+              <div>
+                <span className="sidebar-modal__eyebrow">Schedules</span>
+                <h3>Create schedule</h3>
+              </div>
+              <button type="button" className="sidebar-modal__close" aria-label="Close" onClick={closeCreate} disabled={createBusy}>×</button>
+            </header>
+            <label className="sidebar-modal__field">
+              Name
+              <input
+                aria-label="Schedule name"
+                value={createDraft.name}
+                disabled={createBusy}
+                onChange={(event) => setCreateDraft((current) => ({ ...current, name: event.target.value }))}
+              />
+            </label>
+            <label className="sidebar-modal__field">
+              Instruction
+              <textarea
+                aria-label="Schedule instruction"
+                value={createDraft.instruction}
+                disabled={createBusy}
+                onChange={(event) => setCreateDraft((current) => ({ ...current, instruction: event.target.value }))}
+              />
+            </label>
+            <label className="sidebar-modal__field">
+              Timing
+              <input
+                aria-label="Schedule expression"
+                placeholder="e.g. 0 9 * * 1-5"
+                value={createDraft.expression}
+                disabled={createBusy}
+                onChange={(event) => setCreateDraft((current) => ({ ...current, expression: event.target.value }))}
+              />
+            </label>
+            <label className="sidebar-modal__field">
+              Schedule type
+              <select
+                aria-label="Schedule type"
+                value={createDraft.scheduleType}
+                disabled={createBusy}
+                onChange={(event) => setCreateDraft((current) => ({ ...current, scheduleType: event.target.value }))}
+              >
+                <option value="cron">Cron</option>
+                <option value="once">One-off</option>
+              </select>
+            </label>
+            <label className="sidebar-modal__field">
+              Timezone (optional)
+              <input
+                aria-label="Schedule timezone"
+                value={createDraft.timezone}
+                disabled={createBusy}
+                onChange={(event) => setCreateDraft((current) => ({ ...current, timezone: event.target.value }))}
+              />
+            </label>
+            <label className="sidebar-modal__field">
+              Chat destination
+              <select
+                aria-label="Schedule destination"
+                value={createDraft.conversationId}
+                disabled={createBusy}
+                onChange={(event) => setCreateDraft((current) => ({ ...current, conversationId: event.target.value }))}
+              >
+                <option value="">Standalone</option>
+                {availableChats.map((chat) => (
+                  <option key={chat.thread_id} value={chat.thread_id}>{chat.title || 'Untitled chat'}</option>
+                ))}
+              </select>
+            </label>
+            {createFailure ? <InlineFailure failure={createFailure} operation="Create schedule" /> : null}
+            <footer className="sidebar-modal__foot">
+              <button type="button" className="task-btn task-btn--secondary" onClick={closeCreate} disabled={createBusy}>Cancel</button>
+              <button type="submit" className="task-btn task-btn--primary" disabled={createBusy}>
+                {createBusy ? 'Creating…' : 'Create schedule'}
+              </button>
+            </footer>
+          </form>
+        </Modal>
       ) : null}
     </PageShell>
   );

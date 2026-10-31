@@ -137,6 +137,13 @@ async def patch_widget(
                     entry["scheduled_at"] = scheduled_at
             if body.timezone is not None:
                 entry["timezone"] = body.timezone
+            if "conversation_id" in body.model_fields_set:
+                entry["conversation_id"] = schedules_service.validate_destination(
+                    body.conversation_id
+                )
+            if body.enabled and entry.get("conversation_id"):
+                # Resuming must not wake an archived or deleted chat.
+                schedules_service.validate_destination(entry["conversation_id"])
             entry["updated_at"] = utcnow().isoformat()
             next_run = Scheduler().next_run_for_entry(
                 entry, preferences_store.load_preferences().get("timezone", "UTC")
@@ -418,6 +425,7 @@ async def create_schedule(
 
     state_reader = monitoring_state.get_state_reader()
     schedule_data = schedules_service._read_schedule_config(state_reader)
+    conversation_id = schedules_service.validate_destination(body.conversation_id)
 
     created_at = utcnow().isoformat()
     schedule_id = generate_schedule_id(is_one_off=body.schedule_type.strip().lower() == "once")
@@ -431,6 +439,7 @@ async def create_schedule(
         preference_timezone=preferences_store.load_preferences().get("timezone", "UTC"),
         enabled=body.enabled,
         created_at=created_at,
+        conversation_id=conversation_id,
     )
     schedule_data[schedule_id] = entry
 

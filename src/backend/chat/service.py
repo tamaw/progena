@@ -27,6 +27,7 @@ from src.progena.a2a.payloads import (
     _MAX_PROGRESS_MESSAGE_TEXT_LENGTH as _REPLAYED_PROGRESS_MESSAGE_TEXT_LIMIT,
 )
 from src.progena.documents.kinds import SESSION_KEY_PREFIX
+from src.progena.schedules.dispatch import SCHEDULED_INPUT_PREFIX
 from src.progena.security.redaction import redact_secrets
 from src.progena.sessions.messages import (
     extract_cache_read_token_count,
@@ -172,6 +173,8 @@ class ChatMessage(BaseModel):
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     context_usage: ContextUsage | None = None
+    # Set on the input turn a schedule injected into this chat; survives reload.
+    scheduled: dict[str, str | None] | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -516,6 +519,22 @@ def _display_metadata_from_raw(raw: Any) -> dict[str, Any]:
     return extract_display_metadata(raw)
 
 
+def _scheduled_from_raw(raw: Any) -> dict[str, str | None] | None:
+    """Schedule provenance stamped onto a HumanMessage's kwargs, if any."""
+    additional = (
+        raw.get("additional_kwargs")
+        if isinstance(raw, dict)
+        else getattr(raw, "additional_kwargs", None)
+    )
+    scheduled = additional.get("scheduled") if isinstance(additional, dict) else None
+    if not isinstance(scheduled, dict):
+        return None
+    return {
+        "schedule_id": scheduled.get("schedule_id"),
+        "run_id": scheduled.get("run_id"),
+    }
+
+
 def _attachments_from_raw(raw: Any) -> list[dict[str, Any]]:
     """Extract the ``attachments`` list stamped onto a HumanMessage's kwargs."""
     additional = (
@@ -590,6 +609,9 @@ def _chat_message_from_raw(
     if role == "tool":
         return None
     content = _raw_message_content(raw)
+    scheduled = _scheduled_from_raw(raw)
+    if scheduled and content.startswith(SCHEDULED_INPUT_PREFIX):
+        content = content[len(SCHEDULED_INPUT_PREFIX) :]
     if role == "assistant" and _is_cancelled_reply(raw):
         content = f"{content}{CANCELLED_SUFFIX}" if content else CANCELLED_SUFFIX.strip()
     response_status: ResponseStatus = (
@@ -632,6 +654,7 @@ def _chat_message_from_raw(
         display_tool_calls=display_metadata.get("display_tool_calls", []),
         tool_calls=tool_calls or [],
         attachments=_attachments_from_raw(raw),
+        scheduled=scheduled,
         raw=_raw_message_payload(raw),
     )
 

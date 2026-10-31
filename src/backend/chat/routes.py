@@ -17,6 +17,7 @@ import src.backend.events.documents as events_documents
 import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
 import src.backend.runtime_liveness as runtime_liveness
+import src.backend.schedules.service as schedules_service
 import src.backend.storage.documents as storage_documents
 from src.backend.chat.service import (
     CHAT_MESSAGE_PAGE_SIZE,
@@ -287,6 +288,9 @@ def create_chat_router(
             return http_contracts.acknowledgement_response(
                 request_id, [events_contracts.UiEvent.CHAT_SESSIONS_SNAPSHOT]
             )
+        if request.archived:
+            # Archiving stops the chat's schedules; unarchiving never resumes them.
+            schedules_service.pause_conversation_schedules(thread_id)
         return http_contracts.acknowledgement_response(
             request_id,
             [
@@ -317,6 +321,7 @@ def create_chat_router(
 
         if not await off_loop(_delete):
             raise HTTPException(status_code=404, detail="Chat session not found")
+        schedules_service.delete_conversation_schedules(thread_id)
         return http_contracts.acknowledgement_response(
             request_id,
             [

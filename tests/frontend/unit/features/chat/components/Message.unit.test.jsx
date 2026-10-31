@@ -243,3 +243,18 @@ describe('terminal replies without tool work', () => {
     expect(host.querySelector('[role="status"]')).toBeNull();
   });
 });
+
+describe('scheduled task input', () => {
+  it('renders persisted scheduled user input as a scheduled task', async () => {
+    await renderMessage({
+      id: 'scheduled-user',
+      role: 'user',
+      content: 'Run the report',
+      isScheduled: true,
+    });
+
+    expect(host.textContent).toContain('Scheduled task');
+    expect(host.textContent).toContain('Scheduled');
+    expect(host.querySelector('.message.scheduled')).not.toBeNull();
+  });
+});
