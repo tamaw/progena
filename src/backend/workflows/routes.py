@@ -383,7 +383,6 @@ async def trigger_workflow(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    trigger = {**trigger, "request_id": request_id}
     run = await workflows_runtime.get_workflow_executor().trigger_workflow(definition.id, trigger)
     if run is None:
         raise HTTPException(

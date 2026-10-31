@@ -50,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Interrupted runs after a runtime restart**: chats, scheduled runs and routine runs cut off by a runtime restart now say so instead of looking idle or still running. Detection is read-only: the backend reads the LangGraph checkpoint directly, compares its `runtime_instance` owner to the live health identity, and excludes steps waiting on a person or failed turns. A backend-only restart never counts.
 
 ### Fixed
+- **Strict manual workflow payloads**: browser request correlation no longer becomes an extra manual-trigger property, so `additionalProperties: false` schemas run normally.
+- **Manual workflow tool defaults**: `run_workflow` now applies declared payload defaults before validation, matching backend manual-trigger resolution.
 - **ChatGPT provider recovery**: unauthorized sync and async retries replace explicit bearer headers, and temporarily unavailable refresh grants no longer discard still-valid bearers.
 - **Model profile provider patches**: provider-only edits now reject a concurrent inherited-deployment change instead of committing a provider/model pair that was never catalog-validated.
 - **Docker setup guide**: the prerequisites now create the external `progena-postgres-data` volume that Compose requires, so a fresh install following the guide starts.

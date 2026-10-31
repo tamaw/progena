@@ -72,7 +72,7 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 - **Problem:** The executor validates the augmented transport object against the manual payload schema. `additionalProperties: false` therefore rejects a valid user payload because of the injected `request_id`.
 - **Observed:** Direct execution of the real browser-route coroutine and executor with an in-memory store returned HTTP 409, a misleading paused/disabled error, and created no run for an enabled workflow with valid strict input.
 - **Required outcome:** Strict manual payload schemas work through the browser route while lifecycle events retain request correlation separately.
-- **Status:** Open.
+- **Status:** Fixed — browser route keeps `request_id` in the lifecycle event instead of the manual trigger payload; `test_strict_manual_trigger_payload_keeps_request_correlation_in_lifecycle_event`.
 
 ### 9. P2 — Apply manual defaults before tool-side validation
 
@@ -80,7 +80,7 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 - **Problem:** The tool validates the original payload before applying declared property defaults, unlike backend manual-trigger resolution.
 - **Observed:** For a required integer property `n` defaulting to 3, the backend resolved `{}` to `{"n": 3}` while the tool rejected the same input as missing `n`.
 - **Required outcome:** Backend and tool accept the same defaultable payloads and reject the same genuinely invalid payloads.
-- **Status:** Open.
+- **Status:** Fixed — shared schema default resolution now runs before `run_workflow` validation; `test_execute_applies_manual_defaults_before_validating_and_enqueueing`.
 
 ## Graph editor and Docker setup
 

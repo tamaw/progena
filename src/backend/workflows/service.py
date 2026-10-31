@@ -82,6 +82,7 @@ from src.progena.workflows.ports import (
     workflow_node_output_object,
     workflow_node_output_ports,
 )
+from src.progena.workflows.schema_values import apply_schema_defaults
 from src.progena.workflows.validation import validate_workflow_definition_payload
 from src.progena.workflows.values import json_equal
 
@@ -492,23 +493,6 @@ def first_trigger_node_id(definition: WorkflowDefinition) -> str | None:
     )
 
 
-def _apply_schema_defaults(value: Mapping[str, Any], schema: Mapping[str, Any]) -> dict[str, Any]:
-    """Copy a JSON object payload and fill declared property defaults recursively."""
-
-    result = copy.deepcopy(dict(value))
-    properties = schema.get("properties")
-    if not isinstance(properties, Mapping):
-        return result
-    for name, property_schema in properties.items():
-        if not isinstance(property_schema, Mapping):
-            continue
-        if name not in result and "default" in property_schema:
-            result[name] = copy.deepcopy(property_schema["default"])
-        elif isinstance(result.get(name), Mapping):
-            result[name] = _apply_schema_defaults(result[name], property_schema)
-    return result
-
-
 def build_manual_trigger_event(
     definition: WorkflowDefinition,
     *,
@@ -520,7 +504,7 @@ def build_manual_trigger_event(
     node_id = first_trigger_node_id(definition)
     node = definition.graph.nodes.get(node_id) if node_id else None
     if isinstance(node, WorkflowNodeManual):
-        resolved_payload = _apply_schema_defaults(payload or {}, node.output_schema)
+        resolved_payload = apply_schema_defaults(payload or {}, node.output_schema)
         error = validate_against_schema(resolved_payload, node.output_schema)
         if error:
             raise ValueError(f"manual trigger payload failed schema validation: {error}")
