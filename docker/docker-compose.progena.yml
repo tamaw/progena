@@ -259,6 +259,7 @@ networks:
 
 volumes:
   progena-shell-workspaces:
+  # Create once: docker volume create progena-postgres-data (survives `down -v`).
   progena-postgres-data:
     name: progena-postgres-data
     external: true

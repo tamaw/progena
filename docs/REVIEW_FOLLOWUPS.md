@@ -106,4 +106,4 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 - **Problem:** The README delegates installation to the Docker guide, whose prerequisites create only the external network and shared volume. Compose also requires externally created `progena-postgres-data`.
 - **Evidence:** Checked the committed guide and Compose declarations. Docker startup was not run during review.
 - **Required outcome:** A fresh installation following the documented procedure creates every required external resource before Compose startup, including `docker volume create progena-postgres-data` or an equivalent managed-volume configuration.
-- **Status:** Open.
+- **Status:** Fixed — `DOCKER.md` prerequisites now create `progena-postgres-data` alongside the network and shared volume.

@@ -55,12 +55,17 @@ controls the default effort and `PROGENA_REASONING_SUMMARY` the visible reasonin
 summary preference. These Foundry-specific overrides are not sent to OpenCode Go.
 
 The compose file also expects the external Docker network `progena_network`
-and the external volume `progena-shared` to exist:
+and the external volumes `progena-postgres-data` and `progena-shared` to exist:
 
 ```bash
 docker network create progena_network
+docker volume create progena-postgres-data
 docker volume create progena-shared
 ```
+
+`progena-postgres-data` holds the PostgreSQL data directory. It is external so
+`docker compose down -v` cannot delete the database; back it up like any other
+database volume.
 
 `progena-shared` is mounted at `/shared` in the runtime and exposed to the
 agent as the writable `/shared/` route (`PROGENA_SHARED_DIR`). Mount the same

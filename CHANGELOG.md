@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Interrupted runs after a runtime restart**: chats, scheduled runs and routine runs cut off by a runtime restart now say so instead of looking idle or still running. Detection is read-only: the backend reads the LangGraph checkpoint directly, compares its `runtime_instance` owner to the live health identity, and excludes steps waiting on a person or failed turns. A backend-only restart never counts.
 
 ### Fixed
+- **Docker setup guide**: the prerequisites now create the external `progena-postgres-data` volume that Compose requires, so a fresh install following the guide starts.
 - **Resumed async task cards**: check/list observations of running tasks now emit correlated progress updates, clearing stale “Awaiting approval” state after a resume.
 - **Chat constant ownership**: UI request source metadata uses the canonical backend HTTP contract, and live cancellation rendering reuses the frontend cancellation suffix constant without changing stored values or adding duplicate suffixes.
 - **Contract-only frontend deployments**: shared event vocabulary and imported routine-schema changes now trigger a frontend image rebuild.
