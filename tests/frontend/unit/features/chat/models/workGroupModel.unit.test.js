@@ -10,6 +10,7 @@ import {
   selectRecentLines,
   splitReasoningSections,
   summarizeWork,
+  subagentCardToolCallIds,
   workGroupHeader,
 } from '@frontend/features/chat/models/workGroupModel';
 
@@ -94,6 +95,27 @@ describe('mergeToolCallItems plan updates', () => {
     ]);
     expect(merged.map((item) => (item.kind === 'tool_call' ? `${item.start.id}+${item.plan?.id}` : item.id)))
       .toEqual(['w1+p1', 'w2+p2', 'p3']);
+  });
+
+  it("splits narration into its own row and leaves only that narration for a task call shown as a subagent card", () => {
+    const items = [
+      eventItem('r', 'tool_start', { tool_name: 'read_file', tool_call_id: 'r', commentary: 'Reading first.' }),
+      eventItem('t', 'tool_start', { tool_name: 'task', tool_call_id: 't', commentary: 'Handing this to repo-manager.' }),
+      eventItem('t-end', 'tool_result', { tool_name: 'task', tool_call_id: 't' }),
+      eventItem('u', 'tool_start', { tool_name: 'task', tool_call_id: 'u' }),
+    ];
+    const hiddenToolCallIds = subagentCardToolCallIds([
+      { kind: 'subagent', id: 'subagent-t', toolCallId: 't' },
+      { kind: 'a2a_call', id: 'a2a-u', toolCallId: 'u' },
+    ]);
+    const merged = mergeToolCallItems(items, { hiddenToolCallIds });
+    expect(merged.map((item) => [item.kind, item.text ?? item.start?.id])).toEqual([
+      ['tool_narration', 'Reading first.'],
+      ['tool_call', 'r'],
+      ['tool_narration', 'Handing this to repo-manager.'],
+      // Not owned by a subagent card, so the plain task row still shows.
+      ['tool_call', 'u'],
+    ]);
   });
 
   it('previews a successful write_todos call as its plan step only', () => {

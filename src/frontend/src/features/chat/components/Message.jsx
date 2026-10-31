@@ -4,7 +4,7 @@ import { collectMessageImages } from '../models/conversationModel';
 import { hasReasoningContent, isReasoningEvent } from '../models/streamEventsModel';
 import TimelineItem from './TimelineItem';
 import WorkGroup from './WorkGroup';
-import { buildWorkGroups, partitionTurnTimeline, timelineItemKey } from '../models/workGroupModel';
+import { buildWorkGroups, partitionTurnTimeline, subagentCardToolCallIds, timelineItemKey } from '../models/workGroupModel';
 import { buildDefaultAssistantTimeline } from '../models/liveAssistantTurnModel';
 import MessageImageStrip from './MessageImageStrip';
 import AttachmentFileIcon from './AttachmentFileIcon';
@@ -184,6 +184,7 @@ function MessageView({
     // claimToolCommentary in liveAssistantTurnModel.js) has nothing to show.
     const answerItems = allAnswerItems.filter((item) => item.error || (item.content || '').trim());
     const workGroups = buildWorkGroups(workItems);
+    const cardToolCallIds = [...subagentCardToolCallIds(cardItems)].join('\n');
     // Work filters can hide every tool/reasoning row. Keep the turn's explicit
     // terminal failure visible without reintroducing any filtered diagnostics.
     const terminalStatusItems = workResponseStatus === 'failed' && workGroups.length === 0 && answerItems.length === 0
@@ -217,6 +218,7 @@ function MessageView({
               terminal={isLast}
               responseStatus={isLast ? workResponseStatus : undefined}
               onRegenerate={regenerateMessage}
+              cardToolCallIds={cardToolCallIds}
               summaryMarkers={summaryMarkers}
               summaryActivities={summaryActivities}
             />

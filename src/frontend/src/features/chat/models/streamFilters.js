@@ -5,7 +5,7 @@ export const STREAM_EVENT_CATEGORIES = [
   { id: 'tools', label: 'Tools', description: 'Tool calls and results', color: 'var(--color-success)' },
   { id: 'plan', label: 'Plans', description: 'Plan updates', color: 'var(--color-accent)' },
   { id: 'reasoning', label: 'Reasoning', description: 'Reasoning summaries and details', color: 'var(--color-accent-secondary)' },
-  { id: 'delegations', label: 'Delegations', description: 'Subagents and A2A calls', color: 'var(--color-success)' },
+  { id: 'delegations', label: 'Delegations', description: 'Subagents and A2A calls', color: 'var(--color-subagent)' },
   { id: 'errors', label: 'Errors', description: 'Failed tools and delegations', color: 'var(--color-error)' },
   { id: 'debug', label: 'Debug', description: 'Graph steps and diagnostic events', color: 'var(--color-text-muted)', defaultEnabled: false },
 ];
