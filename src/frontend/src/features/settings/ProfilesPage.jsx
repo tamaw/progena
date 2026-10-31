@@ -22,7 +22,6 @@ import useEntityDraft from '../../hooks/useEntityDraft';
 import useMissingEntityRoute from '../../hooks/useMissingEntityRoute';
 import { useConfig } from '../../context/ConfigContext';
 import { deleteModelProfile, fetchModelProfiles, patchModelProfile, selectModelProfiles, selectModelProfilesState } from './state/modelProfiles';
-import { formatContextWindow, isCustomized, profileRowDetail } from './profilesPageModel';
 import {
   fetchProviders,
   selectChatgptModels,
@@ -34,7 +33,7 @@ import { draftDiscarded, entityDraftKey } from '../../store/editorDraftsSlice';
 import { useSnapshotSave } from '../../hooks/useSnapshotSave';
 import './profiles.css';
 
-const FILTERS = ['All', 'Inherited', 'Customized'];
+const FILTERS = ['All'];
 const EDITABLE_FIELDS = ['provider_id', 'deployment', 'reasoning_enabled', 'reasoning_effort', 'reasoning_summary'];
 const PRICING_FIELDS = ['currency', 'input_per_million', 'cached_input_per_million', 'output_per_million'];
 const providerLabel = (profile, providers) => {
@@ -223,7 +222,6 @@ function ProfileDetails({ profile, catalogue, providers, goModels, url, connecte
       <DetailHeader title={profile.name} meta={[
         <span key="provider" className="muted">{providerLabel(profile, providers)}</span>,
         <span key="deployment" className="sess-detail__model">{profile.deployment}</span>,
-        isCustomized(profile) ? <span key="custom" className="muted">Customized</span> : null,
       ]} actions={(
         <DetailHeaderActions menuLabel="Profile actions">
           <DetailHeaderAction
@@ -382,7 +380,6 @@ export default function ProfilesPage() {
   const catalogue = useSelector(selectModelProfilesState);
   const providers = useSelector(selectProviders);
   const goModels = useSelector(selectGoResponsesModels);
-  const [filter, setFilter] = useState('All');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('Name');
   useEffect(() => {
@@ -392,9 +389,8 @@ export default function ProfilesPage() {
     return undefined;
   }, [connected, dispatch, providersUrl, url]);
   const visible = useMemo(() => profiles.filter((profile) => (
-    (filter === 'All' || isCustomized(profile) === (filter === 'Customized'))
-    && `${profile.name} ${providerLabel(profile, providers)} ${profile.deployment}`.toLowerCase().includes(query.trim().toLowerCase())
-  )).sort((a, b) => (sort === 'Provider' ? providerLabel(a, providers).localeCompare(providerLabel(b, providers)) : 0) || a.name.localeCompare(b.name)), [profiles, providers, filter, query, sort]);
+    `${profile.name} ${providerLabel(profile, providers)} ${profile.deployment}`.toLowerCase().includes(query.trim().toLowerCase())
+  )).sort((a, b) => (sort === 'Provider' ? providerLabel(a, providers).localeCompare(providerLabel(b, providers)) : 0) || a.name.localeCompare(b.name)), [profiles, providers, query, sort]);
   // Provider sort groups under provider headings, like Models; Name is flat.
   const providerGroups = useMemo(() => {
     if (sort !== 'Provider') return null;
@@ -428,8 +424,8 @@ export default function ProfilesPage() {
       <PaneList className="profiles-pane" label="Model profiles">
         <PaneListFilters
           filters={FILTERS}
-          activeFilter={filter}
-          onFilterChange={setFilter}
+          activeFilter="All"
+          onFilterChange={() => {}}
           actionLabel="+ New"
           onAction={openCreateProfileChat}
         />
@@ -460,13 +456,11 @@ export default function ProfilesPage() {
                     <span className="sess-row__agent agents-agent-row__name" title={profile.name}>{profile.name}</span>
                     <span className="sess-row__project">{providerLabel(profile, providers)}</span>
                   </span>
-                  <span className="sess-row__age">{formatContextWindow(profile.context_window)}</span>
-                  <span className="sess-row__title">{profileRowDetail(profile)}</span>
+                  <span className="sess-row__title">{profile.deployment}</span>
                 </button>
               )} />}
         <PaneListFooter>
           <span><span className="num">{catalogue.loaded ? profiles.length : '—'}</span> profiles</span>
-          <span><span className="num">{catalogue.loaded ? profiles.filter(isCustomized).length : '—'}</span> customized</span>
         </PaneListFooter>
       </PaneList>
       <DetailPane className="detail-pane--dense profiles-detail" label="Model profile detail">
