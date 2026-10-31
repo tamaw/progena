@@ -151,6 +151,9 @@ class ConversationUsageTotals(BaseModel):
     reasoning_token_message_count: int = 0
 
 
+InterruptionReason = Literal["user_cancelled", "new_message"]
+
+
 class ChatMessage(BaseModel):
     id: str
     role: str
@@ -176,6 +179,7 @@ class ChatMessage(BaseModel):
     # Set on the input turn a schedule injected into this chat; survives reload.
     scheduled: dict[str, str | None] | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
+    interruption_reason: InterruptionReason | None = None
 
 
 class ConversationSummaryScope(BaseModel):
@@ -590,9 +594,11 @@ def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:
 CANCELLED_SUFFIX = " [Cancelled]"
 
 
-def _is_cancelled_reply(raw: Any) -> bool:
-    """An assistant reply the runtime saved from a cancelled turn."""
-    return extract_response_status(raw) == "cancelled"
+def _without_cancelled_sentinel(content: str) -> str:
+    """Drop only the exact suffix emitted by the retired history projection."""
+    if content == CANCELLED_SUFFIX.strip():
+        return ""
+    return content.removesuffix(CANCELLED_SUFFIX)
 
 
 def _chat_message_from_raw(
@@ -612,19 +618,21 @@ def _chat_message_from_raw(
     scheduled = _scheduled_from_raw(raw)
     if scheduled and content.startswith(SCHEDULED_INPUT_PREFIX):
         content = content[len(SCHEDULED_INPUT_PREFIX) :]
-    if role == "assistant" and _is_cancelled_reply(raw):
-        content = f"{content}{CANCELLED_SUFFIX}" if content else CANCELLED_SUFFIX.strip()
     response_status: ResponseStatus = (
         _answer_response_status(raw) if role == "assistant" else "unknown"
     )
+    interruption_reason: InterruptionReason | None = None
+    if role == "assistant" and response_status == "cancelled":
+        content = _without_cancelled_sentinel(content)
+        interruption_reason = "user_cancelled"
     reasoning_text = extract_reasoning_trace(raw) or ""
     if not content and role == "assistant":
-        if response_status != "failed":
+        if response_status not in {"failed", "cancelled"}:
             return None
-        # Retain an otherwise empty provider failure so a reload can expose
-        # its terminal status and authoritative usage. Work/reasoning already
-        # renders its own failed status, so only a truly empty turn needs text.
-        if not tool_calls and not reasoning_text:
+        # Retain otherwise empty terminal rows so reload can expose their
+        # native status and authoritative usage. Work/reasoning already renders
+        # its own terminal status, so only a truly empty failure needs prose.
+        if response_status == "failed" and not tool_calls and not reasoning_text:
             content = "Error: Response failed."
     created_at = _raw_message_created_at(raw)
     display_metadata = _display_metadata_from_raw(raw)
@@ -641,6 +649,7 @@ def _chat_message_from_raw(
         token_count=extract_output_token_count(raw),
         final_call_token_count=final_call_token_count,
         response_status=response_status,
+        interruption_reason=interruption_reason,
         reasoning_token_count=extract_reasoning_token_count(raw) or 0,
         cache_read_token_count=extract_cache_read_token_count(raw) or 0,
         reasoning_text=reasoning_text,

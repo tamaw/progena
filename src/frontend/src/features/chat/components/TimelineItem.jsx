@@ -27,7 +27,7 @@ import AssistantMessageEntry from './AssistantMessageEntry';
 import { selectAgentName } from '../../settings/state/preferences';
 import ToolCallEntry from './ToolCallEntry';
 
-const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities, showResponseStatus }) {
+const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities, showResponseStatus, continuesAfterInterruption = false }) {
   if (item.kind === 'tool_call') {
     return <ToolCallEntry item={item} />;
   }
@@ -38,12 +38,13 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate,
     summaryMarkers={summaryMarkers}
     summaryActivities={summaryActivities}
     showResponseStatus={showResponseStatus}
+    continuesAfterInterruption={continuesAfterInterruption}
   />;
 });
 
 // Separate component so the tool_call branch above stays hook-free; this
 // one reads the agent name from the store.
-function TimelineRow({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities, showResponseStatus }) {
+function TimelineRow({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities, showResponseStatus, continuesAfterInterruption }) {
   const agentName = useSelector(selectAgentName);
   if (item.kind === 'subagent' || item.kind === 'async_subagent') {
     const matchingMarkers = (summaryMarkers || []).filter((marker) => (
@@ -64,7 +65,7 @@ function TimelineRow({ item, itemIndex, onRegenerate, summaryMarkers, summaryAct
   }
 
   if (item.kind === 'assistant_message') {
-    return <AssistantMessageEntry item={item} agentName={agentName} onRegenerate={onRegenerate} showResponseStatus={showResponseStatus} />;
+    return <AssistantMessageEntry item={item} agentName={agentName} onRegenerate={onRegenerate} showResponseStatus={showResponseStatus} continuesAfterInterruption={continuesAfterInterruption} />;
   }
 
   if (item.kind === 'stream_event') {

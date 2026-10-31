@@ -202,6 +202,12 @@ summaries/work; they stop before another user message. Assistant and pending
 answer dots receive from above and never continue below. Live compaction
 activity precedes the pending answer cursor, so it remains inside the response
 chain rather than following its terminal dot.
+Interruptions share a terminal `Interrupted` disclosure with a warning-colored dot.
+Its connector enters from above and never continues below. User cancellation
+shows `Cancelled by you.` and preserves any partial answer above the marker,
+including an otherwise empty cancelled turn. Runtime restart shows the existing
+restart/partial-step warning and remains hidden while generation is active.
+Cancellation is not appended as synthetic assistant prose.
 
 Original messages remain visible and searchable. Nested summaries stay inside
 their subagent activity. Completed markers must remain visible with debug events

@@ -233,6 +233,11 @@ input tokens, tool-result bytes or delegated-agent usage. Reasoning is included
 in output, not added to it. Explicit zero remains zero; missing usage in any
 contributing call makes the aggregate unknown. Total-only provider metadata is
 not a substitute for output usage.
+Cancelled messages also carry `interruption_reason: "user_cancelled"`, including
+empty cancelled turns. The frontend renders this as a terminal timeline disclosure
+rather than appending cancellation prose. Partial output and native cancelled
+status are preserved.
+
 
 Reasoning-only checkpoint tails remain visible even without tool calls or answer
 text. They retain reported aggregate output but do not invent final-answer usage

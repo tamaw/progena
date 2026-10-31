@@ -70,6 +70,32 @@ async function renderMessage(value, props = {}) {
   await act(async () => root.render(<Message message={value} {...props} />));
 }
 
+describe('interruption markers', () => {
+  it('renders the cancellation marker after partial content without its legacy suffix', async () => {
+    await renderMessage(message([answer('Partial [Cancelled]', 1)], {
+      responseStatus: 'cancelled',
+      interruptionReason: 'user_cancelled',
+    }));
+
+    expect(host.textContent).toContain('Partial');
+    expect(host.textContent).toContain('Cancelled by you.');
+    expect(host.textContent).not.toContain('[Cancelled]');
+    expect(host.querySelector('.message-wrapper.assistant')?.classList.contains('entry--chain-item')).toBe(true);
+    expect(host.querySelector('article[aria-label="Interrupted"]')?.classList.contains('entry--chain-end')).toBe(true);
+  });
+
+  it('renders an empty cancelled turn as only its interruption marker', async () => {
+    await renderMessage(message([], {
+      responseStatus: 'cancelled',
+      interruptionReason: 'user_cancelled',
+    }));
+
+    expect(host.textContent).toContain('Interrupted');
+    expect(host.textContent).toContain('Cancelled by you.');
+    expect(host.querySelector('.message-wrapper.assistant')).toBeNull();
+  });
+});
+
 
 describe('assistant work groups', () => {
   it('renders every reasoning phase as a top-level work group without a turn wrapper', async () => {
@@ -201,7 +227,7 @@ describe('assistant work groups', () => {
 
 
 describe('terminal replies without tool work', () => {
-  it.each(['failed', 'cancelled', 'interrupted'])(
+  it.each(['failed', 'interrupted'])(
     'keeps provider %s visible even when there are no work groups',
     async (status) => {
       await renderMessage(message(undefined, {

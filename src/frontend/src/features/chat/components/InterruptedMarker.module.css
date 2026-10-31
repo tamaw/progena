@@ -1,0 +1,13 @@
+.interruption .badge {
+  color: var(--color-warning);
+}
+
+.gutter::after {
+  position: absolute;
+  top: calc(-1 * var(--entry-chain-gap));
+  bottom: calc(100% - var(--entry-dot-center));
+  left: 50%;
+  width: 1px;
+  content: '';
+  background: var(--color-border);
+}

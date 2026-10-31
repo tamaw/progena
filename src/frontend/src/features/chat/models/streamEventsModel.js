@@ -3,7 +3,6 @@
 // shape ({ id, eventType, content, metadata, images? }).
 
 export const MAX_STREAM_EVENTS_PER_MESSAGE = 200;
-export const CANCELLED_SUFFIX = ' [Cancelled]';
 
 function normalizeStreamEventTimestamp(value) {
   if (Number.isFinite(value)) {
@@ -244,6 +243,6 @@ export function finalizeSupersededAssistant(message) {
   return {
     ...message,
     isStreaming: false,
-    content: content.endsWith(CANCELLED_SUFFIX) ? content : `${content}${CANCELLED_SUFFIX}`,
+    interruptionReason: 'user_cancelled',
   };
 }

@@ -13,6 +13,9 @@ import MessageActions from './MessageActions';
 import { appendStreamingCursor } from '../models/messageRenderUtils';
 import { renderSafeMarkdown } from '../../../lib/safeMarkdown';
 import { filterTimelineItems } from '../models/streamFilters';
+import { normalizeCancelledContent } from '../models/cancelledContentModel';
+import InterruptedMarker from './InterruptedMarker';
+
 
 function buildSyntheticReasoningEvent(
   reasoningText,
@@ -116,22 +119,30 @@ function MessageView({
     workActive = false,
     responseStatus = 'unknown',
     attachments = [],
+    interruptionReason,
   } = message;
   const workResponseStatus = ['running', 'completed', 'failed', 'cancelled', 'interrupted', 'unknown'].includes(responseStatus)
     ? responseStatus
     : 'unknown';
+  const effectiveInterruptionReason = interruptionReason
+    ?? (responseStatus === 'cancelled' ? 'user_cancelled' : undefined);
   const regenerateMessage = useMemo(
     () => onRegenerate ? () => onRegenerate(messageId) : undefined,
     [messageId, onRegenerate],
   );
 
   const isAssistant = role === 'assistant';
-  const assistantTimeline = useMemo(() => (
-    isAssistant
-      ? (Array.isArray(timelineItems) && timelineItems.length > 0
-        ? timelineItems : buildDefaultAssistantTimeline(message))
-      : []
-  ), [isAssistant, message, timelineItems]);
+  const assistantTimeline = useMemo(() => {
+    if (!isAssistant) return [];
+    const source = Array.isArray(timelineItems) && timelineItems.length > 0
+      ? timelineItems
+      : buildDefaultAssistantTimeline({ ...message, content: normalizeCancelledContent(content, responseStatus) });
+    return source.map((item) => (
+      item.kind === 'assistant_message'
+        ? { ...item, content: normalizeCancelledContent(item.content, responseStatus) }
+        : item
+    ));
+  }, [content, isAssistant, message, responseStatus, timelineItems]);
 
   const formattedContent = useMemo(() => {
     if (!content || isAssistant) return '';
@@ -218,7 +229,7 @@ function MessageView({
             />
           );
         })}
-        {[...cardItems, ...answerItems, ...terminalStatusItems].map((item, idx) => (
+        {[...cardItems, ...answerItems, ...terminalStatusItems].map((item, idx, renderedItems) => (
           <TimelineItem
             key={timelineItemKey(item, idx)}
             item={item}
@@ -226,7 +237,8 @@ function MessageView({
             onRegenerate={regenerateMessage}
             summaryMarkers={summaryMarkers}
             summaryActivities={summaryActivities}
-            showResponseStatus={workGroups.length === 0}
+            showResponseStatus={workGroups.length === 0 && !effectiveInterruptionReason}
+            continuesAfterInterruption={Boolean(effectiveInterruptionReason) && idx === renderedItems.length - 1}
           />
         ))}
         {messageImages.length > 0 && (
@@ -234,6 +246,7 @@ function MessageView({
             <MessageImageStrip images={messageImages} />
           </div>
         )}
+        {effectiveInterruptionReason ? <InterruptedMarker reason={effectiveInterruptionReason} /> : null}
       </div>
     );
   }
