@@ -73,6 +73,10 @@ _RESPONSE_STREAM_SUBSCRIBER_QUEUE_SIZE = 256
 _RESPONSE_STREAM_RETENTION_SECONDS = 3600
 
 
+class _ResponseStreamCursorExpired(ValueError):
+    """A requested response-stream replay cursor has fallen out of retention."""
+
+
 @dataclass
 class _ResponseContentStream:
     """Bounded in-process replay plus live followers for one response."""
@@ -106,11 +110,16 @@ class _ResponseContentStream:
         list[tuple[int, str, dict[str, Any]]],
         asyncio.Queue[tuple[int, str, dict[str, Any]] | None],
     ]:
+        """Atomically validate a cursor, snapshot replay, and attach a follower."""
+
+        if self.frames and cursor < self.frames[0][0] - 1:
+            raise _ResponseStreamCursorExpired
         subscriber: asyncio.Queue[tuple[int, str, dict[str, Any]] | None] = asyncio.Queue(
             maxsize=_RESPONSE_STREAM_SUBSCRIBER_QUEUE_SIZE
         )
+        replay = [frame for frame in self.frames if frame[0] > cursor]
         self.subscribers.add(subscriber)
-        return [frame for frame in self.frames if frame[0] > cursor], subscriber
+        return replay, subscriber
 
     def finish(self) -> None:
         if self.terminal:
@@ -127,8 +136,26 @@ class _ResponseContentStream:
 class _ResponseContentSink:
     """``StreamResponse``-shaped sink that records a deferred response's frames."""
 
-    def __init__(self, stream: _ResponseContentStream) -> None:
+    def __init__(self, stream: _ResponseContentStream, *, defer_terminal: bool = False) -> None:
         self.stream = stream
+        self._defer_terminal = defer_terminal
+        self._terminal: tuple[str, dict[str, Any]] | None = None
+
+    async def flush_terminal(self) -> None:
+        if self._terminal is not None:
+            event, data = self._terminal
+            self.stream.append(event, data)
+            self._terminal = None
+
+    def defer_terminal(self, event: str, data: dict[str, Any]) -> bool:
+        if not self._defer_terminal or event not in {
+            "response.completed",
+            "response.incomplete",
+            "response.failed",
+        }:
+            return False
+        self._terminal = (event, data)
+        return True
 
     async def write(self, data: bytes) -> None:
         # Deferred streams have no original HTTP writer. Keepalive comments are
@@ -259,6 +286,8 @@ class RuntimeChatService:
             self._chat_queue.set_event_publisher(self._publish_queue_snapshot)
         self._queue_drain_tasks: dict[str, asyncio.Task[None]] = {}
         self._queue_drain_wakeups: set[str] = set()
+        self._queue_steering_locks: dict[str, asyncio.Lock] = {}
+        self._stopping = False
 
     @property
     def conversation_gate(self) -> ConversationTurnGate:
@@ -278,25 +307,36 @@ class RuntimeChatService:
         ]
 
     async def start(self) -> None:
+        self._stopping = False
         if self._drain_task is None:
             self._drain_task = asyncio.create_task(self._drain_loop())
         if self._chat_queue is not None:
             for conversation_id in await self._chat_queue.conversation_ids():
-                await self._recover_queue(conversation_id)
+                await self._run_serialized(
+                    conversation_id,
+                    lambda conversation_id=conversation_id: self._recover_queue(conversation_id),
+                    on_queued=_noop,
+                )
                 self._schedule_queue_drain(conversation_id)
 
     async def stop(self) -> None:
+        self._stopping = True
         if self._drain_task is not None:
             self._drain_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._drain_task
             self._drain_task = None
-        for task in list(self._queue_drain_tasks.values()):
-            task.cancel()
-        for task in list(self._queue_drain_tasks.values()):
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        self._queue_drain_tasks.clear()
+        while self._queue_drain_tasks:
+            drains = tuple(self._queue_drain_tasks.values())
+            for task in drains:
+                task.cancel()
+            for task in drains:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            for conversation_id, task in tuple(self._queue_drain_tasks.items()):
+                if task in drains and task.done():
+                    self._queue_drain_tasks.pop(conversation_id, None)
+        self._queue_drain_wakeups.clear()
         for queue in list(self._subscribers):
             with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(None)
@@ -482,8 +522,18 @@ class RuntimeChatService:
         resume: bool = False,
     ) -> dict[str, Any]:
         if cancel_event.is_set():
+            output: list[dict[str, Any]] = []
+            if resume:
+                before_count = await self._message_count(thread_id)
+                output = await self._persist_cancelled_turn(
+                    thread_id,
+                    response_id,
+                    "",
+                    before_count,
+                    required=True,
+                )
             cancelled_response = build_response_object(
-                response_id, thread_id, model, "cancelled", [], metadata
+                response_id, thread_id, model, "cancelled", output, metadata
             )
             with contextlib.suppress(ConnectionResetError, ConnectionError):
                 await self._write_frame(
@@ -715,7 +765,7 @@ class RuntimeChatService:
             if cancelled or cancel_event.is_set():
                 logger.info("Direct DeepAgent stream cancelled for %s", response_id)
                 output = await self._persist_cancelled_turn(
-                    thread_id, response_id, current_text, before_count
+                    thread_id, response_id, current_text, before_count, required=resume
                 )
                 resp_obj = build_response_object(
                     response_id, thread_id, model, "cancelled", output, metadata
@@ -898,7 +948,13 @@ class RuntimeChatService:
             self._schedule_queue_drain(thread_id)
 
     async def _persist_cancelled_turn(
-        self, thread_id: str, response_id: str, partial_text: str, before_count: int
+        self,
+        thread_id: str,
+        response_id: str,
+        partial_text: str,
+        before_count: int,
+        *,
+        required: bool = False,
     ) -> list[dict[str, Any]]:
         """Save what a cancelled turn had streamed as a cancelled assistant message.
 
@@ -922,6 +978,8 @@ class RuntimeChatService:
             return await self._turn_output(thread_id, before_count)
         except Exception as exc:
             logger.warning("Saving cancelled turn %s failed: %s", response_id, exc)
+            if required:
+                raise
             return []
 
     def _fire_and_forget_session_merge(self, thread_id: str) -> None:
@@ -998,7 +1056,9 @@ class RuntimeChatService:
             return _json_error("cursor must be an integer", "bad_request", 400, param="cursor")
         if cursor < -1:
             return _json_error("cursor must be at least -1", "bad_request", 400, param="cursor")
-        if stream.frames and cursor < stream.frames[0][0] - 1:
+        try:
+            replay, subscriber = stream.subscribe(cursor)
+        except _ResponseStreamCursorExpired:
             return _json_error(
                 "cursor has expired; restart the response stream",
                 "cursor_expired",
@@ -1010,8 +1070,11 @@ class RuntimeChatService:
             status=200,
             headers={"Content-Type": "text/event-stream", **_SSE_HEADERS},
         )
-        await response.prepare(request)
-        replay, subscriber = stream.subscribe(cursor)
+        try:
+            await response.prepare(request)
+        except BaseException:
+            stream.subscribers.discard(subscriber)
+            raise
         try:
             for frame_cursor, event, data in replay:
                 await self._write_replay_frame(response, frame_cursor, event, data)
@@ -1085,24 +1148,35 @@ class RuntimeChatService:
             ),
             None,
         )
-        active = (
-            self._active_root_executions.get(conversation_id)
+        steering_lock = (
+            self._queue_steering_locks.setdefault(conversation_id, asyncio.Lock())
             if payload.get("action") == "send_now"
             else None
         )
+        if steering_lock is not None:
+            await steering_lock.acquire()
         try:
-            snapshot, applied = await self._chat_queue.action(
-                conversation_id, payload, include_applied=True
+            active = (
+                self._active_root_executions.get(conversation_id)
+                if payload.get("action") == "send_now"
+                else None
             )
-        except QueueActionError as exc:
-            error, _status = error_response(str(exc), exc.code, exc.status)
-            if exc.snapshot is not None:
-                error["snapshot"] = exc.snapshot
-            return web.json_response(make_json_safe(error), status=exc.status)
-        if payload.get("action") == "send_now" and applied and active is not None:
-            # A direct root has no queue claim, so its cancellation remains
-            # in-memory; there is no pending queue claim to recover after restart.
-            self._cancel_captured_root(conversation_id, active)
+            try:
+                snapshot, applied = await self._chat_queue.action(
+                    conversation_id, payload, include_applied=True
+                )
+            except QueueActionError as exc:
+                error, _status = error_response(str(exc), exc.code, exc.status)
+                if exc.snapshot is not None:
+                    error["snapshot"] = exc.snapshot
+                return web.json_response(make_json_safe(error), status=exc.status)
+            if payload.get("action") == "send_now" and applied and active is not None:
+                # A direct root has no queue claim, so its cancellation remains
+                # in-memory; there is no pending queue claim to recover after restart.
+                self._cancel_captured_root(conversation_id, active)
+        finally:
+            if steering_lock is not None:
+                steering_lock.release()
         if payload.get("action") == "delete" and applied and isinstance(deleted, dict):
             await self._emit_deleted_queue_terminal(
                 ChatQueueStore._claim_from_item(conversation_id, deleted)
@@ -1203,6 +1277,8 @@ class RuntimeChatService:
             await self._chat_queue.recover(
                 conversation_id, committed, terminal_message_ids=terminal_outcomes
             )
+            if settled:
+                await self._ensure_session_merged(conversation_id)
             for claimed in settled:
                 await self._emit_recovered_terminal(claimed, terminal_outcomes[claimed.id])
         return committed, pending
@@ -1217,10 +1293,15 @@ class RuntimeChatService:
         else:
             before_count = await self._claimed_turn_before_count(claimed)
             output = await self._persist_cancelled_turn(
-                claimed.conversation_id, claimed.response_id, "", before_count
+                claimed.conversation_id,
+                claimed.response_id,
+                "",
+                before_count,
+                required=True,
             )
         assert self._chat_queue is not None
         await self._chat_queue.settle_claim(claimed.conversation_id, claimed.id)
+        await self._ensure_session_merged(claimed.conversation_id)
         await self._emit_recovered_cancellation(claimed, output)
 
     async def _claimed_turn_before_count(self, claimed: ClaimedQueueMessage) -> int:
@@ -1314,7 +1395,7 @@ class RuntimeChatService:
         await self._publish_queue_execution("chat_queue_execution_cancelled", claimed, response)
 
     def _schedule_queue_drain(self, conversation_id: str) -> None:
-        if self._chat_queue is None:
+        if self._stopping or self._chat_queue is None:
             return
         if conversation_id in self._queue_drain_tasks:
             self._queue_drain_wakeups.add(conversation_id)
@@ -1324,7 +1405,7 @@ class RuntimeChatService:
 
     async def _drain_conversation_queue(self, conversation_id: str) -> None:
         try:
-            while True:
+            while not self._stopping:
                 progressed = await self._run_serialized(
                     conversation_id,
                     lambda: self._run_next_queued_turn(conversation_id),
@@ -1338,7 +1419,7 @@ class RuntimeChatService:
             logger.exception("Queued chat drain failed for %s", conversation_id)
         finally:
             self._queue_drain_tasks.pop(conversation_id, None)
-            if conversation_id in self._queue_drain_wakeups:
+            if not self._stopping and conversation_id in self._queue_drain_wakeups:
                 self._queue_drain_wakeups.discard(conversation_id)
                 self._schedule_queue_drain(conversation_id)
 
@@ -1352,25 +1433,32 @@ class RuntimeChatService:
             claimed = await self._chat_queue.claim_next(conversation_id)
         if claimed is None:
             return False
-        self._ensure_content_stream(claimed.response_id)
+        stream = self._ensure_content_stream(claimed.response_id)
+        sink = _ResponseContentSink(stream, defer_terminal=True)
         await self._publish_queue_execution("chat_queue_execution_started", claimed, None)
-        result = await self._run_claimed_turn(claimed, resume=resume)
-        await self._ensure_session_merged(conversation_id)
-        status = str(result.get("status") or "failed")
-        await self._chat_queue.settle_claim(conversation_id, claimed.id)
-        if status == "completed":
-            await self._publish_queue_execution("chat_queue_execution_completed", claimed, result)
-        elif status == "cancelled":
-            await self._publish_queue_execution("chat_queue_execution_cancelled", claimed, result)
-        else:
-            await self._publish_queue_execution("chat_queue_execution_failed", claimed, result)
-        return True
+        try:
+            result = await self._run_claimed_turn(claimed, sink=sink, resume=resume)
+            await self._ensure_session_merged(conversation_id)
+            await sink.flush_terminal()
+            status = str(result.get("status") or "failed")
+            await self._chat_queue.settle_claim(conversation_id, claimed.id)
+            if status == "completed":
+                await self._publish_queue_execution(
+                    "chat_queue_execution_completed", claimed, result
+                )
+            elif status == "cancelled":
+                await self._publish_queue_execution(
+                    "chat_queue_execution_cancelled", claimed, result
+                )
+            else:
+                await self._publish_queue_execution("chat_queue_execution_failed", claimed, result)
+            return True
+        finally:
+            stream.finish()
 
     async def _run_claimed_turn(
-        self, claimed: ClaimedQueueMessage, *, resume: bool
+        self, claimed: ClaimedQueueMessage, *, sink: _ResponseContentSink, resume: bool
     ) -> dict[str, Any]:
-        stream = self._ensure_content_stream(claimed.response_id)
-        sink = _ResponseContentSink(stream)
         metadata = claimed.metadata
         if claimed.attachments:
             metadata = {**metadata, "attachments": claimed.attachments}
@@ -1378,6 +1466,14 @@ class RuntimeChatService:
         self._cancel_events[claimed.response_id] = cancel_event
         self._activate_root(claimed.conversation_id, claimed.response_id, cancel_event)
         try:
+            steering_lock = self._queue_steering_locks.setdefault(
+                claimed.conversation_id, asyncio.Lock()
+            )
+            async with steering_lock:
+                if self._chat_queue is not None and await self._chat_queue.is_cancel_requested(
+                    claimed.conversation_id, claimed.id
+                ):
+                    cancel_event.set()
             await self._write_frame(
                 sink,
                 "response.created",
@@ -1431,7 +1527,6 @@ class RuntimeChatService:
         finally:
             self._deactivate_root(claimed.conversation_id, claimed.response_id, cancel_event)
             self._cancel_events.pop(claimed.response_id, None)
-            stream.finish()
 
     async def _publish_queue_snapshot(self, snapshot: dict[str, Any]) -> None:
         queues = getattr(self.loop_runner, "queues", None)
@@ -1728,7 +1823,8 @@ class RuntimeChatService:
         data: dict[str, Any],
     ) -> None:
         if isinstance(response, _ResponseContentSink):
-            response.stream.append(event, data)
+            if not response.defer_terminal(event, data):
+                response.stream.append(event, data)
             return
         payload = json.dumps(make_json_safe(data)).encode("utf-8")
         await response.write(f"event: {event}\n".encode() + b"data: " + payload + b"\n\n")

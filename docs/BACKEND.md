@@ -267,6 +267,10 @@ response lifecycle with `queue_execution: true`, `content_request_id` equal to
 B's request ID, and `queued_message: {id,text,attachments}` on started. B streams
 through its own existing `/api/ui/responses/{request_id}/stream` and has its own
 cancellation target. Late A terminal events cannot clear B's active state.
+The gateway reconciles the replayable execution stream against the live runtime
+broadcast: an unseen queued start or terminal is emitted once from the relay,
+while an observed runtime lifecycle edge suppresses the duplicate. This preserves
+one canonical terminal even when the live runtime event subscription disconnects.
 Terminal history reconciliation follows the session merge and retains native
 completed, failed, or cancelled status. Browser display projections omit the
 model-only attachment context suffix while preserving attachment descriptors.

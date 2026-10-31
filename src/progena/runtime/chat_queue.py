@@ -368,6 +368,20 @@ class ChatQueueStore:
 
         return await self._store.mutate_document(self._key(conversation_id), mutate)
 
+    async def is_cancel_requested(self, conversation_id: str, message_id: str) -> bool:
+        """Return whether a sending claim was durably cancelled by Send now."""
+
+        document = await self._store.peek_document(self._key(conversation_id))
+        if not isinstance(document, dict):
+            return False
+        return any(
+            isinstance(item, dict)
+            and item.get("id") == message_id
+            and item.get("status") == "sending"
+            and item.get("cancel_requested")
+            for item in document.get("messages", [])
+        )
+
     async def cancel_requested_claims(self, conversation_id: str) -> list[ClaimedQueueMessage]:
         """Return sending claims durably cancelled by an acknowledged Send now."""
 

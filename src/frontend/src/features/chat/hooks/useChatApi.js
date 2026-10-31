@@ -47,6 +47,7 @@ function deriveConnectionState(pendingStreams, emptyState = 'disconnected') {
   return 'connecting';
 }
 
+const FRONTEND_RESPONSE_OPTIONS_KEY = '__frontendResponse';
 const RESPONSE_TERMINAL_DRAIN_MS = 50;
 const RESPONSE_HEARTBEAT_STALE_MS = 45000;
 const RESPONSE_WATCHDOG_POLL_MS = 15000;
@@ -90,6 +91,23 @@ function hasSeenResponseFrameId(pending, frameId) {
   return Boolean(frameId) && pending.receivedFrameIds.includes(frameId);
 }
 
+function splitResponseMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return { backendMetadata: metadata, allowDesyncedCompletion: false };
+  }
+
+  const frontendOptions = metadata[FRONTEND_RESPONSE_OPTIONS_KEY];
+  const allowDesyncedCompletion = Boolean(frontendOptions?.allowDesyncedCompletion);
+  if (!Object.hasOwn(metadata, FRONTEND_RESPONSE_OPTIONS_KEY)) {
+    return { backendMetadata: metadata, allowDesyncedCompletion };
+  }
+
+  const { [FRONTEND_RESPONSE_OPTIONS_KEY]: _frontendOptions, ...backendMetadata } = metadata;
+  return {
+    backendMetadata: Object.keys(backendMetadata).length > 0 ? backendMetadata : null,
+    allowDesyncedCompletion,
+  };
+}
 
 function buildDesyncCompletionError(reason) {
   if (reason === 'cursor_expired') {
@@ -138,7 +156,11 @@ export function useChatApi() {
         : 'Response generation failed';
       pending.onError?.(new Error(message));
       setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
-    } else if (terminalType === UI_EVENT.CHAT_RESPONSE_COMPLETED && pending.desynced) {
+    } else if (
+      terminalType === UI_EVENT.CHAT_RESPONSE_COMPLETED
+      && pending.desynced
+      && !pending.allowDesyncedCompletion
+    ) {
       pending.onError?.(buildDesyncCompletionError(pending.desyncReason));
       setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
     } else {
@@ -367,11 +389,11 @@ export function useChatApi() {
   useEffect(() => subscribeUiEvent(consumeStreamEvent), [consumeStreamEvent]);
 
   const sendMessageStream = useCallback(
-    async (message, history = [], onChunk, onComplete, onError, onStreamEvent, metadata = null) => {
+    async (message, history = [], onChunk, onComplete, onError, onStreamEvent, metadata = null, owner = null) => {
       const requestId = createUuid();
       const input = buildResponsesInput(history, message);
       const url = getApiUrl('responses');
-      const backendMetadata = metadata;
+      const { backendMetadata, allowDesyncedCompletion } = splitResponseMetadata(metadata);
 
       let resolveTerminal;
       const terminal = new Promise((resolve) => {
@@ -398,6 +420,8 @@ export function useChatApi() {
         openedOnce: false,
         desynced: false,
         desyncReason: null,
+        allowDesyncedCompletion,
+        owner,
         terminalEvent: null,
         finalized: false,
         receivedFrameIds: [],
@@ -469,13 +493,31 @@ export function useChatApi() {
     onComplete,
     onError,
     onStreamEvent,
+    onAdopt,
   } = {}) => {
     const existing = pendingStreamsRef.current.get(requestId);
-    if (existing) return () => {};
+    if (existing) {
+      existing.onChunk = onChunk;
+      existing.onComplete = onComplete;
+      existing.onError = onError;
+      existing.onStreamEvent = onStreamEvent;
+      onAdopt?.(existing.owner);
+      return () => {
+        if (pendingStreamsRef.current.get(requestId) !== existing) return;
+        cleanupPendingTransport(existing);
+        existing.finalized = true;
+        pendingStreamsRef.current.delete(requestId);
+        if (activeStreamRequestIdRef.current === requestId) activeStreamRequestIdRef.current = null;
+        setConnectionState(deriveConnectionState(pendingStreamsRef.current));
+        existing.resolve();
+      };
+    }
+
     let resolveTerminal;
     const terminal = new Promise((resolve) => { resolveTerminal = resolve; });
     const pending = {
       onChunk, onComplete, onError, onStreamEvent, resolve: resolveTerminal, terminal,
+      allowDesyncedCompletion: false, owner: null,
       cancelRequested: false, acknowledged: true, streamObserved: false, eventSource: null,
       reconnectTimer: null, watchdogTimer: null, terminalTimer: null, lastEventAt: null,
       lastEventId: null, connectAttempts: 0, openedOnce: false, desynced: false,

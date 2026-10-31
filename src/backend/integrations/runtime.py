@@ -45,6 +45,8 @@ EVENTS_RECONNECT_DELAY_SECONDS = 5.0
 CANCEL_TIMEOUT_SECONDS = 5.0
 TASK_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
+FOLLOWER_RECONNECT_DELAY_SECONDS = 0.1
+
 
 class RuntimeControlError(RuntimeError):
     """A routine-control request the runtime rejected or could not process."""
@@ -65,11 +67,20 @@ class RuntimeQueueError(RuntimeError):
         self.snapshot = snapshot
 
 
+class ResponseTerminalError(RuntimeError):
+    """A terminal response failure retaining whether execution was deferred."""
+
+    def __init__(self, message: str, *, deferred: bool) -> None:
+        super().__init__(message)
+        self.deferred = deferred
+
+
 async def _iter_sse_frames(response: httpx.Response) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     """Parse ``event:``/``data:`` SSE frames from a streaming httpx response."""
     event_name: str | None = None
     event_cursor: str | None = None
     async for line in response.aiter_lines():
+        response.extensions["progena_sse_stream_progress"] = True
         if line == "" or line.startswith(":"):
             continue
         if line.startswith("id: "):
@@ -87,25 +98,20 @@ async def _iter_sse_frames(response: httpx.Response) -> AsyncIterator[tuple[str,
             event_cursor = None
 
 
-async def _iter_sse_frames_with_cursor(
-    response: httpx.Response,
-) -> AsyncIterator[tuple[str, dict[str, Any], str | None]]:
-    """Parse SSE frames while retaining the replay cursor assigned by runtime."""
-    event_name: str | None = None
-    event_cursor: str | None = None
-    async for line in response.aiter_lines():
-        if line == "" or line.startswith(":"):
-            continue
-        if line.startswith("id: "):
-            event_cursor = line[len("id: ") :]
-            continue
-        if line.startswith("event: "):
-            event_name = line[len("event: ") :]
-            continue
-        if line.startswith("data: ") and event_name is not None:
-            yield event_name, json.loads(line[len("data: ") :]), event_cursor
-            event_name = None
-            event_cursor = None
+FOLLOWER_RETRY_BUDGET_SECONDS = 30.0
+FOLLOWER_RETRY_MAX_DELAY_SECONDS = 5.0
+
+
+async def _wait_for_follower_retry(cancel_event: asyncio.Event | None, delay: float) -> bool:
+    """Sleep for a retry interval, returning promptly when cancellation arrives."""
+    if cancel_event is None:
+        await asyncio.sleep(delay)
+        return False
+    try:
+        await asyncio.wait_for(cancel_event.wait(), timeout=delay)
+    except TimeoutError:
+        return False
+    return True
 
 
 def _queue_message_for_browser(message: dict[str, Any]) -> dict[str, Any]:
@@ -413,8 +419,29 @@ class SSEProgenaClient:
         reasoning_text: str | None = None
         reasoning_tokens: int | None = None
         usage: dict[str, int] | None = None
+        deferred = False
+        deferred_started = False
+        terminal_status = "completed"
+        terminal_error: str | None = None
         async for event in self.send_message_stream_events(message, request_id, metadata):
             event_type = str(event.get("type", ""))
+            if event.get("queue_execution"):
+                deferred = True
+                deferred_started = deferred_started or event_type == "response_started"
+            if event_type == "stream_resync_required":
+                raise ResponseTerminalError(
+                    "Response stream replay requires resynchronization",
+                    deferred=deferred,
+                )
+            if event_type == "response_terminal":
+                terminal_status = str(event.get("status", "failed"))
+                terminal_error = str(event.get("error") or "") or None
+                if terminal_status in {"failed", "incomplete"}:
+                    raise ResponseTerminalError(
+                        terminal_error or f"Response generation was {terminal_status}",
+                        deferred=deferred,
+                    )
+                continue
             if event_type == "stream_event":
                 stream_event_type = str(event.get("event_type", ""))
                 event_content = str(event.get("content", ""))
@@ -434,18 +461,20 @@ class SSEProgenaClient:
                     if isinstance(raw_tokens, int):
                         reasoning_tokens = raw_tokens
                 continue
-
-            if event_type != "stream_chunk":
-                continue
-            chunk_text = str(event.get("content", ""))
-            if chunk_text:
-                chunks.append(chunk_text)
+            if event_type == "stream_chunk":
+                chunk_text = str(event.get("content", ""))
+                if chunk_text:
+                    chunks.append(chunk_text)
         response_text = "".join(chunks)
         return AgentResponse(
             response=response_text,
             reasoning=reasoning_text if effective_include_reasoning else None,
             reasoning_tokens=reasoning_tokens if effective_include_reasoning else None,
             usage=usage,
+            deferred=deferred,
+            deferred_started=deferred_started,
+            terminal_status=terminal_status,
+            terminal_error=terminal_error,
         )
 
     async def send_message_stream_events(
@@ -453,6 +482,8 @@ class SSEProgenaClient:
         message: str,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        *,
+        cancel_event: asyncio.Event | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Submit one response, following its durable stream if it is queued."""
         if not self._started:
@@ -479,8 +510,13 @@ class SSEProgenaClient:
 
             async for event in self._response_stream_events(response, request_id):
                 if event.get("type") != "queued":
-                    if event.get("type") == "response_terminal" and event.get("status") == "failed":
-                        raise RuntimeError(str(event.get("error") or "Response generation failed"))
+                    if event.get("type") == "response_terminal" and event.get("status") in {
+                        "failed",
+                        "incomplete",
+                    }:
+                        raise RuntimeError(
+                            str(event.get("error") or "Response generation was incomplete")
+                        )
                     yield event
                     continue
                 if request_id is None:
@@ -488,12 +524,18 @@ class SSEProgenaClient:
                 content_request_id = event.get("content_request_id") or request_id
                 if not isinstance(content_request_id, str) or not content_request_id:
                     raise RuntimeError("Queued Progena response is missing its content request ID")
-                async for deferred_event in self.follow_response_stream_events(content_request_id):
+                async for deferred_event in self.follow_response_stream_events(
+                    content_request_id, cancel_event=cancel_event
+                ):
                     yield {**deferred_event, "queue_execution": True}
                 return
 
     async def follow_response_stream_events(
-        self, response_id: str, *, cursor: str | None = None
+        self,
+        response_id: str,
+        *,
+        cursor: str | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Follow a response execution without re-submitting its input.
 
@@ -511,8 +553,11 @@ class SSEProgenaClient:
         request_timeout = httpx.Timeout(5.0, read=self.config.progena_timeout)
         path = f"/v1/responses/{quote(response_id, safe='')}/stream"
         replay_cursor = cursor
+        outage_started_at: float | None = None
+        retry_count = 0
         while True:
             params = {"cursor": replay_cursor} if replay_cursor else None
+            response: httpx.Response | None = None
             try:
                 async with self._client.stream(
                     "GET", path, params=params, timeout=request_timeout
@@ -550,14 +595,54 @@ class SSEProgenaClient:
                         ):
                             break
                         frame_cursor = response.extensions.get("progena_sse_cursor")
-                        if isinstance(frame_cursor, str) and frame_cursor:
+                        if (
+                            isinstance(frame_cursor, str)
+                            and frame_cursor
+                            and frame_cursor != replay_cursor
+                        ):
                             replay_cursor = frame_cursor
+                            outage_started_at = None
+                            retry_count = 0
                         if event.get("type") != "queued":
                             yield event
                         if terminal:
                             return
-            except (httpx.ReadError, httpx.RemoteProtocolError):
-                pass
+            except (
+                httpx.ConnectError,
+                httpx.ConnectTimeout,
+                httpx.ReadError,
+                httpx.ReadTimeout,
+                httpx.RemoteProtocolError,
+            ) as error:
+                if response is not None and response.extensions.get("progena_sse_stream_progress"):
+                    outage_started_at = None
+                    retry_count = 0
+                now = time.monotonic()
+                outage_started_at = outage_started_at or now
+                if now - outage_started_at >= FOLLOWER_RETRY_BUDGET_SECONDS:
+                    logger.warning("Response follower exhausted retry budget: %s", error)
+                    status = (
+                        "cancelled"
+                        if cancel_event is not None and cancel_event.is_set()
+                        else "failed"
+                    )
+                    yield {
+                        "type": "response_terminal",
+                        "status": status,
+                        "error": "Runtime response stream is unreachable",
+                        "request_id": response_id,
+                    }
+                    return
+                logger.debug("Response follower disconnected, reconnecting: %s", error)
+                retry_delay = min(
+                    FOLLOWER_RECONNECT_DELAY_SECONDS * (2**retry_count),
+                    FOLLOWER_RETRY_MAX_DELAY_SECONDS,
+                )
+                retry_count += 1
+                if cancel_event is not None and cancel_event.is_set():
+                    await asyncio.sleep(retry_delay)
+                else:
+                    await _wait_for_follower_retry(cancel_event, retry_delay)
             # A follower transport close has no model-lifecycle meaning. Resume
             # from the last fully relayed runtime cursor.
             continue

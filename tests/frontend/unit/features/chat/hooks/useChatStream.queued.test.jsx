@@ -19,10 +19,21 @@ const mocks = vi.hoisted(() => ({
   getApiUrl: (path) => path,
   reloadOpenChat: vi.fn(),
   onForegroundStreamStarted: vi.fn(),
+  state: {
+    uiData: {
+      chatRuntime: {
+        unreadChatIds: [],
+        generatingChatIds: [],
+        erroredChatIds: [],
+        activityByThreadId: {},
+        requestIdByThreadId: {},
+      },
+    },
+  },
 }));
 
 vi.mock('react-redux', () => ({
-  useSelector: () => [],
+  useSelector: (selector) => selector(mocks.state),
 }));
 vi.mock('@frontend/lib/failures', () => ({
   reportFailure: mocks.reportFailure,
@@ -102,6 +113,13 @@ async function mount() {
 beforeEach(async () => {
   mocks.listener = null;
   mocks.observers = new Map();
+  mocks.state.uiData.chatRuntime = {
+    unreadChatIds: [],
+    generatingChatIds: [],
+    erroredChatIds: [],
+    activityByThreadId: {},
+    requestIdByThreadId: {},
+  };
   mocks.observeResponseStream.mockReset();
   mocks.sendMessageStream.mockReset();
   mocks.queueMessage.mockReset();
@@ -129,6 +147,139 @@ afterEach(async () => {
 });
 
 describe('useChatStream queued execution ownership', () => {
+  it('adopts a direct pending response into its queued execution without duplicating the human row', async () => {
+    let directCallbacks;
+    mocks.sendMessageStream.mockImplementation((
+      _content,
+      _history,
+      onChunk,
+      onComplete,
+      onError,
+      onStreamEvent,
+      _metadata,
+      owner,
+    ) => {
+      directCallbacks = { onChunk, onComplete, onError, onStreamEvent, owner };
+      return new Promise(() => {});
+    });
+    mocks.observeResponseStream.mockImplementation((requestId, callbacks) => {
+      callbacks.onAdopt?.(directCallbacks.owner);
+      const cleanup = vi.fn();
+      mocks.observers.set(requestId, { ...callbacks, cleanup });
+      return cleanup;
+    });
+
+    await act(async () => {
+      void streamRef.current.handleSend('A queued direct send');
+    });
+    const originalHumanId = streamRef.current.messages[0].id;
+    await publish(started('B', 'human-b'));
+    await act(async () => {
+      mocks.observers.get('B').onChunk('B output');
+      mocks.observers.get('B').onComplete('completed');
+    });
+
+    expect(streamRef.current.messages.filter((message) => message.role === 'user')).toEqual([
+      expect.objectContaining({ id: 'human-b', content: 'human B' }),
+    ]);
+    expect(streamRef.current.messages.some((message) => message.id === originalHumanId)).toBe(false);
+    expect(streamRef.current.isGenerating).toBe(false);
+  });
+
+  it('freezes spectated A text before a queued B takes the live turn', async () => {
+    mocks.state.uiData.chatRuntime.generatingChatIds = ['thread-1'];
+    mocks.state.uiData.chatRuntime.requestIdByThreadId = { 'thread-1': 'A' };
+    await act(async () => {
+      root.render(<Harness ref={streamRef} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      mocks.observers.get('A').onChunk('A remains visible');
+    });
+
+    await publish(started('B', 'human-b'));
+
+    expect(streamRef.current.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'spectate_A-assistant',
+        role: 'assistant',
+        content: 'A remains visible',
+      }),
+      expect.objectContaining({ id: 'human-b', role: 'user' }),
+    ]));
+    expect(streamRef.current.liveTurnStore.getSnapshot()).toMatchObject({
+      streamId: 'queued_B',
+    });
+  });
+
+  it('keeps spectating A while this tab queues B, then retains A when B starts', async () => {
+    mocks.state.uiData.chatRuntime.generatingChatIds = ['thread-1'];
+    mocks.state.uiData.chatRuntime.requestIdByThreadId = { 'thread-1': 'A' };
+    await act(async () => {
+      root.render(<Harness ref={streamRef} />);
+      await Promise.resolve();
+    });
+    const aObserver = mocks.observers.get('A');
+    await act(async () => {
+      aObserver.onChunk('A stays while B waits');
+      await streamRef.current.handleQueue('B from spectator');
+      aObserver.onChunk(' and keeps streaming');
+    });
+
+    expect(streamRef.current.isGenerating).toBe(true);
+    expect(mocks.queueMessage).toHaveBeenCalledWith(
+      'B from spectator',
+      expect.any(Array),
+      expect.objectContaining({ thread_id: 'thread-1' }),
+      expect.any(String),
+    );
+    expect(aObserver.cleanup).not.toHaveBeenCalled();
+    expect(streamRef.current.liveTurnStore.getSnapshot()).toMatchObject({
+      streamId: 'spectate_A',
+      content: 'A stays while B waits and keeps streaming',
+    });
+
+    await publish(started('B', 'human-b'));
+    await act(async () => {
+      mocks.observers.get('B').onChunk('B visible');
+    });
+
+    expect(streamRef.current.messages).toContainEqual(expect.objectContaining({
+      id: 'spectate_A-assistant',
+      content: 'A stays while B waits and keeps streaming',
+    }));
+    expect(streamRef.current.messages.filter((message) => message.role === 'user')).toEqual([
+      expect.objectContaining({ id: 'human-b' }),
+    ]);
+    expect(streamRef.current.liveTurnStore.getSnapshot()).toMatchObject({
+      streamId: 'queued_B',
+      content: 'B visible',
+    });
+  });
+
+  it('uses the resolved local draft thread for the first send and its queued follow-up', async () => {
+    let directMetadata;
+    let queuedMetadata;
+    mocks.sendMessageStream.mockImplementation((...args) => {
+      directMetadata = args[6];
+      return new Promise(() => {});
+    });
+    mocks.queueMessage.mockImplementation((_content, _history, metadata) => {
+      queuedMetadata = metadata;
+      return Promise.resolve();
+    });
+
+    await act(async () => {
+      void streamRef.current.handleSend('First draft message');
+    });
+    await act(async () => {
+      await streamRef.current.handleQueue('Queued draft message');
+    });
+
+    expect(directMetadata).toEqual(expect.objectContaining({ thread_id: 'thread-1' }));
+    expect(queuedMetadata).toEqual(expect.objectContaining({ thread_id: 'thread-1' }));
+  });
+
   it('keeps late B text and tool frames in B after C becomes the live turn', async () => {
     await publish(started('B', 'human-b'));
     await act(async () => {
@@ -253,5 +404,37 @@ describe('useChatStream queued execution ownership', () => {
 
     expect(mocks.observeResponseStream).toHaveBeenCalledTimes(2);
     expect(mocks.observers.get('B')).not.toBe(firstObserver);
+  });
+
+  it('reattaches as a spectator after same-mounted sidebar navigation releases a queued observer', async () => {
+    await publish(started('B', 'human-b'));
+    const firstObserver = mocks.observers.get('B');
+
+    await act(async () => {
+      root.render(<Harness threadId="thread-2" ref={streamRef} />);
+      await Promise.resolve();
+    });
+    expect(firstObserver.cleanup).toHaveBeenCalledOnce();
+
+    mocks.state.uiData.chatRuntime.generatingChatIds = ['thread-1'];
+    mocks.state.uiData.chatRuntime.requestIdByThreadId = { 'thread-1': 'B' };
+    await act(async () => {
+      root.render(<Harness threadId="thread-1" ref={streamRef} />);
+      await Promise.resolve();
+    });
+
+    expect(mocks.observeResponseStream).toHaveBeenCalledTimes(2);
+    expect(mocks.observers.get('B')).not.toBe(firstObserver);
+
+    mocks.state.uiData.chatRuntime.generatingChatIds = [];
+    mocks.state.uiData.chatRuntime.requestIdByThreadId = {};
+    await act(async () => {
+      root.render(<Harness threadId="thread-1" ref={streamRef} />);
+      await Promise.resolve();
+    });
+    expect(mocks.requestForegroundReconciliation).toHaveBeenCalledWith({
+      threadId: 'thread-1',
+      streamId: 'spectate_B',
+    });
   });
 });

@@ -16,6 +16,10 @@ class AgentResponse:
     reasoning: str | None = None
     reasoning_tokens: int | None = None
     usage: dict[str, int] | None = None
+    deferred: bool = False
+    deferred_started: bool = False
+    terminal_status: str = "completed"
+    terminal_error: str | None = None
 
 
 def normalize_token_usage(value: Any) -> dict[str, int] | None:

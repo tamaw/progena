@@ -43,8 +43,8 @@ let host;
 let root;
 let queueRef;
 
-const Harness = forwardRef(function Harness(_props, ref) {
-  const queue = useChatQueue('thread-1');
+const Harness = forwardRef(function Harness({ conversationId = 'thread-1' }, ref) {
+  const queue = useChatQueue(conversationId);
   useImperativeHandle(ref, () => queue, [queue]);
   return null;
 });
@@ -174,6 +174,34 @@ describe('useChatQueue', () => {
       mocks.listener({ type: UI_EVENT.CONNECTION_READY });
       await Promise.resolve();
     });
+    expect(queueRef.current.isMutating).toBe(false);
+  });
+
+  it('clears a pending command fence when navigation changes conversations', async () => {
+    await publish({
+      conversation_id: 'thread-1',
+      revision: 1,
+      messages: [{ id: 'queued-1', text: 'Wait', attachments: [], status: 'queued' }],
+    });
+    await act(async () => {
+      await queueRef.current.deleteMessage('queued-1');
+    });
+    expect(queueRef.current.isMutating).toBe(true);
+
+    await act(async () => {
+      root.render(<Harness conversationId="thread-2" ref={queueRef} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      root.render(<Harness conversationId="thread-1" ref={queueRef} />);
+      await Promise.resolve();
+    });
+    await publish({
+      conversation_id: 'thread-1',
+      revision: 2,
+      messages: [{ id: 'queued-1', text: 'Wait', attachments: [], status: 'queued' }],
+    });
+
     expect(queueRef.current.isMutating).toBe(false);
   });
 

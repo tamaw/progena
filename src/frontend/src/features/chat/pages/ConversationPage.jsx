@@ -25,7 +25,7 @@ import QuickActions from '../components/QuickActions';
 import InlineFailure from '../../../components/InlineFailure';
 import PageShell from '../../../components/layout/PageShell';
 import DetailPane from '../../../components/layout/DetailPane';
-import { areChatTranscriptsEquivalent, mergeCanonicalMessages, excludeLiveOwnedMessage, shouldRetireLiveOwnerAfterCanonicalReconciliation, countTokens, countToolInvocations, deriveChatTitle, groupSessionItems, shouldShowChatContentLoading, getActiveRouteThreadId, shouldShowNewChatEmptyState, shouldDeferInitialRosterSelection, shouldDeferRouteSelection, shouldDismissEmptySelection, shouldSkipRoutedMountOpen, isReopeningCurrentLocalDraft, shouldAdoptMaterializedDraft } from '../models/conversationModel';
+import { areChatTranscriptsEquivalent, mergeCanonicalMessages, excludeLiveOwnedMessage, shouldRetireLiveOwnerAfterCanonicalReconciliation, countTokens, countToolInvocations, deriveChatTitle, groupSessionItems, shouldShowChatContentLoading, getActiveRouteThreadId, shouldShowNewChatEmptyState, shouldDisableChatComposer, resolveInitialChatThreadId, shouldDeferInitialRosterSelection, shouldDeferRouteSelection, shouldDismissEmptySelection, shouldSkipRoutedMountOpen, isReopeningCurrentLocalDraft, shouldAdoptMaterializedDraft } from '../models/conversationModel';
 import { buildChatSessionItems, compareSessionItems, findAdjacentSessionItem, normalizeBackendChatMessage, shouldLoadSelectedBackendChat, sidebarEmptyMessage, visibleGroupsForFilter } from '../models/chatSessionsModel';
 import { isEventVisible, loadStreamFilters } from '../models/streamFilters';
 import ChatMessages from '../components/ChatMessages';
@@ -114,9 +114,11 @@ function ConversationPage() {
   ));
   const [conversationUsage, setConversationUsage] = useState(null);
   const [isClearingSession, setIsClearingSession] = useState(false);
-  const [threadId, setThreadId] = useState(() => (
-    typeof initialQuickChatHandoff?.threadId === 'string' ? initialQuickChatHandoff.threadId : null
-  ));
+  const [threadId, setThreadId] = useState(() => resolveInitialChatThreadId({
+    urlThreadId,
+    handoffThreadId: initialQuickChatHandoff?.threadId,
+    createThreadId: createUuid,
+  }));
   const derivedChatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
   // The open thread's session document, once Postgres has created it. Its title
   // is authoritative: anyone (the header, a workflow, Progena) may rename it.
@@ -493,7 +495,7 @@ function ConversationPage() {
       // new chat every time -- but only once that chat actually has content
       // (see the persistence effect below); an untouched empty draft never
       // becomes "last viewed", so this can't get stuck reopening a blank chat.
-      if (!quickChatHandoff && preferences.lastOpenChatId) {
+      if (!quickChatHandoff && preferences.lastOpenChatId && messages.length === 0) {
         const lastOpenChatId = preferences.lastOpenChatId;
         const lastOpenChatExists = backendChatSessionsRef.current.some(
           (chat) => chat.thread_id === lastOpenChatId,
@@ -520,7 +522,7 @@ function ConversationPage() {
       }
 
       try {
-        const session = await acquireDraftChat(quickChatHandoff?.threadId || null);
+        const session = await acquireDraftChat(quickChatHandoff?.threadId || threadId);
         // A backend chat may have been selected while the draft was loading;
         // leave its detail request as the owner of the active transcript.
         if (!cancelled && !selectedBackendChatIdRef.current) {
@@ -549,6 +551,8 @@ function ConversationPage() {
     preferences.lastOpenChatId,
     preferences.loaded,
     urlThreadId,
+    threadId,
+    messages.length,
   ]);
 
   useEffect(() => {
@@ -1647,7 +1651,7 @@ function ConversationPage() {
           onStop={handleStop}
           onCommand={handleCommand}
           isGenerating={isGenerating}
-          disabled={connectionState === 'error' || isClearingSession}
+          disabled={shouldDisableChatComposer({ connectionState, isClearingSession, threadId })}
           allowQueue={Boolean(selectedBackendChatId)}
           autoFocus
           focusToken={`${threadId ?? 'no-session'}:${composerFocusTick}`}

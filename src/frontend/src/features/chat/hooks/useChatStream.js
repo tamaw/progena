@@ -91,6 +91,25 @@ export function useChatStream({
     spectatedRequestIdRef.current = null;
   }, []);
 
+  // A queued execution may supersede a response this pane was only observing.
+  // Freeze that response into its own transcript row before replacing the live
+  // owner; otherwise the streamed text disappears until canonical reload.
+  const freezeSpectatedTurn = useCallback(() => {
+    const requestId = spectatedRequestIdRef.current;
+    if (!requestId) return false;
+    const streamId = `spectate_${requestId}`;
+    const turn = liveTurnRef.current?.streamId === streamId ? liveTurnRef.current : null;
+    stopSpectating();
+    const committed = turn
+      ? finalizeLiveAssistantTurn(turn, { status: 'unknown', now: Date.now() })
+      : null;
+    if (!committed) return false;
+    setMessages((current) => (
+      current.some((message) => message.id === committed.id) ? current : current.concat(committed)
+    ));
+    return true;
+  }, [setMessages, stopSpectating]);
+
   const setLiveAssistantTurn = useCallback((nextTurn) => {
     const previousTurn = liveTurnRef.current;
     const resolvedTurn = typeof nextTurn === 'function'
@@ -242,11 +261,13 @@ export function useChatStream({
   }, []);
   const queuedExecutionThreadIdRef = useRef(null);
   useEffect(() => {
-    if (
-      queuedExecutionThreadIdRef.current !== null
-      && queuedExecutionThreadIdRef.current !== threadId
-    ) {
+    const previousThreadId = queuedExecutionThreadIdRef.current;
+    if (previousThreadId !== null && previousThreadId !== threadId) {
       releaseQueuedExecutions();
+      if (backgroundOriginChatIdRef.current === previousThreadId) {
+        activeStreamIdRef.current = null;
+        backgroundOriginChatIdRef.current = null;
+      }
     }
     queuedExecutionThreadIdRef.current = threadId;
   }, [releaseQueuedExecutions, threadId]);
@@ -268,7 +289,7 @@ export function useChatStream({
       if (event.type === UI_EVENT.CHAT_RESPONSE_STARTED) {
         if (payload?.queue_execution !== true && payload?.queued === true) return;
         if (queuedExecutionsRef.current.has(contentRequestId)) return;
-        stopSpectating();
+        freezeSpectatedTurn();
 
 
         const previousRequestId = queuedOwnerRequestIdRef.current;
@@ -315,6 +336,7 @@ export function useChatStream({
           terminalStatus: null,
           frozen: false,
           entryId: null,
+          adoptedHumanMessageId: null,
         };
         queuedExecutionsRef.current.set(contentRequestId, execution);
         queuedOwnerRequestIdRef.current = contentRequestId;
@@ -322,12 +344,6 @@ export function useChatStream({
         backgroundOriginChatIdRef.current = conversationId;
         onForegroundStreamStarted();
         setIsGenerating(true);
-        if (queued?.id && !claimedQueuedMessageIdsRef.current.has(queued.id)) {
-          claimedQueuedMessageIdsRef.current.add(queued.id);
-          setMessages((current) => current.some((message) => message.id === queued.id) ? current : current.concat({
-            id: queued.id, role: 'user', content: queued.text || '', attachments: queued.attachments || [], timestamp: Date.now(),
-          }));
-        }
         if (candidate) queuedAdmissionCandidatesRef.current.delete(requestId);
         setLiveAssistantTurn(execution.turn);
         execution.cleanup = observeResponseStream(contentRequestId, {
@@ -373,7 +389,31 @@ export function useChatStream({
             reportFailure(show, 'Generate response', error);
             requestForegroundReconciliation({ threadId: execution.threadId, streamId: execution.streamId, forceCanonical: true });
           },
+          onAdopt: (owner) => {
+            execution.adoptedHumanMessageId = owner?.humanMessageId || null;
+          },
         });
+        if (queued?.id && !claimedQueuedMessageIdsRef.current.has(queued.id)) {
+          claimedQueuedMessageIdsRef.current.add(queued.id);
+          setMessages((current) => {
+            const adoptedIndex = execution.adoptedHumanMessageId
+              ? current.findIndex((message) => message.id === execution.adoptedHumanMessageId)
+              : -1;
+            if (adoptedIndex !== -1) {
+              const next = current.slice();
+              next[adoptedIndex] = {
+                ...next[adoptedIndex],
+                id: queued.id,
+                content: queued.text || next[adoptedIndex].content,
+                attachments: queued.attachments || next[adoptedIndex].attachments,
+              };
+              return next;
+            }
+            return current.some((message) => message.id === queued.id) ? current : current.concat({
+              id: queued.id, role: 'user', content: queued.text || '', attachments: queued.attachments || [], timestamp: Date.now(),
+            });
+          });
+        }
         return;
       }
 
@@ -387,7 +427,7 @@ export function useChatStream({
         : event.type === UI_EVENT.CHAT_RESPONSE_FAILED ? 'failed' : 'completed';
     });
     return unsubscribe;
-  }, [cancelTerminalHandoff, clearLiveTurnForStream, discardPendingText, flushPendingText, flushQueuedText, isQueuedExecutionOwner, observeResponseStream, onForegroundStreamStarted, publishQueuedExecution, queueQueuedText, releaseQueuedExecutions, renderQueuedExecution, requestForegroundReconciliation, setLiveAssistantTurn, setMessages, show, stopSpectating, threadId]);
+  }, [cancelTerminalHandoff, clearLiveTurnForStream, discardPendingText, flushPendingText, flushQueuedText, freezeSpectatedTurn, isQueuedExecutionOwner, observeResponseStream, onForegroundStreamStarted, publishQueuedExecution, queueQueuedText, releaseQueuedExecutions, renderQueuedExecution, requestForegroundReconciliation, setLiveAssistantTurn, setMessages, show, stopSpectating, threadId]);
 
   // Marks the chat currently streaming (if any) as generating-in-background.
   // Called whenever the caller is about to stop treating that stream as the
@@ -471,6 +511,8 @@ export function useChatStream({
         } else {
           setLiveAssistantTurn(null);
         }
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- the canonical lifecycle ended the spectated request.
+        setIsGenerating(false);
         if (threadId) {
           requestForegroundReconciliation({ threadId, streamId: finishedStreamId });
         }
@@ -484,6 +526,7 @@ export function useChatStream({
     stopSpectating();
     const streamId = `spectate_${requestId}`;
     spectatedRequestIdRef.current = requestId;
+    setIsGenerating(true);
     setLiveAssistantTurn(createLiveAssistantTurn({ streamId, startedAt: Date.now() }));
 
     spectatorCleanupRef.current = observeResponseStream(requestId, {
@@ -536,7 +579,6 @@ export function useChatStream({
       dispatch(outcome.errored ? markChatErrored(outcome.threadId) : clearChatErrored(outcome.threadId));
     }
   }, [dispatch, getApiUrl, reloadOpenChat]);
-
   const handleSend = useCallback(async (content, attachments = []) => {
     preserveStreamInBackground();
     const userMessage = {
@@ -578,6 +620,7 @@ export function useChatStream({
     );
     const attachmentIds = attachments.map((attachment) => attachment.id).filter(Boolean);
     const threadMetadata = {
+      __frontendResponse: { allowDesyncedCompletion: true },
       ...(selectedBackendChat?.thread_id
         ? { thread_id: selectedBackendChat.thread_id }
         : threadId
@@ -765,6 +808,7 @@ export function useChatStream({
           );
         },
         threadMetadata,
+        { humanMessageId: userMessage.id },
       );
     } catch (error) {
       if (isStale()) {

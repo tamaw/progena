@@ -268,6 +268,69 @@ describe('useChatApi dedicated response transport', () => {
   });
 
 
+  it('reconciles a desynchronized direct chat response through its canonical completion', async () => {
+    vi.useFakeTimers();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+    const hook = useChatApi();
+    const terminal = hook.sendMessageStream(
+      'Recover persisted reply',
+      [],
+      vi.fn(),
+      onComplete,
+      onError,
+      vi.fn(),
+      { __frontendResponse: { allowDesyncedCompletion: true }, thread_id: 'thread-1' },
+    );
+    await flushMicrotasks();
+
+    const source = MockEventSource.instances[0];
+    source.emit('chat.response.resync_required', { request_id: REQUEST_ID, reason: 'cursor_expired' });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).metadata).toEqual({ thread_id: 'thread-1' });
+
+    publishLifecycle('chat.response.completed');
+    await vi.runOnlyPendingTimersAsync();
+    await terminal;
+
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(onComplete).toHaveBeenCalledWith('completed');
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('adopts an already pending transport for queued execution callbacks', async () => {
+    const directChunk = vi.fn();
+    const queuedChunk = vi.fn();
+    const queuedComplete = vi.fn();
+    const adopted = vi.fn();
+    const hook = useChatApi();
+    const terminal = hook.sendMessageStream(
+      'Queued by the runtime',
+      [],
+      directChunk,
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      null,
+      { humanMessageId: 'local-human' },
+    );
+    await flushMicrotasks();
+
+    hook.observeResponseStream(REQUEST_ID, {
+      onChunk: queuedChunk,
+      onComplete: queuedComplete,
+      onAdopt: adopted,
+    });
+    const source = MockEventSource.instances[0];
+    source.emit('chat.response.delta', { delta: 'claimed' }, `chat-response:${REQUEST_ID}:1`);
+    publishLifecycle('chat.response.completed');
+    await terminal;
+
+    expect(adopted).toHaveBeenCalledWith({ humanMessageId: 'local-human' });
+    expect(directChunk).not.toHaveBeenCalled();
+    expect(queuedChunk).toHaveBeenCalledWith('claimed');
+    expect(queuedComplete).toHaveBeenCalledWith('completed');
+  });
+
   it('fails desynced quick-chat completions explicitly instead of silently completing empty', async () => {
     vi.useFakeTimers();
     const onComplete = vi.fn();

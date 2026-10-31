@@ -166,12 +166,18 @@ class TestClientRequestIdPropagation:
         assert payload["request_id"] == "req-xyz789"
         assert payload["stream"] is True
         assert events == [
+            {"type": "response_started", "request_id": "req-xyz789"},
             {
                 "type": "stream_chunk",
                 "content": "test",
-                "is_final": True,
+                "is_final": False,
                 "request_id": "req-xyz789",
-            }
+            },
+            {
+                "type": "response_terminal",
+                "status": "completed",
+                "request_id": "req-xyz789",
+            },
         ]
 
 

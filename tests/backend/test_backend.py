@@ -95,6 +95,64 @@ for line in sys.stdin:
 
         await client.stop()
 
+    @pytest.mark.asyncio
+    async def test_stream_adapter_emits_lifecycle_for_consecutive_submissions(self, config):
+        client = ProgenaClient(config)
+        process = MagicMock()
+        process.stdin = MagicMock()
+        process.stdin.drain = AsyncMock()
+        process.stdout = MagicMock()
+        process.stdout.readline = AsyncMock(
+            side_effect=[
+                b'{"content":"Echo: first"}\n',
+                b'{"content":"Echo: second"}\n',
+            ]
+        )
+        process.stderr = MagicMock()
+        process.stderr.readline = AsyncMock(return_value=b"")
+        process.returncode = None
+        process.pid = 12345
+        process.terminate = MagicMock()
+        process.kill = MagicMock()
+        process.wait = AsyncMock()
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)):
+            try:
+                first = [
+                    event
+                    async for event in client.send_message_stream_events(
+                        "first", request_id="first-request"
+                    )
+                ]
+                second = [
+                    event
+                    async for event in client.send_message_stream_events(
+                        "second", request_id="second-request"
+                    )
+                ]
+            finally:
+                await client.stop()
+
+        assert first[-1] == {
+            "type": "response_terminal",
+            "status": "completed",
+            "request_id": "first-request",
+        }
+        assert second[-1] == {
+            "type": "response_terminal",
+            "status": "completed",
+            "request_id": "second-request",
+        }
+        assert [event["type"] for event in first] == [
+            "response_started",
+            "stream_chunk",
+            "response_terminal",
+        ]
+        assert [event["type"] for event in second] == [
+            "response_started",
+            "stream_chunk",
+            "response_terminal",
+        ]
+
 
 class TestSSEEventForwardingStartup:
     """Tests for background SSE event-forwarding startup."""

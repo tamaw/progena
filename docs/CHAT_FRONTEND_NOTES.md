@@ -72,11 +72,14 @@ There is no optimistic queue ordering or speculative queued transcript row.
 
 Send now cancels the current root turn and starts the selected message separately;
 it is not mid-turn steering. Actual `queue_execution` started claims the stable
-human row once and observes that request's own content stream. Enqueue acceptance
-does not take A's stream or Stop target; once B starts, A's late completion cannot
-clear B. Observed queued streams use the same pending transport, cursor replay,
-terminal draining and Stop machinery as directly submitted responses. Rich tool,
-reasoning and subagent events retain the shared live-turn renderer.
+human row once and observes that request's own content stream. When an already
+pending browser transport is adopted as that execution, its callbacks and
+speculative human row transfer to the queued owner rather than creating a
+second row. Enqueue acceptance does not take A's stream or Stop target; once B
+starts, A's late completion cannot clear B. Observed queued streams use the same
+pending transport, cursor replay, terminal draining and Stop machinery as
+directly submitted responses. Rich tool, reasoning and subagent events retain
+the shared live-turn renderer.
 
 After terminal reconciliation the canonical transcript owns the result, including
 the cancelled turn's interruption marker. Navigation releases the local observer

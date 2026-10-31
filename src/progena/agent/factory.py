@@ -607,6 +607,7 @@ async def create_progena_agent(
         )
     )
 
+    custom_middleware.append(live_async)
     # Innermost of ours: sees the final message list just before the model,
     # after summarization and every other request rewrite.
     custom_middleware.append(ToolResultPairingMiddleware())

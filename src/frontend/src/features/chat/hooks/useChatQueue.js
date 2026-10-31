@@ -57,6 +57,8 @@ export function useChatQueue(conversationId) {
   useEffect(() => {
     commandRef.current = null;
     revisionRef.current = -1;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a queue command belongs only to its originating conversation.
+    setPendingMutation(null);
     if (!conversationId) return undefined;
 
     const unsubscribe = subscribeUiEvent((event) => {

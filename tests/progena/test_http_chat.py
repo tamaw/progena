@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -26,9 +27,10 @@ from src.progena.config import LLMConfig, ProgenaConfig, RuntimeConfig
 from src.progena.orchestration.nodes.chat import chat_node
 from src.progena.persistence.store import LangGraphRuntimeStore
 from src.progena.runtime.chat_queue import ChatQueueStore
-from src.progena.runtime.http.chat import RuntimeChatService
+from src.progena.runtime.http.chat import RuntimeChatService, _ResponseContentSink
 from src.progena.runtime.queues import RuntimeQueues
 from src.progena.runtime.streaming.deepagent_stream import DeepAgentSSEStream
+from src.progena.sessions.status import CANCELLED_STATUS
 from src.progena.state.manager import StateManager
 
 pytestmark = pytest.mark.asyncio
@@ -1468,3 +1470,411 @@ async def test_http_turn_and_heartbeat_turn_share_compiled_graph_checkpoint_gate
     finally:
         release_http.set()
         await _stop_chat_server(server)
+
+
+async def test_startup_recovery_holds_the_conversation_gate_for_incoming_turns() -> None:
+    recovery_started = asyncio.Event()
+    release_recovery = asyncio.Event()
+
+    class RecoveryGraph:
+        async def aget_state(self, _config: dict[str, Any]) -> Any:
+            recovery_started.set()
+            await release_recovery.wait()
+            return SimpleNamespace(values={"messages": []}, next=())
+
+        async def astream(self, *_args: Any, **_kwargs: Any) -> Any:
+            if False:
+                yield None
+
+    loop_runner = FakeLoopRunner(graph=RecoveryGraph())
+    queue = ChatQueueStore(loop_runner.heartbeat_context.state_manager._runtime_store)
+    await queue.enqueue(
+        "recovering-thread",
+        text="recovered",
+        attachments=[],
+        metadata={},
+        source="ui",
+        received_at=1.0,
+        response_id="recovered",
+        model="test",
+    )
+    service = RuntimeChatService(
+        loop_runner,
+        bridge_factory=make_bridge_factory(
+            [{"type": "stream_chunk", "content": "done", "is_final": True}]
+        ),
+    )
+    app = web.Application()
+    app.add_routes(service.routes())
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0, reuse_address=True)
+    await site.start()
+    sockets = getattr(getattr(site, "_server", None), "sockets", None)
+    assert sockets
+    base_url = f"http://127.0.0.1:{sockets[0].getsockname()[1]}"
+    startup = asyncio.create_task(service.start())
+    try:
+        await asyncio.wait_for(recovery_started.wait(), timeout=1)
+        assert service.conversation_gate.is_active("recovering-thread")
+        async with _client() as client:
+            frames = await _post_responses(
+                client,
+                base_url,
+                "new input",
+                "queued-during-recovery",
+                conversation="recovering-thread",
+            )
+        assert [event for event, _data in frames] == [
+            "response.created",
+            "response.queued",
+            "response.completed",
+        ]
+    finally:
+        release_recovery.set()
+        await startup
+        await service.stop()
+        await runner.cleanup()
+
+
+async def test_send_now_cancel_between_claim_and_root_activation_skips_the_graph() -> None:
+    loop_runner = FakeLoopRunner()
+    service = RuntimeChatService(
+        loop_runner,
+        bridge_factory=make_bridge_factory(
+            [{"type": "stream_chunk", "content": "ran", "is_final": True}]
+        ),
+    )
+    assert service._chat_queue is not None
+    queue = service._chat_queue
+    _snapshot, running_id = await queue.enqueue(
+        "claim-cancel-race",
+        text="running",
+        attachments=[],
+        metadata={},
+        source="ui",
+        received_at=1.0,
+        response_id="running",
+        model="test",
+    )
+    _snapshot, selected_id = await queue.enqueue(
+        "claim-cancel-race",
+        text="selected",
+        attachments=[],
+        metadata={},
+        source="ui",
+        received_at=2.0,
+        response_id="selected",
+        model="test",
+    )
+    original_claim_next = queue.claim_next
+    original_action = queue.action
+    original_is_cancel_requested = queue.is_cancel_requested
+    claimed = asyncio.Event()
+    action_started = asyncio.Event()
+    allow_action = asyncio.Event()
+    cancellation_read = asyncio.Event()
+    release_claim = asyncio.Event()
+
+    async def delayed_claim(conversation_id: str) -> Any:
+        claim = await original_claim_next(conversation_id)
+        claimed.set()
+        await release_claim.wait()
+        return claim
+
+    async def delayed_action(*args: Any, **kwargs: Any) -> Any:
+        action_started.set()
+        await allow_action.wait()
+        return await original_action(*args, **kwargs)
+
+    async def observed_cancellation(*args: Any, **kwargs: Any) -> bool:
+        cancellation_read.set()
+        return await original_is_cancel_requested(*args, **kwargs)
+
+    queue.claim_next = delayed_claim  # type: ignore[method-assign]
+    queue.action = delayed_action  # type: ignore[method-assign]
+    queue.is_cancel_requested = observed_cancellation  # type: ignore[method-assign]
+    app = web.Application()
+    app.add_routes(service.routes())
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0, reuse_address=True)
+    await site.start()
+    sockets = getattr(getattr(site, "_server", None), "sockets", None)
+    assert sockets
+    base_url = f"http://127.0.0.1:{sockets[0].getsockname()[1]}"
+
+    async def no_op() -> None:
+        return None
+
+    turn = asyncio.create_task(
+        service._run_serialized(
+            "claim-cancel-race",
+            lambda: service._run_next_queued_turn("claim-cancel-race"),
+            on_queued=no_op,
+        )
+    )
+    try:
+        await asyncio.wait_for(claimed.wait(), timeout=1)
+        snapshot = await queue.snapshot("claim-cancel-race")
+        async with _client() as client:
+            action_task = asyncio.create_task(
+                client.post(
+                    f"{base_url}/v1/conversations/claim-cancel-race/queue/actions",
+                    json={
+                        "action": "send_now",
+                        "message_id": selected_id,
+                        "revision": snapshot["revision"],
+                        "command_id": "cancel-running",
+                    },
+                )
+            )
+            await asyncio.wait_for(action_started.wait(), timeout=1)
+            release_claim.set()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert not cancellation_read.is_set()
+            allow_action.set()
+            action = await asyncio.wait_for(action_task, timeout=1)
+        assert action.status_code == 200
+        assert await asyncio.wait_for(turn, timeout=1)
+        replay = service._content_streams["running"].frames
+        assert [event for _cursor, event, _data in replay] == [
+            "response.created",
+            "response.in_progress",
+            "response.incomplete",
+        ]
+        assert (await queue.snapshot("claim-cancel-race"))["messages"][0]["id"] == selected_id
+    finally:
+        allow_action.set()
+        release_claim.set()
+        if not turn.done():
+            turn.cancel()
+        await service.stop()
+        await runner.cleanup()
+
+
+async def test_recovery_keeps_cancelled_claim_when_checkpoint_persistence_fails() -> None:
+    class FailingRecoveryGraph:
+        async def aget_state(self, _config: dict[str, Any]) -> Any:
+            return SimpleNamespace(
+                values={"messages": [HumanMessage(id="user_running", content="running")]},
+                next=("model",),
+            )
+
+        async def aupdate_state(self, *_args: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("checkpoint unavailable")
+
+    loop_runner = FakeLoopRunner(graph=FailingRecoveryGraph())
+    queue = ChatQueueStore(loop_runner.heartbeat_context.state_manager._runtime_store)
+    _snapshot, running_id = await queue.enqueue(
+        "failing-recovery",
+        text="running",
+        attachments=[],
+        metadata={},
+        source="ui",
+        received_at=1.0,
+        response_id="running",
+        model="test",
+    )
+    _snapshot, selected_id = await queue.enqueue(
+        "failing-recovery",
+        text="selected",
+        attachments=[],
+        metadata={},
+        source="ui",
+        received_at=2.0,
+        response_id="selected",
+        model="test",
+    )
+    assert await queue.claim_next("failing-recovery")
+    snapshot = await queue.snapshot("failing-recovery")
+    await queue.action(
+        "failing-recovery",
+        {
+            "action": "send_now",
+            "message_id": selected_id,
+            "revision": snapshot["revision"],
+            "command_id": "cancel-running",
+        },
+    )
+    service = RuntimeChatService(loop_runner)
+    try:
+        with pytest.raises(RuntimeError, match="checkpoint unavailable"):
+            await service.start()
+        messages = (await queue.snapshot("failing-recovery"))["messages"]
+        assert [(item["id"], item["status"]) for item in messages] == [
+            (running_id, "sending"),
+            (selected_id, "queued"),
+        ]
+    finally:
+        await service.stop()
+
+
+async def test_stop_does_not_respawn_a_woken_queue_drain() -> None:
+    service = RuntimeChatService(FakeLoopRunner())
+    started = asyncio.Event()
+    calls = 0
+
+    async def blocked_turn(_conversation_id: str) -> bool:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await asyncio.Event().wait()
+        return False
+
+    service._run_next_queued_turn = blocked_turn  # type: ignore[method-assign]
+    service._schedule_queue_drain("stop-race")
+    await asyncio.wait_for(started.wait(), timeout=1)
+    service._schedule_queue_drain("stop-race")
+    await service.stop()
+    await asyncio.sleep(0)
+
+    assert calls == 1
+    assert service._queue_drain_tasks == {}
+
+
+async def test_response_stream_subscribes_before_prepare_can_evict_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = RuntimeChatService(FakeLoopRunner())
+    stream = service._ensure_content_stream("replay-race")
+    stream.frames = deque(maxlen=1)
+    stream.append("response.in_progress", {"response": {"id": "replay-race"}})
+    app = web.Application()
+    app.add_routes(service.routes())
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0, reuse_address=True)
+    await site.start()
+    sockets = getattr(getattr(site, "_server", None), "sockets", None)
+    assert sockets
+    base_url = f"http://127.0.0.1:{sockets[0].getsockname()[1]}"
+    original_prepare = web.StreamResponse.prepare
+
+    async def append_during_prepare(response: web.StreamResponse, request: web.Request) -> Any:
+        stream.append("response.completed", {"response": {"id": "replay-race"}})
+        stream.finish()
+        return await original_prepare(response, request)
+
+    monkeypatch.setattr(web.StreamResponse, "prepare", append_during_prepare)
+    try:
+        async with _client() as client:
+            frames = await _follow_response_stream(client, base_url, "replay-race")
+    finally:
+        await service.stop()
+        await runner.cleanup()
+
+    assert [event for event, _data in frames] == ["response.in_progress", "response.completed"]
+
+
+async def test_resumed_cancelled_claim_persists_terminal_checkpoint_before_returning() -> None:
+    class PendingGraph:
+        def __init__(self) -> None:
+            self.messages: list[Any] = [HumanMessage(id="user_running", content="running")]
+            self.cancelled_updates = 0
+
+        async def aget_state(self, _config: dict[str, Any]) -> Any:
+            return SimpleNamespace(values={"messages": self.messages}, next=("model",))
+
+        async def aupdate_state(
+            self, _config: dict[str, Any], updates: dict[str, Any], *, as_node: str
+        ) -> None:
+            assert as_node == "model"
+            self.messages.extend(updates["messages"])
+            self.cancelled_updates += 1
+
+    graph = PendingGraph()
+    loop_runner = FakeLoopRunner(graph=graph)
+    service = RuntimeChatService(loop_runner)
+    assert service._chat_queue is not None
+    queue = service._chat_queue
+    _snapshot, running_id = await queue.enqueue(
+        "resume-cancel",
+        text="running",
+        attachments=[],
+        metadata={},
+        source="ui",
+        received_at=1.0,
+        response_id="running",
+        model="test",
+    )
+    _snapshot, selected_id = await queue.enqueue(
+        "resume-cancel",
+        text="selected",
+        attachments=[],
+        metadata={},
+        source="ui",
+        received_at=2.0,
+        response_id="selected",
+        model="test",
+    )
+    claimed = await queue.claim_next("resume-cancel")
+    assert claimed is not None and claimed.id == running_id
+    snapshot = await queue.snapshot("resume-cancel")
+    await queue.action(
+        "resume-cancel",
+        {
+            "action": "send_now",
+            "message_id": selected_id,
+            "revision": snapshot["revision"],
+            "command_id": "cancel-running",
+        },
+    )
+
+    result = await service._run_claimed_turn(
+        claimed,
+        sink=_ResponseContentSink(service._ensure_content_stream("running")),
+        resume=True,
+    )
+
+    assert result["status"] == "cancelled"
+    assert graph.cancelled_updates == 1
+    assert graph.messages[-1].response_metadata["status"] == CANCELLED_STATUS
+
+
+async def test_queued_content_terminal_waits_for_session_merge() -> None:
+    loop_runner = FakeLoopRunner()
+    service = RuntimeChatService(
+        loop_runner,
+        bridge_factory=make_bridge_factory(
+            [{"type": "stream_chunk", "content": "done", "is_final": True}]
+        ),
+    )
+    assert service._chat_queue is not None
+    queue = service._chat_queue
+    await queue.enqueue(
+        "merge-before-terminal",
+        text="queued",
+        attachments=[],
+        metadata={},
+        source="ui",
+        received_at=1.0,
+        response_id="merge-response",
+        model="test",
+    )
+    merge_started = asyncio.Event()
+    release_merge = asyncio.Event()
+
+    async def blocked_merge(_conversation_id: str) -> None:
+        merge_started.set()
+        await release_merge.wait()
+
+    service._ensure_session_merged = blocked_merge  # type: ignore[method-assign]
+    turn = asyncio.create_task(service._run_next_queued_turn("merge-before-terminal"))
+    try:
+        await asyncio.wait_for(merge_started.wait(), timeout=1)
+        events = [
+            event for _cursor, event, _data in service._content_streams["merge-response"].frames
+        ]
+        assert "response.completed" not in events
+        release_merge.set()
+        assert await asyncio.wait_for(turn, timeout=1)
+    finally:
+        release_merge.set()
+        if not turn.done():
+            turn.cancel()
+        await service.stop()
+
+    events = [event for _cursor, event, _data in service._content_streams["merge-response"].frames]
+    assert events[-1] == "response.completed"

@@ -179,14 +179,15 @@ async def lifespan(app: FastAPI):
             or None
         )
         request_id = data.get("request_id")
-        chat_responses.handle_runtime_queue_lifecycle(event_type, data)
-        events_stream.broadcast_ui_event(
-            event_type,
-            data,
-            scope="chat",
-            session_id=thread_id,
-            request_id=request_id if isinstance(request_id, str) and request_id else None,
-        )
+        should_broadcast = chat_responses.handle_runtime_queue_lifecycle(event_type, data)
+        if should_broadcast:
+            events_stream.broadcast_ui_event(
+                event_type,
+                data,
+                scope="chat",
+                session_id=thread_id,
+                request_id=request_id if isinstance(request_id, str) and request_id else None,
+            )
         # Reflect runtime-driven schedule changes on the canonical UI stream so
         # the Schedules page updates live (e.g. a one-off firing and removing
         # itself, or a schedule created from a chat).
