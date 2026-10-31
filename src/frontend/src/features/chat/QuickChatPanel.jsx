@@ -21,6 +21,7 @@ import { createLiveAssistantTurnStore } from './models/liveAssistantTurnStore';
 import { applyAssistantChunk, applyAssistantMetadata, applyAssistantStreamEvent, createLiveAssistantTurn, finalizeLiveAssistantTurn, resolveLiveTurnResponseStatus } from './models/liveAssistantTurnModel';
 import { loadQuickChatHistory, toQuickChatInputHistory } from './models/quickChatStreamModel';
 import { createQuickChatPromotion, persistQuickChatHandoff } from './models/quickChatPromotionModel';
+import { resolveQuickChatThreadAdoption } from './models/quickChatThreadTarget';
 import { latestContextUsage, resolveComposerCacheExpiry, resolveComposerContextUsage } from './models/contextWindowModel';
 import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from './models/transcriptScroll';
 import { mergeConversationSummaryMarkers } from './models/conversationSummaryModel';
@@ -67,6 +68,8 @@ export function QuickChatPanel({
   const scratchThreadIdRef = useRef(quickChatMemory.threadId);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState('');
+  // Thread requested by Chat's "Open in Quick Chat" while its history loads.
+  const [adoptingThreadId, setAdoptingThreadId] = useState(null);
   const [composerSeed, setComposerSeed] = useState({ key: 0, message: '' });
   const [liveTurnStore] = useState(createLiveAssistantTurnStore);
   const liveTurnRef = useRef(null);
@@ -358,6 +361,58 @@ export function QuickChatPanel({
     };
   }, [setLiveAssistantTurn]);
 
+  // Continue a Chat conversation here: switch to its canonical thread and load
+  // its checkpointed history (or join its running reply as a spectator). Never
+  // sends, cancels, or replaces the panel's own in-flight reply.
+  const threadTarget = normalizedConfig.threadTarget;
+  useEffect(() => {
+    const decision = resolveQuickChatThreadAdoption({
+      target: threadTarget,
+      adoptedTargetId: quickChatMemory.adoptedTargetId,
+      currentThreadId: scratchThreadId,
+      ownStreamActive: Boolean(ownStreamIdRef.current),
+    });
+    if (decision === 'ignore') return;
+    quickChatMemory.adoptedTargetId = threadTarget.id;
+    // The requested thread replaces the mount-time resume decision below.
+    hasInitializedThreadRef.current = true;
+    if (decision === 'busy') {
+      setError('Quick chat is still replying. Stop it, then open the conversation again.');
+      return;
+    }
+    const { threadId } = threadTarget;
+    if (decision === 'adopt') {
+      quickChatEpochRef.current += 1;
+      spectatorCleanupRef.current?.();
+      spectatorCleanupRef.current = null;
+      spectatedRequestIdRef.current = null;
+      activeStreamIdRef.current = null;
+      setLiveAssistantTurn(null);
+      quickChatMemory.history = [];
+      quickChatMemory.threadId = threadId;
+      lastSentPageContextRef.current = null;
+      setHistory([]);
+      setSummaryMarkers([]);
+      // Set before the load below so its thread guard treats it as current.
+      scratchThreadIdRef.current = threadId;
+      setScratchThreadId(threadId);
+      sessionPromiseRef.current = Promise.resolve(threadId);
+    }
+    setError('');
+    // A running reply (the panel's own, or one joined by the spectator effect,
+    // which rehydrates on completion) keeps its live transcript; otherwise load
+    // the checkpointed transcript now.
+    if (ownStreamIdRef.current || generatingChatIds.includes(threadId)) return;
+    setAdoptingThreadId(threadId);
+    void rehydrateFromPersistedThread(threadId).then((resumed) => {
+      if (!isQuickChatMountedRef.current) return;
+      setAdoptingThreadId((current) => (current === threadId ? null : current));
+      if (!resumed) {
+        setError('Could not load that conversation. Open it from Chat and try again.');
+      }
+    });
+  }, [generatingChatIds, rehydrateFromPersistedThread, scratchThreadId, setLiveAssistantTurn, threadTarget]);
+
   // Decide the thread once per mount. A pinned quick chat's QuickChatPanel
   // mounts as soon as the shell adopts the pinned panel from its fast
   // localStorage cache (see PINNED_PANEL_STORAGE_KEY below) -- well before
@@ -581,6 +636,7 @@ export function QuickChatPanel({
     quickChatMemory.history = [];
     quickChatMemory.threadId = null;
     quickChatMemory.handoff = null;
+    setAdoptingThreadId(null);
     setHistory([]);
     setSummaryMarkers([]);
     sessionPromiseRef.current = null;
@@ -641,9 +697,12 @@ export function QuickChatPanel({
           messagesContainerRef={messagesContainerRef}
           isPinnedToBottomRef={isPinnedToBottomRef}
         />
-        {error ? <div className="qchat-error">{error}</div> : null}
+        {adoptingThreadId && history.length === 0 ? (
+          <div className="qchat-loading muted" role="status">Loading conversation…</div>
+        ) : null}
+        {error ? <div className="qchat-error" role="alert">{error}</div> : null}
       </div>
-      {history.length === 0 && !hasLiveTurn && !isSending && !error ? (
+      {history.length === 0 && !hasLiveTurn && !isSending && !error && !adoptingThreadId ? (
         <div className="qchat-pane__hints" aria-label="Quick chat suggestions">
           {normalizedConfig.prompts.map((prompt) => (
             <button key={prompt} type="button" className="qchat-chip" onClick={() => selectPrompt(prompt)}>
@@ -659,7 +718,7 @@ export function QuickChatPanel({
         onSend={submit}
         onStop={stopQuickChat}
         isGenerating={isSending}
-        disabled={false}
+        disabled={Boolean(adoptingThreadId)}
         enableSlashCommands={false}
         allowStop
         autoFocus={!isBackground}

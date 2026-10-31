@@ -1,7 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { ApproveActionIcon, EditActionIcon } from './layout/DetailHeader';
 
-/** Renders a DetailHeader title with the shared inline rename interaction. */
+/**
+ * Renders a DetailHeader title with the shared inline rename interaction. Pair
+ * it with `titleClassName="detail-header__title--editable"` so the text and
+ * rename button share one truncating row.
+ */
 export default function EditableDetailTitle({
   title,
   editor,
@@ -62,7 +66,7 @@ export default function EditableDetailTitle({
           }}
         />
       ) : (
-        <span className="chat-detail-header__title-text">{title}</span>
+        <span className="detail-header__title-text chat-detail-header__title-text">{title}</span>
       )}
       <button
         type="button"

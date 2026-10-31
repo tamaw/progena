@@ -649,7 +649,7 @@ export default function TasksPage({ context = null }) {
         {selectedCard ? (
           <>
             <DetailHeader
-              titleClassName="chat-detail-header__title"
+              titleClassName="detail-header__title--editable"
               title={(
                 <EditableDetailTitle
                   title={selectedCard.title}

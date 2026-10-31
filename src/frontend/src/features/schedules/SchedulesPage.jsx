@@ -834,7 +834,7 @@ function SchedulesPage() {
         ) : (
           <>
             <DetailHeader
-              titleClassName="chat-detail-header__title"
+              titleClassName="detail-header__title--editable"
               title={(
                 <EditableDetailTitle
                   title={scheduleTitle}

@@ -341,7 +341,7 @@ export default function KnowledgePage() {
         {selectedBase ? (
           <>
             <DetailHeader
-              titleClassName="chat-detail-header__title"
+              titleClassName="detail-header__title--editable"
               title={(
                 <>
                   {editingName ? (
@@ -368,7 +368,7 @@ export default function KnowledgePage() {
                       }}
                     />
                   ) : (
-                    <span className="chat-detail-header__title-text">{selectedBase.name}</span>
+                    <span className="detail-header__title-text">{selectedBase.name}</span>
                   )}
                   <button
                     type="button"

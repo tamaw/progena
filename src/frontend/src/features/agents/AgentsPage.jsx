@@ -493,7 +493,6 @@ export default function AgentsPage() {
                     label="Delete"
                     tooltip="Delete agent"
                     ariaLabel="Delete agent"
-                    variant="danger"
                     onClick={requestDeleteAgent}
                   />
                 ) : null}

@@ -505,10 +505,11 @@
   gap: 6px;
   padding: 8px 10px;
   border-radius: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(22, 27, 34, 0.58);
+  /* Theme tokens keep the floating dock legible on light and dark canvases. */
+  border: 1px solid var(--color-border-light);
+  background: color-mix(in oklab, var(--color-bg-secondary) 86%, transparent);
   backdrop-filter: blur(14px);
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.26);
+  box-shadow: var(--shadow-lg);
 }
 
 /* Workflow canvas: a compact tool switcher plus a categorized add menu. */
@@ -545,6 +546,19 @@
   border-color: color-mix(in oklab, var(--color-text-primary) 13%, transparent);
 }
 
+.canvas-toolbar-button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.canvas-toolbar-button:disabled {
+  color: var(--color-text-muted);
+  background: transparent;
+  border-color: transparent;
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .canvas-toolbar-button--add {
   color: var(--color-accent);
   font-size: 21px;
@@ -563,10 +577,10 @@
   overflow: hidden;
   transform: translateX(-50%);
   pointer-events: auto;
-  border: 1px solid color-mix(in oklab, var(--color-border) 88%, white);
+  border: 1px solid var(--color-border-light);
   border-radius: 12px;
-  background: color-mix(in oklab, var(--color-bg-secondary) 94%, black);
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
+  background: var(--color-bg-secondary);
+  box-shadow: var(--shadow-lg);
 }
 
 .workflow-node-menu--cursor {
@@ -760,13 +774,13 @@
   pointer-events: none;
   padding: 6px 10px;
   border-radius: 10px;
-  background: rgba(13, 17, 23, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-light);
   color: var(--color-text-primary);
   font-size: 11px;
   line-height: 1;
   white-space: nowrap;
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.24);
+  box-shadow: var(--shadow-md);
   transition: opacity var(--transition-fast), transform var(--transition-fast);
 }
 

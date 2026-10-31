@@ -28,7 +28,7 @@ export const BROWSER_STORAGE_KEY = Object.freeze({
   INPUT_HISTORY: 'progena_input_history', SIDEBAR_COLLAPSED: 'progena_sidebar_collapsed',
   PINNED_PANEL: 'progena_pinned_panel', STREAM_FILTERS: 'progena_stream_filters',
   QUICK_CHAT_HANDOFF: 'progena_quick_chat_handoff', IDLE_TIMEOUT_MINUTES: 'progena_idle_timeout_minutes',
-  DENSITY: 'progena_density', ARCHIVED_CHAT_SESSIONS: 'progena:archived-chat-sessions',
+  DENSITY: 'progena_density', HEADER_FIELD: 'progena_header_field', ARCHIVED_CHAT_SESSIONS: 'progena:archived-chat-sessions',
   PINNED_CHAT_SESSIONS: 'progena:pinned-chat-sessions', SOLUTIONS: 'progena:solutions',
   WORKSPACE_REGISTRY: 'progena_workspaces', DEFAULT_WORKSPACE: 'progena_default_workspace',
 });
@@ -41,4 +41,5 @@ export const WORKSPACE_LOCAL_STORAGE_KEYS = Object.freeze([
 export const GLOBAL_PREFERENCE_STORAGE_KEYS = Object.freeze([
   BROWSER_STORAGE_KEY.THEME, BROWSER_STORAGE_KEY.SETTINGS, BROWSER_STORAGE_KEY.SIDEBAR_COLLAPSED,
   BROWSER_STORAGE_KEY.PINNED_PANEL, BROWSER_STORAGE_KEY.IDLE_TIMEOUT_MINUTES, BROWSER_STORAGE_KEY.DENSITY,
+  BROWSER_STORAGE_KEY.HEADER_FIELD,
 ]);

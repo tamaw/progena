@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   chatMessageProps: [],
   nextUuid: 0,
+  generatingChatIds: [],
+  requestIdByThreadId: {},
 }));
 
 vi.mock('react-redux', () => ({
@@ -37,8 +39,8 @@ vi.mock('@frontend/features/chat/hooks/useChatApi', () => ({
 }));
 vi.mock('@frontend/features/chat/state/chats', () => ({
   fetchChatMessages: vi.fn(),
-  selectGeneratingChatIds: () => [],
-  selectRequestIdByThreadId: () => ({}),
+  selectGeneratingChatIds: () => mocks.generatingChatIds,
+  selectRequestIdByThreadId: () => mocks.requestIdByThreadId,
 }));
 vi.mock('@frontend/features/chat/models/quickChatStreamModel', () => ({
   loadQuickChatHistory: mocks.loadQuickChatHistory,
@@ -65,8 +67,8 @@ vi.mock('@frontend/lib/uuid', () => ({
   createUuid: () => `quick-id-${++mocks.nextUuid}`,
 }));
 vi.mock('@frontend/features/chat/components/ChatInput', () => ({
-  default: ({ onSend }) => (
-    <button data-testid="quick-chat-send" type="button" onClick={() => { void onSend('Question'); }}>
+  default: ({ onSend, disabled }) => (
+    <button data-testid="quick-chat-send" type="button" disabled={disabled} onClick={() => { void onSend('Question'); }}>
       Send
     </button>
   ),
@@ -88,16 +90,19 @@ vi.mock('@frontend/components/navIcons', () => ({
 
 import { QuickChatPanel } from '@frontend/features/chat/QuickChatPanel';
 import { quickChatMemory } from '@frontend/features/chat/models/quickChatMemory';
+import { defaultQuickChatConfig } from '@frontend/features/chat/models/quickChatConfig';
+import { createQuickChatThreadTarget } from '@frontend/features/chat/models/quickChatThreadTarget';
+import { BROWSER_EVENT } from '@frontend/lib/browserContracts';
 
 let host;
 let root;
 
-async function mountQuickChat() {
+async function mountQuickChat(panelConfig) {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
   await act(async () => {
-    root.render(<QuickChatPanel onClose={vi.fn()} />);
+    root.render(<QuickChatPanel onClose={vi.fn()} panelConfig={panelConfig} />);
     await Promise.resolve();
   });
 }
@@ -139,10 +144,13 @@ beforeEach(() => {
   mocks.chatMessageProps.length = 0;
   mocks.nextUuid = 0;
   mocks.pendingCallbacks = null;
+  mocks.generatingChatIds = [];
+  mocks.requestIdByThreadId = {};
   quickChatMemory.history = [];
   quickChatMemory.threadId = null;
   quickChatMemory.handoff = null;
   quickChatMemory.mode = null;
+  quickChatMemory.adoptedTargetId = null;
   vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1));
   vi.stubGlobal('cancelAnimationFrame', vi.fn());
 });
@@ -253,5 +261,157 @@ describe('QuickChatPanel committed-history reconciliation', () => {
       secondRequest.resolve();
       await Promise.resolve();
     });
+  });
+});
+
+describe('QuickChatPanel "Open in Quick Chat" thread adoption', () => {
+  const targetConfig = (threadId) => ({
+    ...defaultQuickChatConfig,
+    threadTarget: createQuickChatThreadTarget({ threadId }),
+  });
+  const transcript = () => (latestChatMessages()?.messages || []).map((message) => message.content);
+  const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  const rerender = (panelConfig) => act(async () => {
+    root.render(<QuickChatPanel onClose={vi.fn()} panelConfig={panelConfig} />);
+    await Promise.resolve();
+  });
+
+  beforeEach(() => {
+    mocks.loadQuickChatHistory.mockResolvedValue([{ id: 'm1', role: 'user', content: 'Canonical hello' }]);
+  });
+
+  it('continues the requested canonical thread without sending or cancelling', async () => {
+    await mountQuickChat(targetConfig('thread-a'));
+    await flush();
+
+    expect(mocks.loadQuickChatHistory).toHaveBeenCalledTimes(1);
+    expect(quickChatMemory.threadId).toBe('thread-a');
+    expect(transcript()).toEqual(['Canonical hello']);
+    expect(mocks.sendMessageStream).not.toHaveBeenCalled();
+    expect(mocks.cancelStream).not.toHaveBeenCalled();
+    expect(host.querySelector('[data-testid="quick-chat-send"]').disabled).toBe(false);
+  });
+
+  it('sends the next message once on the adopted thread, not a clone', async () => {
+    const request = pendingSend();
+    await mountQuickChat(targetConfig('thread-a'));
+    await flush();
+    await sendQuickChat();
+
+    expect(mocks.sendMessageStream).toHaveBeenCalledTimes(1);
+    const [text, inputHistory, , , , , options] = mocks.sendMessageStream.mock.calls[0];
+    // Page context may precede the typed text; it is never a replayed transcript.
+    expect(text).toMatch(/(^|\n)Question$/);
+    expect(text).not.toContain('Canonical hello');
+    expect(inputHistory).toEqual([{ role: 'user', content: 'Canonical hello' }]);
+    expect(options.thread_id).toBe('thread-a');
+
+    await act(async () => {
+      request.resolve();
+      await Promise.resolve();
+    });
+  });
+
+  it('replaces a scratch conversation and adopts each request only once', async () => {
+    quickChatMemory.threadId = 'scratch-thread';
+    quickChatMemory.mode = 'default';
+    quickChatMemory.history = [{ id: 's1', role: 'user', content: 'Scratch' }];
+    const config = targetConfig('thread-a');
+    await mountQuickChat(config);
+    await flush();
+    expect(quickChatMemory.threadId).toBe('thread-a');
+    expect(transcript()).toEqual(['Canonical hello']);
+
+    mocks.loadQuickChatHistory.mockClear();
+    await rerender({ ...config });
+    await flush();
+    expect(mocks.loadQuickChatHistory).not.toHaveBeenCalled();
+    expect(quickChatMemory.threadId).toBe('thread-a');
+  });
+
+  it('switches to a newly requested thread', async () => {
+    await mountQuickChat(targetConfig('thread-a'));
+    await flush();
+    mocks.loadQuickChatHistory.mockResolvedValue([{ id: 'm2', role: 'user', content: 'Other thread' }]);
+    await rerender(targetConfig('thread-b'));
+    await flush();
+    expect(quickChatMemory.threadId).toBe('thread-b');
+    expect(transcript()).toEqual(['Other thread']);
+    expect(mocks.sendMessageStream).not.toHaveBeenCalled();
+  });
+
+  it('joins a running reply on the target thread instead of loading or sending', async () => {
+    mocks.generatingChatIds = ['thread-a'];
+    mocks.requestIdByThreadId = { 'thread-a': 'req-live' };
+    mocks.observeResponseStream.mockReturnValue(() => {});
+    await mountQuickChat(targetConfig('thread-a'));
+    await flush();
+
+    expect(mocks.observeResponseStream).toHaveBeenCalledWith('req-live', expect.any(Object));
+    expect(mocks.loadQuickChatHistory).not.toHaveBeenCalled();
+    expect(mocks.sendMessageStream).not.toHaveBeenCalled();
+    expect(mocks.cancelStream).not.toHaveBeenCalled();
+  });
+
+  it('refuses to switch away while its own reply is streaming', async () => {
+    const request = pendingSend();
+    await mountQuickChat();
+    await sendQuickChat();
+    const ownThreadId = quickChatMemory.threadId;
+
+    await rerender(targetConfig('thread-a'));
+    await flush();
+    expect(host.querySelector('[role="alert"]').textContent).toMatch(/still replying/);
+    expect(quickChatMemory.threadId).toBe(ownThreadId);
+    expect(mocks.cancelStream).not.toHaveBeenCalled();
+    expect(mocks.sendMessageStream).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      request.resolve();
+      await Promise.resolve();
+    });
+  });
+
+  it('shows a loading state and disables the composer while history loads', async () => {
+    let resolveLoad;
+    mocks.loadQuickChatHistory.mockReturnValue(new Promise((resolve) => { resolveLoad = resolve; }));
+    await mountQuickChat(targetConfig('thread-a'));
+    await flush();
+    expect(host.querySelector('[role="status"]').textContent).toBe('Loading conversation…');
+    expect(host.querySelector('[data-testid="quick-chat-send"]').disabled).toBe(true);
+
+    await act(async () => { resolveLoad([{ id: 'm1', role: 'user', content: 'Loaded' }]); });
+    await flush();
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    expect(transcript()).toEqual(['Loaded']);
+  });
+
+  it('reports a failed load without sending anything', async () => {
+    mocks.loadQuickChatHistory.mockRejectedValue(new Error('gone'));
+    await mountQuickChat(targetConfig('thread-a'));
+    await flush();
+    expect(host.querySelector('[role="alert"]').textContent).toMatch(/Could not load that conversation/);
+    expect(host.querySelector('[data-testid="quick-chat-send"]').disabled).toBe(false);
+    expect(mocks.sendMessageStream).not.toHaveBeenCalled();
+  });
+
+  it('hands the adopted canonical thread back to Chat unchanged', async () => {
+    await mountQuickChat(targetConfig('thread-a'));
+    await flush();
+    const handoffs = [];
+    const listener = (event) => handoffs.push(event.detail);
+    window.addEventListener(BROWSER_EVENT.LOAD_CHAT_HISTORY, listener);
+    act(() => host.querySelector('button[label="Open in chat"]').click());
+    window.removeEventListener(BROWSER_EVENT.LOAD_CHAT_HISTORY, listener);
+    expect(handoffs).toHaveLength(1);
+    expect(handoffs[0].threadId).toBe('thread-a');
+    expect(handoffs[0].messages.map((message) => message.content)).toEqual(['Canonical hello']);
+  });
+
+  it('keeps a plain quick chat on its own scratch thread', async () => {
+    await mountQuickChat(defaultQuickChatConfig);
+    await flush();
+    expect(mocks.loadQuickChatHistory).not.toHaveBeenCalled();
+    expect(quickChatMemory.threadId).toBe('quick-id-1');
   });
 });

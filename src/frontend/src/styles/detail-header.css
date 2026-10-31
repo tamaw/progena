@@ -55,6 +55,7 @@
 }
 
 .detail-header__title {
+    min-width: 0;
     margin: 0;
     overflow-wrap: anywhere;
     color: var(--color-text-primary);
@@ -410,20 +411,26 @@
     box-sizing: border-box;
 }
 
-/* Chat detail header: the title hosts an editable input/text plus a rename
-   button, so lay it out as a row. */
+/* Long titles stay on one line and truncate, so the actions keep their place
+   (Chat is the reference). The full text remains the heading's accessible
+   name; only the rendering is clipped. */
+.detail-header__title-text,
+.chat-detail-header__title-text {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Editable titles host the text or input plus a rename button, so lay them out
+   as a row. */
+.detail-header__title.detail-header__title--editable,
 .detail-header__title.chat-detail-header__title {
     display: flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
-}
-
-.chat-detail-header__title-text {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
 }
 
 .chat-detail-header__rename {
