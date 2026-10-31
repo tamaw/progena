@@ -4877,15 +4877,24 @@ body,
   background: var(--color-text-muted);
 }
 
-.agents-agent-row__status--paused {
-  background: var(--color-warning);
+/* Row dot tones mirror the detail-header .agents-status-pill--<status> colours. */
+.agents-agent-row__status--active {
+  background: var(--color-success);
 }
 
-.agents-agent-row__status--draft {
-  background: var(--color-text-muted);
+.agents-agent-row__status--failed {
+  background: var(--color-error);
 }
-.agents-agent-row__status--disabled {
-  background: var(--color-text-muted);
+
+.agents-agent-row__status--executing,
+.agents-agent-row__status--waiting {
+  background: var(--color-info);
+}
+
+.agents-agent-row__status--paused,
+.agents-agent-row__status--starting,
+.agents-agent-row__status--stopping {
+  background: var(--color-warning);
 }
 
 .agents-agent-row__name {
@@ -5463,17 +5472,38 @@ body,
   font-size: 12px;
 }
 
-.agents-skill-card__time {
+.agents-run-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+}
+
+.agents-run-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.agents-run-row + .agents-run-row {
+  border-top: 1px solid var(--color-border);
+}
+
+.agents-run-row__time {
+  color: var(--color-text-secondary);
+}
+
+.agents-run-row__age {
+  margin-left: auto;
   color: var(--color-text-muted);
   font-size: 11px;
   white-space: nowrap;
-}
-
-.agents-task-meta {
-  margin: 8px 0 0;
-  color: var(--color-text-muted);
-  font-size: 11px;
-  word-break: break-all;
 }
 
 .agents-metrics {

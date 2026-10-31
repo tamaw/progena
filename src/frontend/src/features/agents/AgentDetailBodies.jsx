@@ -6,11 +6,13 @@ import { PaneEmptyState } from '../../components/layout/PaneList';
 import { MetricCard, CardFact, CapabilityChip, DraftField } from '../../components/DetailCards';
 import InlineFailure from '../../components/InlineFailure';
 import { fetchAgentSkillContent, selectAgentSkillContent, updateAgentSkillContent } from './state/agents';
+import { formatShortLocalDateTime } from '../../lib/displayTime';
 import { formatAge } from './agentFormat';
 
-// Chip tone per A2A task status (matches Progena's A2ATaskStatus enum).
+// Chip tone per A2A/ACP task status (Progena's A2ATaskStatus and ACPTaskStatus).
 const TASK_TONE = {
   completed: 'ok',
+  queued: 'info',
   working: 'info',
   submitted: 'info',
   'input-required': 'info',
@@ -18,6 +20,7 @@ const TASK_TONE = {
   failed: 'error',
   rejected: 'error',
   canceled: 'muted',
+  interrupted: 'muted',
   unknown: 'muted',
 };
 
@@ -43,6 +46,31 @@ function ConnectionRow({ icon, title, detail, meta, tone }) {
       </div>
       <span className={`agents-chip ${tone ? `agents-chip--${tone}` : ''}`}>{meta}</span>
     </div>
+  );
+}
+
+// Recent A2A tasks / ACP runs only acknowledge that a run happened: its status
+// and when it last changed. Prompts and outputs are long free text that made
+// the list unreadable; there is no per-run page to link to.
+function RecentRunList({ runs, emptyText }) {
+  if (!runs.length) return <PaneEmptyState>{emptyText}</PaneEmptyState>;
+  return (
+    <ul className="agents-run-list">
+      {runs.map((run) => {
+        const at = run.completed || run.updated || run.created;
+        return (
+          <li key={run.id} className="agents-run-row">
+            <span className={`agents-chip agents-chip--${TASK_TONE[run.status] || 'muted'}`}>{run.status}</span>
+            {at ? (
+              <>
+                <time className="agents-run-row__time" dateTime={at} title={at}>{formatShortLocalDateTime(at)}</time>
+                <span className="agents-run-row__age">{formatAge(at)}</span>
+              </>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -146,23 +174,7 @@ export function A2ADetailBody({ agent }) {
       </MiniListSection>
 
       <MiniListSection title="Recent tasks" count={`${tasks.length} tracked`}>
-        <div className="agents-skill-list">
-          {tasks.length ? tasks.map((task) => (
-            <article key={task.id} className="agents-skill-card">
-              <header className="agents-skill-card__head">
-                <strong>{task.title || task.id || '(task)'}</strong>
-                <span className="agents-chip-row">
-                  <span className={`agents-chip agents-chip--${TASK_TONE[task.status] || 'muted'}`}>{task.status}</span>
-                  {task.updated ? <span className="agents-skill-card__time">{formatAge(task.updated)}</span> : null}
-                </span>
-              </header>
-              {task.summary ? <p className="agents-skill-card__desc">{task.summary}</p> : null}
-              <p className="agents-task-meta">
-                {task.source || 'a2a'}{task.context_id ? ` · thread ${task.context_id}` : ''}
-              </p>
-            </article>
-          )) : <PaneEmptyState>No A2A tasks yet.</PaneEmptyState>}
-        </div>
+        <RecentRunList runs={tasks} emptyText="No A2A tasks yet." />
       </MiniListSection>
     </div>
   );
@@ -227,20 +239,7 @@ export function ACPDetailBody({ agent }) {
       </MiniListSection>
 
       <MiniListSection title="Recent runs" count={`${runs.length} tracked`}>
-        <div className="agents-skill-list">
-          {runs.length ? runs.map((run) => (
-            <article key={run.id} className="agents-skill-card">
-              <header className="agents-skill-card__head">
-                <strong>{run.title || run.id || '(run)'}</strong>
-                <span className="agents-chip-row">
-                  <span className={`agents-chip agents-chip--${TASK_TONE[run.status] || 'muted'}`}>{run.status}</span>
-                  {run.updated ? <span className="agents-skill-card__time">{formatAge(run.updated)}</span> : null}
-                </span>
-              </header>
-              {run.summary ? <p className="agents-skill-card__desc">{run.summary}</p> : null}
-            </article>
-          )) : <PaneEmptyState>No ACP runs yet.</PaneEmptyState>}
-        </div>
+        <RecentRunList runs={runs} emptyText="No ACP runs yet." />
       </MiniListSection>
     </div>
   );
