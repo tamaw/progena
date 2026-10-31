@@ -34,6 +34,7 @@
     "CHANNEL_TESTED": "channel.tested",
     "CHANNELS_SNAPSHOT": "channels.snapshot",
     "CHAT_MESSAGES_PAGE_LOADED": "chat.messages.page.loaded",
+    "CHAT_QUEUE_UPDATED": "chat.queue.updated",
     "CHAT_RESPONSE_ACTIVITY": "chat.response.activity",
     "CHAT_RESPONSE_CANCEL_REQUESTED": "chat.response.cancel_requested",
     "CHAT_RESPONSE_CANCELLED": "chat.response.cancelled",

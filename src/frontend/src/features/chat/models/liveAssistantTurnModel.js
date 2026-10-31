@@ -20,16 +20,17 @@
  * rendering a React hook.
  */
 
-import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, extractCacheReadTokenCount, mergeReasoningEvents, isReasoningEvent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE, CANCELLED_SUFFIX } from './streamEventsModel';
+import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, extractCacheReadTokenCount, mergeReasoningEvents, isReasoningEvent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
 import { isA2AToolName } from './a2aTools';
 import { normalizeContextUsage } from './contextWindowModel';
 import { applyConversationSummaryActivity } from './conversationSummaryModel';
 import { isToolEventFailure } from './toolFailureModel';
 
 /** Create a fresh live assistant turn with no visible output yet. */
-export function createLiveAssistantTurn({ streamId, startedAt }) {
+export function createLiveAssistantTurn({ streamId, startedAt, assistantIdPrefix = streamId }) {
   return {
     streamId,
+    assistantIdPrefix,
     startedAt,
     assistantMessageId: null,
     assistantTimestamp: null,
@@ -729,7 +730,7 @@ export function applyAssistantChunk(turn, chunk, materialiseAt) {
 
   // Materialise the assistant row on first text chunk.
   if (!next.assistantMessageId) {
-    next.assistantMessageId = `${turn.streamId}-assistant`;
+    next.assistantMessageId = `${turn.assistantIdPrefix ?? turn.streamId}-assistant`;
     next.assistantTimestamp = materialiseAt;
     next.timelineItems = [
       ...next.timelineItems,
@@ -1018,9 +1019,9 @@ export function buildDefaultAssistantTimeline(message) {
 export function toCommittedAssistantMessage(turn) {
   return {
     streamId: turn.streamId,
-    assistantMessageId: turn.assistantMessageId || `${turn.streamId}-assistant`,
+    assistantMessageId: turn.assistantMessageId || `${turn.assistantIdPrefix ?? turn.streamId}-assistant`,
     startedAt: turn.startedAt,
-    id: turn.assistantMessageId || `${turn.streamId}-assistant`,
+    id: turn.assistantMessageId || `${turn.assistantIdPrefix ?? turn.streamId}-assistant`,
     role: 'assistant',
     content: turn.content,
     timestamp: turn.assistantTimestamp || turn.startedAt,
@@ -1039,6 +1040,7 @@ export function toCommittedAssistantMessage(turn) {
     displayToolCalls: turn.displayToolCalls,
     isStreaming: turn.isStreaming,
     error: turn.error,
+    interruptionReason: turn.interruptionReason,
     workActive: Boolean(turn.isStreaming) && turn.lastActivity === 'work',
     timelineItems: turn.timelineItems,
   };
@@ -1075,25 +1077,25 @@ export function resolveLiveTurnResponseStatus(turn, status) {
 /**
  * Finalise a live assistant turn — freeze it and return a committed message.
  *
- * Rules:
- * - `completed` with visible output → normal message.
- * - `completed` with **no** visible output → "(No response text)" placeholder.
- * - a provider-reported failure without visible output → a concise failed row.
- * - `cancelled` with no visible output → drop (return null).
- * - `cancelled` with partial visible output → keep, append cancelled suffix once.
- * - transport `error` → message with `Error: ...` content and `error: true`.
+ * Interruption markers are durable rows, so user cancellation and a queue
+ * boundary retain even an otherwise empty assistant turn.
  */
-export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
+export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage, interruptionReason }) {
   if (!turn) return null;
 
   const transportStatus = terminalResponseStatus(status);
   const responseStatus = resolveLiveTurnResponseStatus(turn, status);
+  const resolvedInterruptionReason = interruptionReason
+    ?? turn.interruptionReason
+    ?? (responseStatus === 'cancelled' ? 'user_cancelled' : undefined);
   const hasVisibleOutput = (
     turn.content.trim().length > 0
     || hasVisibleTimelineOutput(turn.timelineItems)
   );
+  const preservesEmptyInterruptedTurn = resolvedInterruptionReason === 'user_cancelled'
+    || resolvedInterruptionReason === 'new_message';
 
-  if (responseStatus === 'cancelled' && !hasVisibleOutput) {
+  if (responseStatus === 'cancelled' && !hasVisibleOutput && !preservesEmptyInterruptedTurn) {
     return null;
   }
 
@@ -1106,6 +1108,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
     responseStatus,
     assistantTimestamp: now || turn.startedAt,
     responseTimestamp: responseStatus === 'completed' && hasAnswerText ? now || turn.startedAt : null,
+    ...(resolvedInterruptionReason ? { interruptionReason: resolvedInterruptionReason } : {}),
   };
 
   if (responseStatus === 'failed' && transportStatus === 'failed') {
@@ -1132,7 +1135,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
         : item);
 
     if (!finalTurn.assistantMessageId) {
-      finalTurn.assistantMessageId = `${finalTurn.streamId}-assistant`;
+      finalTurn.assistantMessageId = `${finalTurn.assistantIdPrefix ?? finalTurn.streamId}-assistant`;
     }
     const hasAssistantItem = timelineItems.some((item) => item.kind === 'assistant_message');
     if (!hasAssistantItem && priorContent.trim().length > 0) {
@@ -1183,7 +1186,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
     finalTurn.content = `Error: ${typeof errorMessage === 'string' && errorMessage.trim() ? errorMessage.trim() : 'Response failed.'}`;
     finalTurn.error = true;
     if (!finalTurn.assistantMessageId) {
-      finalTurn.assistantMessageId = `${finalTurn.streamId}-assistant`;
+      finalTurn.assistantMessageId = `${finalTurn.assistantIdPrefix ?? finalTurn.streamId}-assistant`;
     }
     finalTurn.timelineItems = [
       ...(Array.isArray(finalTurn.timelineItems) ? finalTurn.timelineItems : []),
@@ -1208,11 +1211,11 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
     return toCommittedAssistantMessage(finalTurn);
   }
 
-  if (responseStatus === 'completed' && !hasVisibleOutput) {
+  if (responseStatus === 'completed' && !hasVisibleOutput && !preservesEmptyInterruptedTurn) {
     // No text and no visible events — show placeholder so the cursor doesn't vanish.
     finalTurn.content = '(No response text)';
     if (!finalTurn.assistantMessageId) {
-      finalTurn.assistantMessageId = `${finalTurn.streamId}-assistant`;
+      finalTurn.assistantMessageId = `${finalTurn.assistantIdPrefix ?? finalTurn.streamId}-assistant`;
     }
     finalTurn.timelineItems = [
       {
@@ -1236,11 +1239,6 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
     return toCommittedAssistantMessage(finalTurn);
   }
 
-  if (responseStatus === 'cancelled' && hasVisibleOutput) {
-    finalTurn.content = finalTurn.content.endsWith(CANCELLED_SUFFIX)
-      ? finalTurn.content
-      : `${finalTurn.content}${CANCELLED_SUFFIX}`;
-  }
 
   // Ensure the timeline items reflect the final state.
   finalTurn.timelineItems = finalTurn.timelineItems.map((item) => {

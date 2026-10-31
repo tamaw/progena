@@ -386,7 +386,7 @@ export function useChatApi() {
   useEffect(() => subscribeUiEvent(consumeStreamEvent), [consumeStreamEvent]);
 
   const sendMessageStream = useCallback(
-    async (message, history = [], onChunk, onComplete, onError, onStreamEvent, metadata = null) => {
+    async (message, history = [], onChunk, onComplete, onError, onStreamEvent, metadata = null, foreground = true) => {
       const requestId = createUuid();
       const input = buildResponsesInput(history, message);
       const url = getApiUrl('responses');
@@ -426,8 +426,10 @@ export function useChatApi() {
       // Register before dispatch: the backend can broadcast `started` before
       // the 202 acknowledgement reaches the browser.
       pendingStreamsRef.current.set(requestId, pending);
-      activeStreamRequestIdRef.current = requestId;
-      activeAcknowledgementRef.current = { requestId, controller: acknowledgementController };
+      if (foreground) {
+        activeStreamRequestIdRef.current = requestId;
+        activeAcknowledgementRef.current = { requestId, controller: acknowledgementController };
+      }
       setConnectionState(deriveConnectionState(pendingStreamsRef.current));
 
       const body = { model: config.chat.defaultModel, input, stream: true };
@@ -442,7 +444,7 @@ export function useChatApi() {
           requestId,
           signal: acknowledgementController.signal,
         });
-        if (activeAcknowledgementRef.current?.requestId === requestId) {
+        if (foreground && activeAcknowledgementRef.current?.requestId === requestId) {
           activeAcknowledgementRef.current = null;
         }
         if (pendingStreamsRef.current.get(requestId) === pending && !pending.cancelRequested && !pending.terminalEvent) {
@@ -451,7 +453,7 @@ export function useChatApi() {
           openResponseStream(requestId, pending, url);
         }
       } catch (error) {
-        if (activeAcknowledgementRef.current?.requestId === requestId) {
+        if (foreground && activeAcknowledgementRef.current?.requestId === requestId) {
           activeAcknowledgementRef.current = null;
         }
         const currentPending = pendingStreamsRef.current.get(requestId);

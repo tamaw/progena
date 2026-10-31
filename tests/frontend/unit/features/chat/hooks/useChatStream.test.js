@@ -576,4 +576,79 @@ describe('useChatStream', () => {
       }),
     ]);
   });
+
+  it('splits queued boundary turns into committed assistant, stable human, and next assistant rows', () => {
+    const scheduledFrames = [];
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback) => {
+      scheduledFrames.push(callback);
+      return scheduledFrames.length;
+    }));
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+
+    let onChunk;
+    let onComplete;
+    let onStreamEvent;
+    let committedMessages = [];
+    const setMessages = vi.fn((update) => {
+      committedMessages = update(committedMessages);
+    });
+    const hook = useChatStream({
+      messages: [],
+      setMessages,
+      activeBackendChat: { thread_id: 'thread-a' },
+      selectedBackendChatId: 'thread-a',
+      threadId: 'thread-a',
+      sendMessageStream: vi.fn((content, history, nextOnChunk, nextOnComplete, onError, nextOnStreamEvent) => {
+        onChunk = nextOnChunk;
+        onComplete = nextOnComplete;
+        onStreamEvent = nextOnStreamEvent;
+        return new Promise(() => {});
+      }),
+      cancelStream: vi.fn(),
+      dispatch: vi.fn(),
+      getApiUrl: vi.fn(),
+      show: vi.fn(),
+      selectedBackendChatIdRef: { current: 'thread-a' },
+      reloadOpenChat: vi.fn(),
+      onForegroundStreamStarted: vi.fn(),
+      requestForegroundReconciliation: vi.fn(),
+    });
+
+    void hook.handleSend('Start A');
+    onChunk('A');
+    const boundary = {
+      event_type: 'chat_queue_boundary',
+      metadata: {
+        message_id: 'user_queued_1',
+        request_id: 'queued-request-1',
+        text: 'Queue B',
+        attachments: [],
+      },
+    };
+    onStreamEvent(boundary);
+    onStreamEvent(boundary);
+
+    expect(committedMessages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'Start A' }),
+      expect.objectContaining({ role: 'assistant', content: 'A', interruptionReason: 'new_message' }),
+      expect.objectContaining({ id: 'user_queued_1', role: 'user', content: 'Queue B' }),
+    ]);
+
+    onChunk('B');
+    onComplete('completed');
+    while (scheduledFrames.length > 0) {
+      scheduledFrames.shift()();
+    }
+
+    expect(committedMessages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'Start A' }),
+      expect.objectContaining({ role: 'assistant', content: 'A' }),
+      expect.objectContaining({ id: 'user_queued_1', role: 'user', content: 'Queue B' }),
+      expect.objectContaining({
+        role: 'assistant',
+        content: 'B',
+        assistantMessageId: 'queued-request-1-assistant',
+      }),
+    ]);
+  });
 });

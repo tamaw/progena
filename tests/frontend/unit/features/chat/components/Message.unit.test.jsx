@@ -74,6 +74,19 @@ async function renderMessage(value, props = {}) {
   await act(async () => root.render(<Message message={value} {...props} />));
 }
 
+describe('interruption markers', () => {
+  it('renders the safe-boundary marker after partial content as the terminal row', async () => {
+    await renderMessage(message([answer('Partial', 1)], {
+      interruptionReason: 'new_message',
+    }));
+
+    expect(host.textContent).toContain('Partial');
+    expect(host.textContent).toContain('Continued with your new message.');
+    expect(host.querySelector('.message-wrapper.assistant')?.classList.contains('entry--chain-item')).toBe(true);
+    expect(host.querySelector('article[aria-label="Interrupted"]')?.classList.contains('entry--chain-end')).toBe(true);
+  });
+});
+
 function assistantWork() {
   const section = host.querySelector('section[aria-label="Assistant work"]');
   expect(section).not.toBeNull();
@@ -263,7 +276,7 @@ describe('assistant turn work disclosure', () => {
 
 
 describe('terminal replies without tool work', () => {
-  it.each(['failed', 'cancelled', 'interrupted'])(
+  it.each(['failed', 'interrupted'])(
     'keeps provider %s visible even when there is no work disclosure',
     async (status) => {
       await renderMessage(message(undefined, {

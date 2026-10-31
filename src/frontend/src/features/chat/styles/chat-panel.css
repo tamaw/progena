@@ -2197,16 +2197,6 @@ pre.mermaid svg {
     cursor: not-allowed;
 }
 
-.chat-messages__interruption {
-    margin: 0;
-    padding: 10px 12px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--border-radius-md);
-    color: var(--color-text-muted);
-    background: var(--color-bg-hover);
-    font-size: 12px;
-    line-height: 1.45;
-}
 
 .chat-loading {
     display: flex;
@@ -2473,6 +2463,13 @@ pre.mermaid svg {
 
 .chat-messages__inner > .chat-entry-chain > .entry > .entry__gutter::before,
 .chat-messages__inner > .chat-entry-chain > .chat-entry-chain--item > .entry > .entry__gutter::before {
+    bottom: calc(-1 * var(--entry-chain-gap) - var(--entry-dot-center));
+}
+
+/* Interrupted assistant turns continue through their expanded answer to the
+   terminal marker; the marker itself has no outgoing connector. */
+.chat-messages__inner > .chat-entry-chain > .chat-entry-chain--item > .entry--assistant.entry--chain-item > .entry__gutter::before {
+    display: block;
     bottom: calc(-1 * var(--entry-chain-gap) - var(--entry-dot-center));
 }
 

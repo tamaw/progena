@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterable, Mapping
-from typing import Any, LiteralString, Protocol
+from collections.abc import Callable, Iterable, Mapping
+from typing import Any, LiteralString, Protocol, TypeVar
 
 from psycopg.sql import SQL, Composable
 
 STATE_NAMESPACE = ("progena", "state")
+
+_T = TypeVar("_T")
 
 
 class AsyncLangGraphStore(Protocol):
@@ -46,6 +48,7 @@ class LangGraphRuntimeStore:
     def __init__(self, store: AsyncLangGraphStore) -> None:
         self._store = store
         self._document_locks: dict[str, asyncio.Lock] = {}
+        self._native_connection_lock = asyncio.Lock()
 
     async def open(self) -> None:
         """Match the old store lifecycle; native LangGraph store is already open."""
@@ -77,6 +80,76 @@ class LangGraphRuntimeStore:
     async def save_document(self, name: str, payload: Any) -> None:
         """Persist one runtime document."""
         await self._store.aput(STATE_NAMESPACE, name, {"payload": payload})
+
+    async def mutate_document(
+        self,
+        name: str,
+        mutation: Callable[[Any | None], tuple[Any, _T]],
+    ) -> _T:
+        """Atomically replace one document payload using ``mutation``.
+
+        Queue transitions require a read/decide/write transaction rather than
+        the field-level JSON merges used by the older state documents. Native
+        Postgres stores lock the row until the replacement is committed; the
+        in-memory implementation uses the matching process-local per-key lock.
+        """
+        conn = getattr(self._store, "conn", None)
+        if conn is None:
+            lock = self._document_locks.get(name)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._document_locks[name] = lock
+            async with lock:
+                current = await self.peek_document(name)
+                payload, result = mutation(current)
+                await self.save_document(name, payload)
+                return result
+
+        async def _mutate(connection: Any) -> _T:
+            async with connection.transaction(), connection.cursor() as cur:
+                # ``FOR UPDATE`` cannot protect an absent document row. Lock
+                # the logical state-document key first so concurrent first
+                # enqueues cannot both replace an empty queue.
+                await cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (name,),
+                )
+                await cur.execute(
+                    """
+                    SELECT value->'payload' AS payload
+                    FROM store
+                    WHERE prefix = 'progena.state' AND key = %s
+                    FOR UPDATE
+                    """,
+                    (name,),
+                )
+                row = await cur.fetchone()
+                current = (
+                    row["payload"]
+                    if isinstance(row, Mapping)
+                    else row[0]
+                    if row is not None
+                    else None
+                )
+                if isinstance(current, str):
+                    current = json.loads(current)
+                payload, result = mutation(current)
+                await cur.execute(
+                    """
+                    INSERT INTO store (prefix, key, value)
+                    VALUES ('progena.state', %s, jsonb_build_object('payload', %s::jsonb))
+                    ON CONFLICT (prefix, key) DO UPDATE
+                    SET value = EXCLUDED.value, updated_at = now()
+                    """,
+                    (name, json.dumps(payload)),
+                )
+                return result
+
+        if callable(getattr(conn, "connection", None)):
+            async with conn.connection() as connection:
+                return await _mutate(connection)
+        async with self._native_connection_lock:
+            return await _mutate(conn)
 
     async def merge_document(self, name: str, fields: dict[str, Any]) -> bool:
         """Atomically merge top-level ``fields`` into one runtime document's payload.

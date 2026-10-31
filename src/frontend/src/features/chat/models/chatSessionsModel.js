@@ -11,6 +11,7 @@ import { isA2AToolName } from './a2aTools';
 import { extractA2ASummary } from './messageRenderUtils';
 import { deriveChatStatus } from './chatStatus';
 import { normalizeContextUsage } from './contextWindowModel';
+import { normalizeCancelledContent } from './cancelledContentModel';
 export function compareSessionItems(left, right) {
   const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
   if (pinnedDelta !== 0) {
@@ -265,6 +266,15 @@ function normalizeResponseStatus(value) {
   return typeof value === 'string' && RESPONSE_STATUSES.has(value) ? value : 'unknown';
 }
 
+const INTERRUPTION_REASONS = new Set(['user_cancelled', 'new_message']);
+
+function normalizeInterruptionReason(value) {
+  return typeof value === 'string' && INTERRUPTION_REASONS.has(value) ? value : null;
+}
+
+
+
+
 function normalizeOutputTokenCount(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
@@ -279,11 +289,14 @@ export function normalizeBackendChatMessage(message, index) {
   const createdAt = message.created_at || raw.created_at || raw.timestamp || raw.time;
   const timestamp = toValidTimestamp(createdAt) ?? Date.now();
   const role = typeof message.role === 'string' ? message.role : 'assistant';
-  const content = typeof message.content === 'string'
+  const responseStatus = normalizeResponseStatus(message.response_status);
+  let content = typeof message.content === 'string'
     ? message.content
     : String(message.content ?? '');
+  if (role === 'assistant') {
+    content = normalizeCancelledContent(content, responseStatus);
+  }
   const id = typeof message.id === 'string' ? message.id : `backend_msg_${index}_${timestamp}`;
-  const responseStatus = normalizeResponseStatus(message.response_status);
   const streamEvents = buildToolStreamEvents(
     Array.isArray(message.tool_calls) ? message.tool_calls : [],
     id,
@@ -302,6 +315,7 @@ export function normalizeBackendChatMessage(message, index) {
     // Backend projection is authoritative, including a reported zero.
     usageProvenance: 'provider',
     responseStatus,
+    interruptionReason: normalizeInterruptionReason(message.interruption_reason),
     reasoningTokenCount: Number.isFinite(message.reasoning_token_count)
       ? message.reasoning_token_count
       : 0,

@@ -58,6 +58,8 @@ ALLOWED_CUSTOM_EVENT_TYPES = frozenset(
         "conversation_summary_started",
         "conversation_summary_finished",
         "debug_event",
+        "chat_queue_claimed",
+        "chat_queue_boundary",
     }
 )
 
@@ -83,7 +85,11 @@ def normalize_custom_event(payload: Any) -> dict[str, Any] | None:
                 metadata.setdefault("original_event_type", event_type)
             event_type = CUSTOM_EVENT_FALLBACK_TYPE
 
-    safe_metadata = _normalize_metadata(metadata)
+    safe_metadata = (
+        _normalize_queue_control_metadata(metadata)
+        if event_type in {"chat_queue_claimed", "chat_queue_boundary"}
+        else _normalize_metadata(metadata)
+    )
 
     return {
         "event_type": event_type,
@@ -427,6 +433,15 @@ _CORRELATION_METADATA_FIELDS = (
     "task_id",
     "task_summary",
 )
+_QUEUE_CONTROL_METADATA_FIELDS = ("message_id", "request_id", "text", "attachments")
+
+
+def _normalize_queue_control_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Preserve the complete, redacted queue-control envelope for reconciliation."""
+    redacted = _redact_value(dict(metadata) if metadata is not None else {})
+    if not isinstance(redacted, dict):
+        return {}
+    return {field: redacted[field] for field in _QUEUE_CONTROL_METADATA_FIELDS if field in redacted}
 
 
 def _normalize_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:

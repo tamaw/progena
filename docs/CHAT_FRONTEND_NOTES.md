@@ -195,6 +195,14 @@ summaries/work; they stop before another user message. Assistant and pending
 answer dots receive from above and never continue below. Live compaction
 activity precedes the pending answer cursor, so it remains inside the response
 chain rather than following its terminal dot.
+Interruptions share a terminal `Interrupted` disclosure with a warning-colored dot
+and an incoming-only connector. User cancellation shows `Cancelled by you.`;
+Send now shows `Continued with your new message.` before the selected user input.
+Both retain empty turns and partial answers, without synthetic cancellation prose.
+Runtime restart uses the same component with its existing partial-step warning.
+Ordinary queued input does not create a marker. Send now still uses a safe model
+boundary, not graph cancellation; canonical reload preserves the marker reason.
+
 
 Original messages remain visible and searchable. Nested summaries stay inside
 their subagent activity. Completed markers must remain visible with debug events

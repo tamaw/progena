@@ -108,8 +108,8 @@ describe('interrupted chat status', () => {
       return container.textContent;
     };
 
-    expect(render(false)).toContain('Interrupted — the runtime restarted during this turn.');
-    expect(render(true)).not.toContain('Interrupted — the runtime restarted during this turn.');
+    expect(render(false)).toContain('The runtime restarted during this turn.');
+    expect(render(true)).not.toContain('The runtime restarted during this turn.');
   });
 });
 

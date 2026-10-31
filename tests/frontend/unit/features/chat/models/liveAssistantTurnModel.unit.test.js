@@ -2165,42 +2165,44 @@ describe('finalizeLiveAssistantTurn', () => {
     });
   });
 
-  // Acceptance: cancelled with no output returns null.
   describe('status = cancelled', () => {
-    it('with no visible output returns null', () => {
-      const turn = baseTurn();
-      const result = finalizeLiveAssistantTurn(turn, { status: 'cancelled', now: NOW });
-      expect(result).toBeNull();
+    it('derives a durable user-cancelled reason for an empty cancelled turn', () => {
+      const result = finalizeLiveAssistantTurn(baseTurn(), {
+        status: 'cancelled',
+        now: NOW,
+      });
+
+      expect(result).toMatchObject({
+        content: '',
+        interruptionReason: 'user_cancelled',
+        responseStatus: 'cancelled',
+        timelineItems: [],
+      });
     });
 
-    // Acceptance: cancelled with partial output keeps output with ' [Cancelled]' suffix.
-    it('with partial visible output (content only) appends " [Cancelled]" suffix', () => {
-      const turn = baseTurn();
-      const withText = applyAssistantChunk(turn, 'Partial', NOW);
-      const result = finalizeLiveAssistantTurn(withText, { status: 'cancelled', now: NOW });
+    it('preserves partial output without appending a cancellation sentinel', () => {
+      const result = finalizeLiveAssistantTurn(applyAssistantChunk(baseTurn(), 'Partial', NOW), {
+        status: 'cancelled',
+        now: NOW,
+        interruptionReason: 'user_cancelled',
+      });
 
-      expect(result).not.toBeNull();
-      expect(result.content).toBe('Partial [Cancelled]');
-      expect(result.isStreaming).toBe(false);
+      expect(result).toMatchObject({ content: 'Partial', interruptionReason: 'user_cancelled', isStreaming: false });
     });
 
-    it('with partial visible output (stream events only) returns a message', () => {
-      const turn = baseTurn();
-      const withEvent = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', { content: 'searching' }), NOW);
-      const result = finalizeLiveAssistantTurn(withEvent, { status: 'cancelled', now: NOW });
+    it('retains an empty safe-boundary turn without creating a response placeholder', () => {
+      const result = finalizeLiveAssistantTurn(baseTurn(), {
+        status: 'completed',
+        now: NOW,
+        interruptionReason: 'new_message',
+      });
 
-      expect(result).not.toBeNull();
-      expect(result.isStreaming).toBe(false);
-    });
-
-    it('does not double-append " [Cancelled]" suffix if already present', () => {
-      const turn = baseTurn();
-      const withText = applyAssistantChunk(turn, 'Partial', NOW);
-      // Manually set the content to end with the suffix to test idempotency.
-      withText.content = 'Partial [Cancelled]';
-      const result = finalizeLiveAssistantTurn(withText, { status: 'cancelled', now: NOW });
-
-      expect(result.content).toBe('Partial [Cancelled]');
+      expect(result).toMatchObject({
+        content: '',
+        interruptionReason: 'new_message',
+        responseStatus: 'completed',
+        timelineItems: [],
+      });
     });
   });
 
@@ -2306,12 +2308,11 @@ describe('finalizeLiveAssistantTurn', () => {
     expect(result.timelineItems[2].content).toBe('Here is the answer');
   });
 
-  it('full lifecycle: empty turn → cancelled returns null', () => {
+  it('full lifecycle: empty turn → cancelled retains its interruption reason', () => {
     let turn = baseTurn();
     turn = applyAssistantMetadata(turn, { display_agent_name: 'Agent' });
     const result = finalizeLiveAssistantTurn(turn, { status: 'cancelled', now: NOW });
-    // Even though metadata was applied, there's no visible output.
-    expect(result).toBeNull();
+    expect(result).toMatchObject({ interruptionReason: 'user_cancelled', responseStatus: 'cancelled' });
   });
 
   it('finalize sets isStreaming=false on all assistant_message timeline items', () => {

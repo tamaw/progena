@@ -23,6 +23,7 @@ from langgraph.runtime import Runtime
 from src.progena.documents.values import make_json_safe
 from src.progena.orchestration.nodes.checkpoint import checkpoint_node
 from src.progena.orchestration.state import ProgenaState
+from src.progena.runtime.chat_queue import ChatQueueStore, ClaimedQueueMessage, QueueActionError
 from src.progena.runtime.conversation_gate import ConversationTurnGate
 from src.progena.runtime.http.responses import (
     build_response_object,
@@ -62,6 +63,10 @@ _SSE_HEADERS = {
     "Cache-Control": "no-cache",
     "X-Accel-Buffering": "no",
 }
+
+
+async def _noop() -> None:
+    """No-op callback for an internal gate request."""
 
 
 def _json_error(message: str, code: str, status: int, param: str | None = None) -> web.Response:
@@ -161,6 +166,11 @@ class RuntimeChatService:
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
         self._drain_task: asyncio.Task[None] | None = None
+        queue = getattr(getattr(loop_runner, "graph", None), "chat_queue", None)
+        self._chat_queue = queue if isinstance(queue, ChatQueueStore) else None
+        if self._chat_queue is not None:
+            self._chat_queue.set_event_publisher(self._publish_queue_snapshot)
+        self._queue_drain_tasks: dict[str, asyncio.Task[None]] = {}
 
     @property
     def conversation_gate(self) -> ConversationTurnGate:
@@ -173,12 +183,18 @@ class RuntimeChatService:
             web.post("/v1/responses/{response_id}/cancel", self.handle_cancel),
             web.get("/v1/conversations/{conversation_id}/items", self.handle_items),
             web.delete("/v1/conversations/{conversation_id}", self.handle_delete),
+            web.get("/v1/conversations/{conversation_id}/queue", self.handle_queue),
+            web.post("/v1/conversations/{conversation_id}/queue/actions", self.handle_queue_action),
             web.get("/v1/events", self.handle_events),
         ]
 
     async def start(self) -> None:
         if self._drain_task is None:
             self._drain_task = asyncio.create_task(self._drain_loop())
+        if self._chat_queue is not None:
+            for conversation_id in await self._chat_queue.conversation_ids():
+                await self._recover_queue(conversation_id)
+                self._schedule_queue_drain(conversation_id)
 
     async def stop(self) -> None:
         if self._drain_task is not None:
@@ -186,6 +202,12 @@ class RuntimeChatService:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._drain_task
             self._drain_task = None
+        for task in list(self._queue_drain_tasks.values()):
+            task.cancel()
+        for task in list(self._queue_drain_tasks.values()):
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._queue_drain_tasks.clear()
         for queue in list(self._subscribers):
             with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(None)
@@ -223,6 +245,50 @@ class RuntimeChatService:
         stream = bool(payload.get("stream", False))
         thread_id = _conversation_id(payload.get("conversation"))
 
+        if self._conversation_gate.is_active(thread_id):
+            if self._chat_queue is None:
+                return _json_error("Durable chat queue is not available", "queue_unavailable", 503)
+            snapshot, _message_id = await self._chat_queue.enqueue(
+                thread_id,
+                text=message,
+                attachments=attachments or [],
+                metadata=metadata,
+                source=source,
+                received_at=received_at,
+                response_id=response_id,
+                model=model,
+            )
+            self._schedule_queue_drain(thread_id)
+            queued_response = build_response_object(
+                response_id, thread_id, model, "queued", [], metadata
+            )
+            if not stream:
+                return web.json_response(make_json_safe(queued_response))
+            response = web.StreamResponse(
+                status=200,
+                headers={"Content-Type": "text/event-stream", **_SSE_HEADERS},
+            )
+            await response.prepare(request)
+            await self._write_frame(
+                response,
+                "response.created",
+                build_sse_event("response.created", {"response": queued_response}, 0),
+            )
+            await self._write_frame(
+                response,
+                "response.queued",
+                build_sse_event("response.queued", {"response": queued_response}, 1),
+            )
+            # This request has handed its input to the durable runtime queue.
+            # It must terminally close rather than keep a second foreground
+            # stream alive until a future model boundary consumes it.
+            await self._write_frame(
+                response,
+                "response.completed",
+                build_sse_event("response.completed", {"response": queued_response}, 2),
+            )
+            return response
+
         cancel_event = self._cancel_events.setdefault(response_id, asyncio.Event())
         try:
             if not stream:
@@ -237,6 +303,7 @@ class RuntimeChatService:
                         cancel_event,
                         received_at,
                         source=source,
+                        message_id=f"user_{response_id}",
                     ),
                     on_queued=lambda: self._notify_queued_request(response_id, streaming=False),
                 )
@@ -286,6 +353,7 @@ class RuntimeChatService:
                     received_at,
                     start_sequence=sequence,
                     source=source,
+                    message_id=f"user_{response_id}",
                 )
 
             await self._run_serialized(thread_id, _turn, on_queued=_on_queued)
@@ -315,6 +383,7 @@ class RuntimeChatService:
         received_at: float,
         start_sequence: int,
         source: str | None = None,
+        message_id: str | None = None,
     ) -> None:
         if cancel_event.is_set():
             cancelled_response = build_response_object(
@@ -354,6 +423,7 @@ class RuntimeChatService:
         item_id = f"msg_{response_id}"
         output_index = 0
         content_index = 0
+        queue_claims: list[dict[str, str]] = []
 
         try:
 
@@ -365,6 +435,8 @@ class RuntimeChatService:
                         received_at=received_at,
                         attachments=_extract_attachments(metadata),
                         source=source,
+                        message_id=message_id,
+                        metadata=metadata,
                     ):
                         await queue.put(("item", item))
                 except asyncio.CancelledError:
@@ -412,6 +484,14 @@ class RuntimeChatService:
                             response_id, thread_id, model, "failed", [], metadata
                         )
                         resp_obj["error"] = {"code": "stream_error", "message": str(exc)}
+                        for claim in queue_claims:
+                            await self._publish_queue_execution_result(
+                                "chat_queue_execution_failed",
+                                thread_id,
+                                claim["request_id"],
+                                claim["message_id"],
+                                resp_obj,
+                            )
                         with contextlib.suppress(ConnectionResetError, ConnectionError):
                             await self._write_frame(
                                 response,
@@ -423,6 +503,106 @@ class RuntimeChatService:
                     item = payload
                     runtime_emitted_at_ms = int(time.time() * 1000)
                     item_type = str(item.get("type", "stream_chunk"))
+
+                    if item_type == "stream_event" and item.get("event_type") in {
+                        "chat_queue_claimed",
+                        "chat_queue_boundary",
+                    }:
+                        claim_metadata = item.get("metadata")
+                        if (
+                            isinstance(claim_metadata, dict)
+                            and isinstance(claim_metadata.get("request_id"), str)
+                            and isinstance(claim_metadata.get("message_id"), str)
+                        ):
+                            queue_claims.append(
+                                {
+                                    "request_id": claim_metadata["request_id"],
+                                    "message_id": claim_metadata["message_id"],
+                                }
+                            )
+                            await self._publish_queue_execution_started(
+                                thread_id,
+                                claim_metadata["request_id"],
+                                claim_metadata["message_id"],
+                                content_request_id=response_id,
+                            )
+
+                    if (
+                        item_type == "stream_event"
+                        and item.get("event_type") == "chat_queue_boundary"
+                        and text_item_opened
+                    ):
+                        await self._write_frame(
+                            response,
+                            "response.output_text.done",
+                            build_sse_event(
+                                "response.output_text.done",
+                                {
+                                    "item_id": item_id,
+                                    "output_index": output_index,
+                                    "content_index": content_index,
+                                    "text": current_text,
+                                    "logprobs": [],
+                                },
+                                seq,
+                            ),
+                        )
+                        seq += 1
+                        await self._write_frame(
+                            response,
+                            "response.content_part.done",
+                            build_sse_event(
+                                "response.content_part.done",
+                                {
+                                    "item_id": item_id,
+                                    "output_index": output_index,
+                                    "content_index": content_index,
+                                    "part": {
+                                        "type": "output_text",
+                                        "text": current_text,
+                                        "annotations": [],
+                                    },
+                                },
+                                seq,
+                            ),
+                        )
+                        seq += 1
+                        await self._write_frame(
+                            response,
+                            "response.output_item.done",
+                            build_sse_event(
+                                "response.output_item.done",
+                                {
+                                    "output_index": output_index,
+                                    "item": {
+                                        "id": item_id,
+                                        "type": "message",
+                                        "role": "assistant",
+                                        "status": "completed",
+                                        "content": [
+                                            {
+                                                "type": "output_text",
+                                                "text": current_text,
+                                                "annotations": [],
+                                            }
+                                        ],
+                                    },
+                                },
+                                seq,
+                            ),
+                        )
+                        seq += 1
+                        output_index += 1
+                        content_index = 0
+                        boundary_metadata = item.get("metadata")
+                        boundary_id = (
+                            boundary_metadata.get("message_id")
+                            if isinstance(boundary_metadata, dict)
+                            else None
+                        )
+                        item_id = f"msg_{response_id}_{boundary_id}"
+                        current_text = ""
+                        text_item_opened = False
 
                     if item_type == "stream_event":
                         event_payload: dict[str, Any] = {
@@ -518,6 +698,14 @@ class RuntimeChatService:
                     response_id, thread_id, model, "failed", [], metadata
                 )
                 resp_obj["error"] = {"code": "stream_error", "message": str(exc)}
+                for claim in queue_claims:
+                    await self._publish_queue_execution_result(
+                        "chat_queue_execution_failed",
+                        thread_id,
+                        claim["request_id"],
+                        claim["message_id"],
+                        resp_obj,
+                    )
                 with contextlib.suppress(ConnectionResetError, ConnectionError):
                     await self._write_frame(
                         response,
@@ -542,6 +730,14 @@ class RuntimeChatService:
                 resp_obj = build_response_object(
                     response_id, thread_id, model, "cancelled", output, metadata
                 )
+                for claim in queue_claims:
+                    await self._publish_queue_execution_result(
+                        "chat_queue_execution_failed",
+                        thread_id,
+                        claim["request_id"],
+                        claim["message_id"],
+                        resp_obj,
+                    )
                 with contextlib.suppress(ConnectionResetError, ConnectionError):
                     await self._write_frame(
                         response,
@@ -618,6 +814,17 @@ class RuntimeChatService:
                 output = await self._turn_output(thread_id, before_count)
             except Exception as exc:
                 logger.error("Checkpoint error for %s: %s", response_id, exc, exc_info=True)
+                failed = _failed_response(
+                    response_id, thread_id, model, metadata, "checkpoint_error", exc
+                )
+                for claim in queue_claims:
+                    await self._publish_queue_execution_result(
+                        "chat_queue_execution_failed",
+                        thread_id,
+                        claim["request_id"],
+                        claim["message_id"],
+                        failed,
+                    )
                 await self._write_failed(
                     response, response_id, thread_id, model, metadata, seq, "checkpoint_error", exc
                 )
@@ -626,6 +833,15 @@ class RuntimeChatService:
             resp_obj = build_response_object(
                 response_id, thread_id, model, "completed", output, metadata
             )
+            for claim in queue_claims:
+                await self._publish_queue_execution_result(
+                    "chat_queue_execution_completed",
+                    thread_id,
+                    claim["request_id"],
+                    claim["message_id"],
+                    resp_obj,
+                    content_request_id=response_id,
+                )
             with contextlib.suppress(ConnectionResetError, ConnectionError):
                 await self._write_frame(
                     response,
@@ -635,6 +851,7 @@ class RuntimeChatService:
         finally:
             reset_current_thread_id(token)
             self._fire_and_forget_session_merge(thread_id)
+            self._schedule_queue_drain(thread_id)
 
     async def _run_turn(
         self,
@@ -646,6 +863,9 @@ class RuntimeChatService:
         cancel_event: asyncio.Event,
         received_at: float,
         source: str | None = None,
+        message_id: str | None = None,
+        queue_request_id: str | None = None,
+        queue_send_now: bool = False,
     ) -> dict[str, Any]:
         if cancel_event.is_set():
             return build_response_object(response_id, thread_id, model, "cancelled", [], metadata)
@@ -659,20 +879,48 @@ class RuntimeChatService:
         token = set_current_thread_id(thread_id)
         try:
             partial_text = ""
+            queue_claims: list[dict[str, str]] = []
             try:
-                stream = bridge.stream(
-                    message,
-                    thread_id=thread_id,
-                    received_at=received_at,
-                    attachments=_extract_attachments(metadata),
-                    source=source,
-                )
+                stream_kwargs: dict[str, Any] = {
+                    "thread_id": thread_id,
+                    "received_at": received_at,
+                    "attachments": _extract_attachments(metadata),
+                    "source": source,
+                    "message_id": message_id,
+                    "metadata": metadata,
+                }
+                if queue_request_id is not None:
+                    stream_kwargs["queue_request_id"] = queue_request_id
+                    stream_kwargs["queue_send_now"] = queue_send_now
+                stream = bridge.stream(message, **stream_kwargs)
                 # aclosing: a cancel must stop the graph run before the
                 # cancelled reply is written to the thread.
                 async with contextlib.aclosing(stream):
                     async for item in stream:
                         if item.get("type", "stream_chunk") == "stream_chunk":
                             partial_text += str(item.get("content", ""))
+                        if item.get("type") == "stream_event" and item.get("event_type") in {
+                            "chat_queue_claimed",
+                            "chat_queue_boundary",
+                        }:
+                            claim = item.get("metadata")
+                            if (
+                                isinstance(claim, dict)
+                                and isinstance(claim.get("request_id"), str)
+                                and isinstance(claim.get("message_id"), str)
+                            ):
+                                queue_claims.append(
+                                    {
+                                        "request_id": claim["request_id"],
+                                        "message_id": claim["message_id"],
+                                    }
+                                )
+                                await self._publish_queue_execution_started(
+                                    thread_id,
+                                    claim["request_id"],
+                                    claim["message_id"],
+                                    content_request_id=response_id,
+                                )
                         if cancel_event.is_set():
                             break
             except asyncio.CancelledError:
@@ -683,30 +931,67 @@ class RuntimeChatService:
                     response_id, thread_id, model, "failed", [], metadata
                 )
                 resp_obj["error"] = {"code": "stream_error", "message": str(exc)}
+                for claim in queue_claims:
+                    await self._publish_queue_execution_result(
+                        "chat_queue_execution_failed",
+                        thread_id,
+                        claim["request_id"],
+                        claim["message_id"],
+                        resp_obj,
+                    )
                 return resp_obj
 
             if cancel_event.is_set():
                 output = await self._persist_cancelled_turn(
                     thread_id, response_id, partial_text, before_count
                 )
-                return build_response_object(
+                cancelled_response = build_response_object(
                     response_id, thread_id, model, "cancelled", output, metadata
                 )
+                for claim in queue_claims:
+                    await self._publish_queue_execution_result(
+                        "chat_queue_execution_failed",
+                        thread_id,
+                        claim["request_id"],
+                        claim["message_id"],
+                        cancelled_response,
+                    )
+                return cancelled_response
 
             try:
                 await self._complete_direct_graph_cycle(bridge, thread_id)
                 output = await self._turn_output(thread_id, before_count)
             except Exception as exc:
                 logger.error("Checkpoint error for %s: %s", response_id, exc, exc_info=True)
-                return _failed_response(
+                failed = _failed_response(
                     response_id, thread_id, model, metadata, "checkpoint_error", exc
                 )
-            return build_response_object(
+                for claim in queue_claims:
+                    await self._publish_queue_execution_result(
+                        "chat_queue_execution_failed",
+                        thread_id,
+                        claim["request_id"],
+                        claim["message_id"],
+                        failed,
+                    )
+                return failed
+            resp_obj = build_response_object(
                 response_id, thread_id, model, "completed", output, metadata
             )
+            for claim in queue_claims:
+                await self._publish_queue_execution_result(
+                    "chat_queue_execution_completed",
+                    thread_id,
+                    claim["request_id"],
+                    claim["message_id"],
+                    resp_obj,
+                    content_request_id=response_id,
+                )
+            return resp_obj
         finally:
             reset_current_thread_id(token)
             self._fire_and_forget_session_merge(thread_id)
+            self._schedule_queue_drain(thread_id)
 
     async def _persist_cancelled_turn(
         self, thread_id: str, response_id: str, partial_text: str, before_count: int
@@ -767,6 +1052,13 @@ class RuntimeChatService:
             # re-ran the loop above or starts a fresh render.
             self._session_renders.pop(thread_id, None)
 
+    async def _ensure_session_merged(self, thread_id: str) -> None:
+        """Wait until the browser-visible session record includes the turn."""
+        self._fire_and_forget_session_merge(thread_id)
+        task = self._session_renders.get(thread_id)
+        if task is not None:
+            await asyncio.shield(task)
+
     async def _message_count(self, thread_id: str) -> int:
         state = await self.loop_runner.graph.aget_state({"configurable": {"thread_id": thread_id}})
         return len(state.values.get("messages") or [])
@@ -799,7 +1091,181 @@ class RuntimeChatService:
         payload, status = error_response(f"Response '{response_id}' not found", "not_found", 404)
         return web.json_response(payload, status=status)
 
+    # -- Durable chat queue ---------------------------------------------
+
+    async def handle_queue(self, request: web.Request) -> web.Response:
+        if self._chat_queue is None:
+            return _json_error("Durable chat queue is not available", "queue_unavailable", 503)
+        conversation_id = request.match_info["conversation_id"]
+        return web.json_response(make_json_safe(await self._chat_queue.snapshot(conversation_id)))
+
+    async def handle_queue_action(self, request: web.Request) -> web.Response:
+        if self._chat_queue is None:
+            return _json_error("Durable chat queue is not available", "queue_unavailable", 503)
+        try:
+            payload = await request.json()
+        except Exception:
+            return _json_error("Invalid JSON body", "bad_request", 400)
+        if not isinstance(payload, dict):
+            return _json_error("Expected a JSON object body", "bad_request", 400)
+        conversation_id = request.match_info["conversation_id"]
+        try:
+            snapshot = await self._chat_queue.action(conversation_id, payload)
+        except QueueActionError as exc:
+            error, _status = error_response(str(exc), exc.code, exc.status)
+            if exc.snapshot is not None:
+                error["snapshot"] = exc.snapshot
+            return web.json_response(make_json_safe(error), status=exc.status)
+        self._schedule_queue_drain(conversation_id)
+        return web.json_response(make_json_safe(snapshot))
+
+    async def _checkpoint_message_ids(self, conversation_id: str) -> set[str]:
+        graph = getattr(self.loop_runner, "graph", None)
+        if graph is None:
+            return set()
+        state = await graph.aget_state({"configurable": {"thread_id": conversation_id}})
+        messages = state.values.get("messages") or []
+        return {
+            message.id
+            for message in messages
+            if isinstance(message, HumanMessage) and isinstance(message.id, str) and message.id
+        }
+
+    async def _recover_queue(self, conversation_id: str) -> None:
+        if self._chat_queue is not None:
+            await self._chat_queue.recover(
+                conversation_id, await self._checkpoint_message_ids(conversation_id)
+            )
+
+    def _schedule_queue_drain(self, conversation_id: str) -> None:
+        if self._chat_queue is None or conversation_id in self._queue_drain_tasks:
+            return
+        task = asyncio.create_task(self._drain_conversation_queue(conversation_id))
+        self._queue_drain_tasks[conversation_id] = task
+
+    async def _drain_conversation_queue(self, conversation_id: str) -> None:
+        try:
+            while True:
+                progressed = await self._run_serialized(
+                    conversation_id,
+                    lambda: self._run_next_queued_turn(conversation_id),
+                    on_queued=_noop,
+                )
+                if not progressed:
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Queued chat drain failed for %s", conversation_id)
+        finally:
+            self._queue_drain_tasks.pop(conversation_id, None)
+
+    async def _run_next_queued_turn(self, conversation_id: str) -> bool:
+        if self._chat_queue is None:
+            return False
+        await self._recover_queue(conversation_id)
+        claimed = await self._chat_queue.claim_next(conversation_id)
+        if claimed is None:
+            return False
+        await self._publish_queue_execution("chat_queue_execution_started", claimed, None)
+        result = await self._run_claimed_turn(claimed)
+        await self._ensure_session_merged(conversation_id)
+        if result.get("status") == "failed":
+            await self._chat_queue.discard_claim(conversation_id, claimed.id)
+            await self._publish_queue_execution("chat_queue_execution_failed", claimed, result)
+            return True
+        snapshot = await self._chat_queue.recover(
+            conversation_id, await self._checkpoint_message_ids(conversation_id)
+        )
+        delivered = all(item.get("id") != claimed.id for item in snapshot["messages"])
+        await self._publish_queue_execution("chat_queue_execution_completed", claimed, result)
+        return delivered
+
+    async def _run_claimed_turn(self, claimed: ClaimedQueueMessage) -> dict[str, Any]:
+        return await self._run_turn(
+            claimed.text,
+            claimed.response_id,
+            claimed.conversation_id,
+            claimed.model,
+            claimed.metadata,
+            asyncio.Event(),
+            claimed.received_at if claimed.received_at is not None else time.time(),
+            source=claimed.source,
+            message_id=claimed.id,
+            queue_request_id=claimed.response_id,
+            queue_send_now=claimed.send_now,
+        )
+
+    async def _publish_queue_snapshot(self, snapshot: dict[str, Any]) -> None:
+        queues = getattr(self.loop_runner, "queues", None)
+        if queues is not None:
+            await queues.push_event("chat_queue_updated", "", snapshot)
+
+    async def _publish_queue_execution(
+        self,
+        event_type: str,
+        claimed: ClaimedQueueMessage,
+        response: dict[str, Any] | None,
+    ) -> None:
+        queues = getattr(self.loop_runner, "queues", None)
+        if queues is None:
+            return
+        metadata: dict[str, Any] = {
+            "conversation_id": claimed.conversation_id,
+            "request_id": claimed.response_id,
+            "message_id": claimed.id,
+        }
+        if response is not None:
+            metadata["response"] = response
+        await queues.push_event(event_type, "", metadata)
+
     # -- GET /v1/conversations/{conversation_id}/items -------------------
+
+    async def _publish_queue_execution_started(
+        self,
+        conversation_id: str,
+        request_id: str,
+        message_id: str,
+        *,
+        content_request_id: str | None = None,
+    ) -> None:
+        queues = getattr(self.loop_runner, "queues", None)
+        if queues is not None:
+            await queues.push_event(
+                "chat_queue_execution_started",
+                "",
+                {
+                    "conversation_id": conversation_id,
+                    "request_id": request_id,
+                    "content_request_id": content_request_id or request_id,
+                    "message_id": message_id,
+                },
+            )
+
+    async def _publish_queue_execution_result(
+        self,
+        event_type: str,
+        conversation_id: str,
+        request_id: str,
+        message_id: str,
+        response: dict[str, Any],
+        *,
+        content_request_id: str | None = None,
+    ) -> None:
+        queues = getattr(self.loop_runner, "queues", None)
+        if queues is None:
+            return
+        await queues.push_event(
+            event_type,
+            "",
+            {
+                "conversation_id": conversation_id,
+                "request_id": request_id,
+                "content_request_id": content_request_id or request_id,
+                "message_id": message_id,
+                "response": response,
+            },
+        )
 
     async def handle_items(self, request: web.Request) -> web.Response:
         conversation_id = request.match_info["conversation_id"]
@@ -894,6 +1360,8 @@ class RuntimeChatService:
             context = getattr(self.loop_runner, "heartbeat_context", None)
             if context is not None:
                 await context.state_manager.delete_current_state(conversation_id)
+            if self._chat_queue is not None:
+                await self._chat_queue.delete(conversation_id)
         except Exception as exc:
             logger.warning("Deleting conversation %s failed: %s", conversation_id, exc)
             return _json_error(f"Failed to delete conversation: {exc}", "server_error", 500)

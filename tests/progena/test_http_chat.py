@@ -6,6 +6,7 @@ import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Annotated, Any, TypedDict
 
 import httpx
@@ -13,7 +14,7 @@ import pytest
 from aiohttp import web
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -24,6 +25,7 @@ import src.progena.llm.provider_context as provider_runtime
 from src.progena.config import LLMConfig, ProgenaConfig, RuntimeConfig
 from src.progena.orchestration.nodes.chat import chat_node
 from src.progena.persistence.store import LangGraphRuntimeStore
+from src.progena.runtime.chat_queue import ChatQueueStore
 from src.progena.runtime.http.chat import RuntimeChatService
 from src.progena.runtime.queues import RuntimeQueues
 from src.progena.runtime.streaming.deepagent_stream import DeepAgentSSEStream
@@ -74,6 +76,8 @@ class ScriptedBridge:
         received_at: float | None = None,
         attachments: list[dict[str, Any]] | None = None,
         source: str | None = None,
+        message_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ):
         self.thread_id = thread_id
         items = self._script(message) if callable(self._script) else self._script
@@ -325,6 +329,7 @@ async def test_responses_503_when_graph_missing_astream() -> None:
 
 async def test_responses_serializes_requests_and_emits_queued() -> None:
     loop_runner = FakeLoopRunner()
+    loop_runner.graph.chat_queue = ChatQueueStore(LangGraphRuntimeStore(InMemoryStore()))
     gate = asyncio.Event()
     script = {
         "first": [_Wait(gate), {"type": "stream_chunk", "content": "first-done", "is_final": True}],
@@ -347,8 +352,8 @@ async def test_responses_serializes_requests_and_emits_queued() -> None:
 
             queued_event = await loop_runner.queues.get_event(timeout=1.0)
             assert queued_event is not None
-            assert queued_event["event_type"] == "message_queued"
-            assert queued_event["metadata"]["request_id"] == "resp-b"
+            assert queued_event["event_type"] == "chat_queue_updated"
+            assert queued_event["metadata"]["messages"][0]["id"] == "user_resp-b"
 
             gate.set()
             frames_a = await asyncio.wait_for(task_a, timeout=5.0)
@@ -363,7 +368,7 @@ async def test_responses_serializes_requests_and_emits_queued() -> None:
     assert frames_a[-1][0] == "response.completed"
     assert frames_b[0][0] == "response.created"
     assert frames_b[1][0] == "response.queued"
-    assert frames_b[2][0] == "response.in_progress"
+    assert frames_b[2][0] == "response.completed"
     assert frames_b[-1][0] == "response.completed"
 
 
@@ -487,6 +492,8 @@ async def test_direct_stream_queue_applies_backpressure(monkeypatch) -> None:
             received_at: float | None = None,
             attachments: list[dict[str, Any]] | None = None,
             source: str | None = None,
+            message_id: str | None = None,
+            metadata: dict[str, Any] | None = None,
         ):
             del thread_id, received_at, source
             nonlocal produced
@@ -590,6 +597,38 @@ async def test_responses_bridge_error_emits_failed_and_releases_lock() -> None:
 
             frames_ok = await _post_responses(client, server.base_url, "ok", "resp-ok")
             assert frames_ok[-1][0] == "response.completed"
+    finally:
+        await _stop_chat_server(server)
+
+
+async def test_claimed_stream_checkpoint_failure_emits_queue_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loop_runner = FakeLoopRunner()
+    script = [
+        {
+            "type": "stream_event",
+            "event_type": "chat_queue_claimed",
+            "content": "",
+            "metadata": {"request_id": "queued-response", "message_id": "user_queued-response"},
+        },
+        {"type": "stream_chunk", "content": "answer", "is_final": True},
+    ]
+    server = await _start_chat_server(loop_runner, bridge_factory=make_bridge_factory(script))
+
+    async def fail_checkpoint(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("checkpoint unavailable")
+
+    monkeypatch.setattr(server.service, "_complete_direct_graph_cycle", fail_checkpoint)
+    try:
+        async with _client() as client:
+            frames = await _post_responses(client, server.base_url, "root", "resp-root")
+        assert frames[-1][0] == "response.failed"
+        await loop_runner.queues.get_event(timeout=1.0)
+        terminal = await loop_runner.queues.get_event(timeout=1.0)
+        assert terminal is not None
+        assert terminal["event_type"] == "chat_queue_execution_failed"
+        assert terminal["metadata"]["request_id"] == "queued-response"
     finally:
         await _stop_chat_server(server)
 
@@ -736,6 +775,8 @@ async def test_turn_threads_progena_source_from_metadata() -> None:
             received_at: float,
             source: str | None = None,
             attachments: Any = None,
+            message_id: str | None = None,
+            metadata: dict[str, Any] | None = None,
         ) -> Any:
             self.last_source = source
             yield {"type": "stream_chunk", "content": "ok", "is_final": True}
@@ -1099,3 +1140,173 @@ async def test_http_turn_and_heartbeat_turn_share_compiled_graph_checkpoint_gate
     finally:
         release_http.set()
         await _stop_chat_server(server)
+
+
+async def test_chat_node_settles_only_its_new_native_queue_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = ChatQueueStore(LangGraphRuntimeStore(InMemoryStore()))
+    _snapshot, queued_id = await queue.enqueue(
+        "heartbeat-queue",
+        text="selected",
+        attachments=[],
+        metadata={},
+        source=None,
+        received_at=1.0,
+        response_id="queued-request",
+        model="test",
+    )
+    await queue.action(
+        "heartbeat-queue",
+        {
+            "action": "send_now",
+            "message_id": queued_id,
+            "revision": 1,
+            "command_id": "select",
+        },
+    )
+    claimed = await queue.claim_next("heartbeat-queue", immediate_only=True)
+    assert claimed is not None
+
+    class ClaimGraph:
+        def __init__(self) -> None:
+            self.chat_queue = queue
+            self.messages: list[BaseMessage] = []
+
+        async def aget_state(self, config: dict[str, Any]) -> Any:
+            del config
+            return SimpleNamespace(values={"messages": self.messages})
+
+        async def ainvoke(self, state: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+            del config
+            self.messages = [
+                *state["messages"],
+                HumanMessage(
+                    id=claimed.id,
+                    content=claimed.text,
+                    additional_kwargs={"progena_queue_request_id": claimed.response_id},
+                ),
+                AIMessage(content="done"),
+            ]
+            return {"messages": self.messages}
+
+    graph = ClaimGraph()
+    loop_runner = FakeLoopRunner()
+    loop_runner.heartbeat_context.agent_graph = graph
+    loop_runner.heartbeat_context.llm_client = None
+    loop_runner.heartbeat_context.queues = loop_runner.queues
+    runtime = Runtime(context=loop_runner.heartbeat_context)
+
+    async def create_turn(*args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        return SimpleNamespace()
+
+    monkeypatch.setattr(provider_runtime.ProviderTurn, "create", create_turn)
+    original_discard = queue.discard_claim
+    settlement_started = asyncio.Event()
+    release_settlement = asyncio.Event()
+
+    async def blocked_discard(conversation_id: str, message_id: str) -> dict[str, Any]:
+        settlement_started.set()
+        await release_settlement.wait()
+        return await original_discard(conversation_id, message_id)
+
+    monkeypatch.setattr(queue, "discard_claim", blocked_discard)
+    active = asyncio.create_task(
+        chat_node({"current_input": "heartbeat", "thread_id": "heartbeat-queue"}, runtime)
+    )
+    await settlement_started.wait()
+    waiter_entered = asyncio.Event()
+
+    async def waiter() -> None:
+        waiter_entered.set()
+
+    waiting = asyncio.create_task(runtime.context.conversation_gate.run("heartbeat-queue", waiter))
+    await asyncio.sleep(0)
+    assert not waiter_entered.is_set()
+    release_settlement.set()
+    await asyncio.gather(active, waiting)
+    completed = await loop_runner.queues.get_event(timeout=1.0)
+    assert completed is not None
+    assert completed["event_type"] == "chat_queue_execution_completed"
+    assert completed["metadata"]["request_id"] == "queued-request"
+    assert (await queue.snapshot("heartbeat-queue"))["messages"] == []
+
+    await chat_node({"current_input": "second", "thread_id": "heartbeat-queue"}, runtime)
+    assert await loop_runner.queues.get_event(timeout=0.01) is None
+
+
+async def test_chat_node_failed_claim_settles_only_that_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = ChatQueueStore(LangGraphRuntimeStore(InMemoryStore()))
+    _snapshot, claimed_id = await queue.enqueue(
+        "failed-heartbeat",
+        text="claimed",
+        attachments=[],
+        metadata={},
+        source=None,
+        received_at=1.0,
+        response_id="failed-request",
+        model="test",
+    )
+    _snapshot, retained_id = await queue.enqueue(
+        "failed-heartbeat",
+        text="retained",
+        attachments=[],
+        metadata={},
+        source=None,
+        received_at=2.0,
+        response_id="retained-request",
+        model="test",
+    )
+    claimed = await queue.claim_next("failed-heartbeat")
+    assert claimed is not None and claimed.id == claimed_id
+
+    class FailingGraph:
+        chat_queue = queue
+
+        def __init__(self) -> None:
+            self.reads = 0
+
+        async def aget_state(self, config: dict[str, Any]) -> Any:
+            del config
+            self.reads += 1
+            messages = (
+                []
+                if self.reads == 1
+                else [
+                    HumanMessage(
+                        id=claimed.id,
+                        content=claimed.text,
+                        additional_kwargs={"progena_queue_request_id": claimed.response_id},
+                    )
+                ]
+            )
+            return SimpleNamespace(values={"messages": messages})
+
+        async def ainvoke(self, state: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+            del state, config
+            raise RuntimeError("model failed after checkpoint")
+
+    loop_runner = FakeLoopRunner()
+    loop_runner.heartbeat_context.agent_graph = FailingGraph()
+    loop_runner.heartbeat_context.llm_client = None
+    loop_runner.heartbeat_context.queues = loop_runner.queues
+
+    async def create_turn(*args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        return SimpleNamespace()
+
+    monkeypatch.setattr(provider_runtime.ProviderTurn, "create", create_turn)
+    with pytest.raises(RuntimeError, match="model failed"):
+        await chat_node(
+            {"current_input": "heartbeat", "thread_id": "failed-heartbeat"},
+            Runtime(context=loop_runner.heartbeat_context),
+        )
+    failed = await loop_runner.queues.get_event(timeout=1.0)
+    assert failed is not None
+    assert failed["event_type"] == "chat_queue_execution_failed"
+    assert [item["id"] for item in (await queue.snapshot("failed-heartbeat"))["messages"]] == [
+        retained_id
+    ]

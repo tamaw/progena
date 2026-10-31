@@ -117,6 +117,22 @@ describe('normalizeBackendChatMessage', () => {
     });
   });
 
+  it('normalizes persisted interruption reasons without changing response status', () => {
+    const message = normalizeBackendChatMessage({
+      id: 'm-cancelled',
+      role: 'assistant',
+      content: 'Partial [Cancelled]',
+      response_status: 'cancelled',
+      interruption_reason: 'user_cancelled',
+    }, 0);
+
+    expect(message).toMatchObject({
+      responseStatus: 'cancelled',
+      interruptionReason: 'user_cancelled',
+    });
+    expect(message.content).toBe('Partial');
+  });
+
   it('keeps the canonical empty provider failure visible after reload', () => {
     const message = normalizeBackendChatMessage({
       id: 'm-content-filter',

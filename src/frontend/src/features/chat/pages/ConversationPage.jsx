@@ -7,6 +7,7 @@ import { useChatApi } from '../hooks/useChatApi';
 import { useConfig } from '../../../context/ConfigContext';
 import { useNotifications } from '../../../context/NotificationContext';
 import { useChatStream } from '../hooks/useChatStream';
+import { useChatQueue } from '../hooks/useChatQueue';
 import useInlineTitleEditor from '../../../hooks/useInlineTitleEditor';
 import useUiAction from '../../../hooks/useUiAction';
 import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
@@ -18,6 +19,7 @@ import { savePreferences, selectAgentName, selectPreferences, selectPreferencesS
 import { selectModelProfiles } from '../../settings/state/modelProfiles';
 import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
 import ChatInput from '../components/ChatInput';
+import ChatQueue from '../components/ChatQueue';
 import { RegenerateDisabledContext } from '../components/RegenerateDisabledContext';
 import QuickActions from '../components/QuickActions';
 import InlineFailure from '../../../components/InlineFailure';
@@ -232,6 +234,7 @@ function ConversationPage() {
   const recentScheduledContent = useRef(new Set());
   const foregroundOwnershipTokenRef = useRef(0);
   const reconciliationIntentRef = useRef(null);
+  const reconciledDeferredTerminalRequestIdsRef = useRef(new Set());
   // A draft may acquire a session document while its first response is still
   // streaming. It is selected without a detail fetch so that response keeps
   // its live owner until foreground reconciliation can replace it.
@@ -264,13 +267,14 @@ function ConversationPage() {
     setForegroundReconciliationIntent(null);
   }, []);
 
-  const requestForegroundReconciliation = useCallback(({ threadId: reconciliationThreadId, streamId }) => {
+  const requestForegroundReconciliation = useCallback(({ threadId: reconciliationThreadId, streamId, forceCanonical = false }) => {
     if (!reconciliationThreadId || selectedBackendChatIdRef.current !== reconciliationThreadId) {
       return;
     }
     setForegroundReconciliationIntent({
       threadId: reconciliationThreadId,
       streamId,
+      forceCanonical,
       ownershipToken: foregroundOwnershipTokenRef.current,
     });
   }, []);
@@ -297,6 +301,7 @@ function ConversationPage() {
     preserveStreamInBackground,
     retireForegroundStream,
     handleSend,
+    handleQueue,
     handleStop,
   } = useChatStream({
     messages,
@@ -315,6 +320,8 @@ function ConversationPage() {
     onForegroundStreamStarted: beginForegroundStream,
     requestForegroundReconciliation,
   });
+  const chatQueue = useChatQueue(selectedBackendChatId);
+
 
   const liveContextUsage = useSyncExternalStore(
     liveTurnStore.subscribeContextUsage,
@@ -641,7 +648,7 @@ function ConversationPage() {
       || intent.threadId !== chatReconciliationState.threadId
       || selectedBackendChatId !== intent.threadId
       || selectedBackendChatIdRef.current !== intent.threadId
-      || !areChatTranscriptsEquivalent(messages, intent.messagesSnapshot)
+      || (!intent.forceCanonical && !areChatTranscriptsEquivalent(messages, intent.messagesSnapshot))
     ) {
       return;
     }
@@ -847,8 +854,27 @@ function ConversationPage() {
   }, []);
 
   // Handle chat events (from /chat SSE stream)
+
   const handleChatEvent = useCallback((event) => {
     if (!event?.data) return;
+    if (
+      event.type === UI_EVENT.CHAT_RESPONSE_COMPLETED
+      && event.data?.queue_execution === true
+      && typeof event.data?.request_id === 'string'
+      && event.data.thread_id === selectedBackendChatIdRef.current
+      && !reconciledDeferredTerminalRequestIdsRef.current.has(event.data.request_id)
+    ) {
+      // Runtime emits this terminal only after its queued execution checkpoint
+      // and session merge are queryable. It is independent of optional
+      // content-owner metadata, which only controls stream lifecycle tracking.
+      reconciledDeferredTerminalRequestIdsRef.current.add(event.data.request_id);
+      requestForegroundReconciliation({
+        threadId: event.data.thread_id,
+        streamId: event.data.content_request_id || event.data.request_id,
+        forceCanonical: true,
+      });
+    }
+
 
     // Handle scheduled/background messages from the agent.
     // Prefer agent_message/agent_question over scheduled_response as they have cleaner content.
@@ -912,7 +938,7 @@ function ConversationPage() {
         event.data?.content || 'A previous message is still running; your message will be handled next.'
       );
     }
-  }, [agentName, show]);
+  }, [agentName, requestForegroundReconciliation, show]);
 
   useEffect(() => subscribeUiEvent((event) => {
     handleChatEvent({ type: event?.type, data: event?.payload });
@@ -1675,14 +1701,24 @@ function ConversationPage() {
             </ChatMessages>
           </div>
         </RegenerateDisabledContext.Provider>
+        <ChatQueue
+          snapshot={chatQueue.snapshot}
+          isMutating={chatQueue.isMutating}
+          onDelete={chatQueue.deleteMessage}
+          onReorder={chatQueue.reorderMessages}
+          onSendNow={chatQueue.sendNow}
+        />
+
 
         <ChatInput
           ref={chatInputRef}
           onSend={sendAndFollow}
+          onQueue={handleQueue}
           onStop={handleStop}
           onCommand={handleCommand}
           isGenerating={isGenerating}
           disabled={connectionState === 'error' || isClearingSession}
+          allowQueue={Boolean(selectedBackendChatId)}
           autoFocus
           focusToken={`${threadId ?? 'no-session'}:${composerFocusTick}`}
           keepFocusAfterSend

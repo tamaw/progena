@@ -25,6 +25,7 @@ from urllib.parse import quote
 
 import httpx
 
+import src.backend.events.contracts as events_contracts
 import src.backend.lifecycle.state as lifecycle_state
 from src.backend.chat.models import AgentResponse, normalize_token_usage
 from src.backend.config import ChatServerConfig
@@ -50,6 +51,17 @@ class RuntimeControlError(RuntimeError):
     def __init__(self, status_code: int, detail: str) -> None:
         super().__init__(detail)
         self.status_code = status_code
+
+
+class RuntimeQueueError(RuntimeError):
+    """A queue request the runtime rejected or could not process."""
+
+    def __init__(
+        self, status_code: int, detail: str, *, snapshot: dict[str, Any] | None = None
+    ) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.snapshot = snapshot
 
 
 async def _iter_sse_frames(response: httpx.Response) -> AsyncIterator[tuple[str, dict[str, Any]]]:
@@ -195,6 +207,31 @@ class SSEProgenaClient:
             return
 
         event_type = str(event.get("event_type", "unknown"))
+        metadata = event.get("metadata")
+        if event_type.startswith("chat_queue_execution_"):
+            self._forward_queue_execution_event(event_type, metadata)
+            return
+        if event_type == "chat_queue_updated":
+            if not isinstance(metadata, dict):
+                logger.warning("Ignoring chat queue event with invalid metadata")
+                return
+            snapshot = {
+                key: metadata.get(key) for key in ("conversation_id", "revision", "messages")
+            }
+            if (
+                not isinstance(snapshot["conversation_id"], str)
+                or not snapshot["conversation_id"]
+                or not isinstance(snapshot["revision"], int)
+                or not isinstance(snapshot["messages"], list)
+            ):
+                logger.warning("Ignoring chat queue event with invalid snapshot")
+                return
+            try:
+                self._event_callback(events_contracts.UiEvent.CHAT_QUEUE_UPDATED, snapshot)
+            except Exception as exc:
+                logger.warning("Error in event callback: %s", exc)
+            return
+
         content = event.get("content", "")
         logger.info(
             "Forwarding event to SSE: type=%s, content=%s",
@@ -204,7 +241,7 @@ class SSEProgenaClient:
 
         payload: dict[str, Any] = {
             "content": content,
-            "metadata": event.get("metadata", {}),
+            "metadata": metadata if isinstance(metadata, dict) else {},
             "timestamp": event.get("timestamp"),
         }
         images = event.get("images")
@@ -213,8 +250,66 @@ class SSEProgenaClient:
 
         try:
             self._event_callback(event_type, payload)
-        except Exception as e:
-            logger.warning("Error in event callback: %s", e)
+        except Exception as exc:
+            logger.warning("Error in event callback: %s", exc)
+
+    def _forward_queue_execution_event(self, event_type: str, metadata: object) -> None:
+        """Translate a deferred runtime turn into normal browser lifecycle events."""
+        if not isinstance(metadata, dict):
+            logger.warning("Ignoring queue execution event with invalid metadata")
+            return
+        conversation_id = metadata.get("conversation_id")
+        request_id = metadata.get("request_id")
+        message_id = metadata.get("message_id")
+        response = metadata.get("response")
+        if (
+            not isinstance(conversation_id, str)
+            or not conversation_id
+            or not isinstance(request_id, str)
+            or not request_id
+            or not isinstance(message_id, str)
+            or not message_id
+        ):
+            logger.warning("Ignoring queue execution event with invalid metadata")
+            return
+
+        payload: dict[str, Any] = {
+            "id": request_id,
+            "thread_id": conversation_id,
+            "message_id": message_id,
+            "request_id": request_id,
+            "queue_execution": True,
+        }
+        content_request_id = metadata.get("content_request_id")
+        if isinstance(content_request_id, str) and content_request_id:
+            payload["content_request_id"] = content_request_id
+        if event_type == "chat_queue_execution_started":
+            canonical_event = events_contracts.UiEvent.CHAT_RESPONSE_STARTED
+        elif event_type == "chat_queue_execution_completed":
+            if not isinstance(response, dict):
+                logger.warning("Ignoring queue completion without response")
+                return
+            canonical_event = events_contracts.UiEvent.CHAT_RESPONSE_COMPLETED
+            payload["response"] = response
+            payload["completed"] = True
+        elif event_type == "chat_queue_execution_failed":
+            if not isinstance(response, dict):
+                logger.warning("Ignoring queue failure without response")
+                return
+            canonical_event = events_contracts.UiEvent.CHAT_RESPONSE_FAILED
+            payload["response"] = response
+            error = response.get("error")
+            payload["error"] = str(error) if error else "Queued response failed"
+        else:
+            logger.warning("Ignoring unknown queue execution event: %s", event_type)
+            return
+        callback = self._event_callback
+        if callback is None:
+            return
+        try:
+            callback(canonical_event, payload)
+        except Exception as exc:
+            logger.warning("Error in event callback: %s", exc)
 
     async def send_message(
         self,
@@ -341,6 +436,13 @@ class SSEProgenaClient:
                         yielded["images"] = images
                     yield yielded
                 elif event_type == "response.completed":
+                    response_payload = data.get("response")
+                    if (
+                        isinstance(response_payload, dict)
+                        and response_payload.get("status") == "queued"
+                    ):
+                        yield {"type": "queued", "request_id": request_id}
+                        return
                     yield {
                         "type": "stream_chunk",
                         "content": "",
@@ -433,6 +535,53 @@ class SSEProgenaClient:
             raise RuntimeControlError(502, "Runtime control response is missing timestamp")
         return payload
 
+    async def get_chat_queue(self, conversation_id: str) -> dict[str, Any]:
+        """Return the runtime-owned durable queue for one conversation."""
+        return await self._request_chat_queue("GET", conversation_id)
+
+    async def apply_chat_queue_action(
+        self, conversation_id: str, action: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Apply one idempotent queue action and return its resulting snapshot."""
+        return await self._request_chat_queue("POST", conversation_id, action=action)
+
+    async def _request_chat_queue(
+        self, method: str, conversation_id: str, *, action: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        if not conversation_id.strip():
+            raise RuntimeQueueError(400, "Conversation ID is required")
+        try:
+            if not self._started:
+                await self.start()
+            assert self._client is not None
+            path = f"/v1/conversations/{quote(conversation_id, safe='')}/queue"
+            if method == "POST":
+                path = f"{path}/actions"
+            response = await self._client.request(
+                method,
+                path,
+                json=action,
+                timeout=httpx.Timeout(CANCEL_TIMEOUT_SECONDS),
+            )
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise RuntimeQueueError(503, f"Runtime queue request failed: {exc}") from exc
+
+        payload = _response_json_object(response)
+        if response.status_code != 200:
+            snapshot = (
+                payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else None
+            )
+            detail = _runtime_error_detail(payload, response.content)
+            status_code = response.status_code if 400 <= response.status_code < 500 else 502
+            raise RuntimeQueueError(status_code, detail, snapshot=snapshot)
+        if payload.get("conversation_id") != conversation_id:
+            raise RuntimeQueueError(502, "Runtime returned a queue for a different conversation")
+        if not isinstance(payload.get("revision"), int) or not isinstance(
+            payload.get("messages"), list
+        ):
+            raise RuntimeQueueError(502, "Runtime returned an invalid queue snapshot")
+        return payload
+
     async def delete_conversation(self, thread_id: str) -> bool:
         """Best-effort deletion of a conversation thread on the runtime."""
         if not thread_id.strip():
@@ -481,6 +630,21 @@ class SSEProgenaClient:
                      Signature: (event_type: str, data: dict) -> None
         """
         self._event_callback = callback
+
+
+def _response_json_object(response: httpx.Response) -> dict[str, Any]:
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _runtime_error_detail(payload: dict[str, Any], body: bytes) -> str:
+    error = payload.get("error")
+    if isinstance(error, dict) and isinstance(error.get("message"), str):
+        return error["message"]
+    return _decode_error_body(body)
 
 
 def _decode_error_body(body: bytes) -> str:

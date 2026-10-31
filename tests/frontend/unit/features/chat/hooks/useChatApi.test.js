@@ -176,6 +176,30 @@ describe('useChatApi dedicated response transport', () => {
     ]);
   });
 
+  it('keeps the active response cancellable when a queued submission has its own terminal lifecycle', async () => {
+    const primaryRequestId = '11111111-1111-4111-8111-111111111111';
+    const queuedRequestId = '22222222-2222-4222-8222-222222222222';
+    const cancelRequestId = '33333333-3333-4333-8333-333333333333';
+    vi.stubGlobal('crypto', {
+      randomUUID: vi.fn()
+        .mockReturnValueOnce(primaryRequestId)
+        .mockReturnValueOnce(queuedRequestId)
+        .mockReturnValueOnce(cancelRequestId),
+    });
+    const hook = useChatApi();
+
+    void hook.sendMessageStream('Primary response', [], vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    await flushMicrotasks();
+    void hook.sendMessageStream('Queue this instead', [], undefined, undefined, vi.fn(), undefined, null, false);
+    await flushMicrotasks();
+
+    void hook.cancelStream();
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${RESPONSES_URL}/${primaryRequestId}/cancel`,
+      expect.objectContaining({ method: 'PUT' }),
+    );
+  });
+
   it('reconnects after a transport error with the last dedicated frame cursor', async () => {
     vi.useFakeTimers();
     const hook = useChatApi();

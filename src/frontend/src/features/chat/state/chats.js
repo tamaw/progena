@@ -138,7 +138,13 @@ function removeChatRuntimeId(ids, threadId) {
   return ids.filter((id) => id !== threadId);
 }
 
+// A queued response can run within an already-open response transport. Its
+// lifecycle carries the queued request id while content remains owned by that
+// outer request, so tracking must never displace the active stream owner.
 function responseRequestIdFor(payload) {
+  if (typeof payload?.content_request_id === 'string' && payload.content_request_id) {
+    return payload.content_request_id;
+  }
   return typeof payload?.request_id === 'string' && payload.request_id ? payload.request_id : null;
 }
 

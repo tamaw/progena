@@ -222,6 +222,62 @@ No additional EventSource, polling, database notification channel, or independen
 compaction ledger is used. Summary timestamps describe checkpoint commits, not
 exact generation duration; no token-saving percentage is inferred.
 
+### Pending chat messages and safe-boundary delivery
+
+The runtime owns a durable, revisioned input queue per conversation. The backend
+is a gateway; it never edits graph checkpoints to deliver user instructions.
+
+- `GET /api/chat/sessions/{conversation_id}/queue` requests a queue snapshot.
+- `POST /api/chat/sessions/{conversation_id}/queue/actions` accepts
+  `{action, revision, command_id, message_id?, order?}`.
+- Actions are `delete`, `reorder`, and `send_now`. Reorder supplies every unclaimed
+  message ID exactly once. Delete and send-now target one pending message.
+- Successful operations return only
+  `202 {request_id,event_types:["chat.queue.updated"]}`. Their correlated canonical
+  event supplies `{conversation_id,revision,messages,request_id}`.
+- Queue messages expose stable `id`, `text`, `attachments`, `status`
+  (`queued` or `sending`), creation/request identity, and optional `send_now`.
+  A selected but unclaimed message renders as **Sending next**.
+
+Commands are idempotent by command ID within the retained command history.
+Stale revisions and mutations of claimed messages fail with `409`; rejected
+commands emit no success event. The client requests a separately correlated
+snapshot to recover. Snapshots must not regress an already-observed revision;
+canonical reconnect requests fresh state rather than relying on bounded replay.
+
+Normal follow-ups wait for the current invocation to finish. **Send now** marks
+the selected input for the next safe root-model boundary, without cancellation.
+The middleware inserts a native, stable-ID `HumanMessage` after outstanding tool
+results, or loops back to the model after an in-flight final answer completes.
+Multiple immediate selections retain server-accepted order; remaining normal
+messages retain their queue order. Delivery does not undo tool side effects or
+inject instructions into independently running delegated agents.
+
+Claiming and queue mutations are atomic. Checkpointed human-message identities
+resolve interrupted claims on restart: committed inputs are not executed again,
+and uncommitted inputs remain recoverable. Claimed messages cannot be deleted or
+reordered. Queue execution stays inside the existing per-conversation gate.
+
+Request-scoped `chat_queue_boundary` content events separate the preceding answer,
+the queued user input and the following answer within one running invocation.
+Their structured metadata preserves message/request identity, text and attachments;
+it is not a truncated tool-output preview. Queue changes and execution lifecycle
+use the existing canonical event lane, with no polling or additional EventSource.
+
+Logical request identity is separate from content-stream ownership.
+`content_request_id`, when present on canonical response lifecycle events, names
+the executing content request; `request_id` still correlates the queued input.
+Queuing or steering B inside active request A must not detach a spectator from
+A's content stream. Durable enqueue is not execution completion. Deferred turns
+publish actual started/terminal lifecycle events, with terminal history reads
+ordered after the session merge. Selected conversations reconcile on deferred
+completion even when a fast started/terminal pair is batched into one render.
+Queue execution lifecycle events carry `queue_execution: true`; this discriminator
+is independent of the optional content owner. A successful queued terminal requests
+canonical transcript reconciliation even if local handoff text changed while that
+snapshot was loading. Thread and reconciliation-token guards still reject stale
+results after navigation or a superseding reconciliation.
+
 ### Message output usage and terminal work state
 
 Canonical chat messages carry nullable `token_count` and `final_call_token_count`,
@@ -233,6 +289,13 @@ input tokens, tool-result bytes or delegated-agent usage. Reasoning is included
 in output, not added to it. Explicit zero remains zero; missing usage in any
 contributing call makes the aggregate unknown. Total-only provider metadata is
 not a substitute for output usage.
+Messages may carry `interruption_reason`: `user_cancelled` for cancellation or
+`new_message` for an explicit Send now boundary. Empty interrupted segments remain
+visible and partial output is preserved. This presentation reason does not change
+native response status or turn safe-boundary delivery into cancellation.
+Native queued input stores the explicit `progena_queue_send_now` flag alongside
+its queue request identity; ordinary queued input does not mark the prior reply.
+
 
 Reasoning-only checkpoint tails remain visible even without tool calls or answer
 text. They retain reported aggregate output but do not invent final-answer usage

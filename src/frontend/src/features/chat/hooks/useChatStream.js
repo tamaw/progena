@@ -75,6 +75,7 @@ export function useChatStream({
   // its final text. Two animation frames guarantee the browser paints that
   // final live snapshot before the committed Markdown/history tree takes over.
   const terminalHandoffFrameRef = useRef(null);
+  const queueBoundaryMessageIdsRef = useRef(new Set());
 
   const setLiveAssistantTurn = useCallback((nextTurn) => {
     const previousTurn = liveTurnRef.current;
@@ -148,6 +149,47 @@ export function useChatStream({
     setLiveAssistantTurn(null);
     return true;
   }, [isCurrentLiveTurn, setLiveAssistantTurn]);
+
+  // A queue boundary is a new model turn inside the same response transport.
+  // Freeze the preceding assistant before inserting the runtime-owned human
+  // message so text from adjacent turns can never concatenate in one row.
+  const applyQueueBoundary = useCallback((streamId, streamEvent) => {
+    const metadata = streamEvent?.metadata;
+    const messageId = typeof metadata?.message_id === 'string' ? metadata.message_id : '';
+    const requestId = typeof metadata?.request_id === 'string' ? metadata.request_id : '';
+    if (
+      !messageId
+      || !requestId
+      || liveTurnRef.current?.streamId !== streamId
+      || queueBoundaryMessageIdsRef.current.has(messageId)
+    ) {
+      return false;
+    }
+    queueBoundaryMessageIdsRef.current.add(messageId);
+    flushPendingText(streamId);
+    const previousTurn = liveTurnRef.current;
+    const committedAssistant = finalizeLiveAssistantTurn(previousTurn, {
+      status: 'completed',
+      now: Date.now(),
+      interruptionReason: 'new_message',
+    });
+    const queuedHuman = {
+      id: messageId,
+      role: 'user',
+      content: typeof metadata.text === 'string' ? metadata.text : '',
+      timestamp: Date.now(),
+      attachments: Array.isArray(metadata.attachments) ? metadata.attachments : [],
+    };
+    setMessages((current) => (
+      committedAssistant ? [...current, committedAssistant, queuedHuman] : [...current, queuedHuman]
+    ));
+    setLiveAssistantTurn(createLiveAssistantTurn({
+      streamId,
+      startedAt: Date.now(),
+      assistantIdPrefix: requestId,
+    }));
+    return true;
+  }, [flushPendingText, setLiveAssistantTurn, setMessages]);
 
   // Marks the chat currently streaming (if any) as generating-in-background.
   // Called whenever the caller is about to stop treating that stream as the
@@ -257,6 +299,10 @@ export function useChatStream({
       },
       onStreamEvent: (streamEvent) => {
         if (spectatedRequestIdRef.current !== requestId) return;
+        if (streamEvent.event_type === 'chat_queue_boundary') {
+          applyQueueBoundary(streamId, streamEvent);
+          return;
+        }
         if (streamEvent.event_type === 'assistant_metadata' && streamEvent.metadata) {
           setLiveAssistantTurn((turn) => (turn ? applyAssistantMetadata(turn, streamEvent.metadata) : turn));
           return;
@@ -272,6 +318,7 @@ export function useChatStream({
     requestForegroundReconciliation,
     setMessages,
     setLiveAssistantTurn,
+    applyQueueBoundary,
     stopSpectating,
   ]);
 
@@ -445,7 +492,11 @@ export function useChatStream({
               flushPendingText(streamId);
               const finalTurn = liveTurnRef.current;
               const committed = finalTurn
-                ? finalizeLiveAssistantTurn(finalTurn, { status, now: Date.now() })
+                ? finalizeLiveAssistantTurn(finalTurn, {
+                  status,
+                  now: Date.now(),
+                  interruptionReason: status === 'cancelled' ? 'user_cancelled' : undefined,
+                })
                 : null;
               if (committed) {
                 setMessages((prevMessages) => [...prevMessages, committed]);
@@ -513,6 +564,11 @@ export function useChatStream({
             return;
           }
 
+          if (streamEvent.event_type === 'chat_queue_boundary') {
+            applyQueueBoundary(streamId, streamEvent);
+            return;
+          }
+
           if (streamEvent.event_type === 'assistant_metadata' && streamEvent.metadata) {
             updateStreamEventTurn(
               (prev) => applyAssistantMetadata(prev, streamEvent.metadata),
@@ -536,6 +592,7 @@ export function useChatStream({
       clearLiveTurnForStream(streamId);
     }
   }, [
+    applyQueueBoundary,
     discardPendingText,
     flushPendingText,
     queueTextChunk,
@@ -557,6 +614,38 @@ export function useChatStream({
     show,
   ]);
 
+  // A second response request while this conversation is generating becomes a
+  // durable runtime queue item. It deliberately does not claim the foreground
+  // stream or add a speculative transcript message: the queue snapshot is the
+  // sole browser representation until runtime consumes the item.
+  const handleQueue = useCallback(async (content, attachments = []) => {
+    const selectedBackendChat = resolveSelectedBackendChat(
+      activeBackendChat,
+      selectedBackendChatId,
+    );
+    const attachmentIds = attachments.map((attachment) => attachment.id).filter(Boolean);
+    const metadata = {
+      [FRONTEND_RESPONSE_OPTIONS_KEY]: { allowDesyncedCompletion: true },
+      ...(selectedBackendChat?.thread_id
+        ? { thread_id: selectedBackendChat.thread_id }
+        : threadId
+          ? { thread_id: threadId }
+          : {}),
+      ...(attachmentIds.length > 0 ? { attachments: attachmentIds } : {}),
+    };
+
+    await sendMessageStream(
+      content,
+      messages.slice(-10).map((message) => ({ role: message.role, content: message.content })),
+      undefined,
+      undefined,
+      (error) => reportFailure(show, 'Queue message', error),
+      undefined,
+      metadata,
+      false,
+    );
+  }, [activeBackendChat, messages, selectedBackendChatId, sendMessageStream, show, threadId]);
+
   const handleStop = useCallback(() => cancelStream(), [cancelStream]);
 
   return {
@@ -571,6 +660,7 @@ export function useChatStream({
     preserveStreamInBackground,
     retireForegroundStream,
     handleSend,
+    handleQueue,
     handleStop,
     liveTurnStore,
     setLiveAssistantTurn,

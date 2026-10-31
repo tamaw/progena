@@ -477,6 +477,8 @@ async def responses(
     )
 
     response_id = f"resp-{uuid.uuid4().hex[:8]}"
+    active_response = _active_response_for_thread(thread_id)
+    content_request_id = active_response[0] if active_response is not None else None
     _active_response_streams[request_id] = asyncio.Event()
     _register_response_activity(request_id, thread_id)
     if body.stream:
@@ -497,14 +499,17 @@ async def responses(
             include_reasoning=body.include_reasoning,
         )
     )
+    started_payload: dict[str, Any] = {
+        "id": response_id,
+        "model": body.model,
+        "thread_id": thread_id,
+        "stream": body.stream,
+    }
+    if content_request_id is not None:
+        started_payload["content_request_id"] = content_request_id
     events_stream.broadcast_ui_event(
         events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
-        {
-            "id": response_id,
-            "model": body.model,
-            "thread_id": thread_id,
-            "stream": body.stream,
-        },
+        started_payload,
         scope="chat",
         session_id=thread_id,
         request_id=request_id,
@@ -714,6 +719,7 @@ async def _run_response_event_stream(
         cancel_event = asyncio.Event()
         _active_response_streams[request_id] = cancel_event
     response_stream_state = _response_streams.get(request_id) if stream else None
+    deferred = False
 
     def response_payload(**fields: Any) -> dict[str, Any]:
         return {"id": response_id, "model": model, "thread_id": thread_id, **fields}
@@ -758,6 +764,9 @@ async def _run_response_event_stream(
                     return
 
                 item_type = str(item.get("type", ""))
+                if item_type == "queued":
+                    deferred = True
+                    continue
                 if item_type == "stream_chunk":
                     chunk = str(item.get("content", ""))
                     if not chunk:
@@ -818,6 +827,10 @@ async def _run_response_event_stream(
                 session_id=thread_id,
                 request_id=request_id,
             )
+
+        if deferred:
+            mark_response_stream_terminal()
+            return
 
         _clear_response_activity(request_id)
         events_stream.broadcast_ui_event(

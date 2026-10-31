@@ -150,6 +150,9 @@ class ConversationUsageTotals(BaseModel):
     reasoning_token_message_count: int = 0
 
 
+InterruptionReason = Literal["user_cancelled", "new_message"]
+
+
 class ChatMessage(BaseModel):
     id: str
     role: str
@@ -173,6 +176,7 @@ class ChatMessage(BaseModel):
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     context_usage: ContextUsage | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
+    interruption_reason: InterruptionReason | None = None
 
 
 class ConversationSummaryScope(BaseModel):
@@ -533,6 +537,68 @@ def _attachments_from_raw(raw: Any) -> list[dict[str, Any]]:
     )
 
 
+def _queue_request_id(raw: Any) -> str | None:
+    additional = (
+        raw.get("additional_kwargs")
+        if isinstance(raw, dict)
+        else getattr(raw, "additional_kwargs", None)
+    )
+    request_id = (
+        additional.get("progena_queue_request_id") if isinstance(additional, dict) else None
+    )
+    return request_id if isinstance(request_id, str) and request_id else None
+
+
+def _is_send_now_queue_input(raw: Any) -> bool:
+    """Whether a native queued HumanMessage crossed an explicit Send now boundary."""
+    additional = (
+        raw.get("additional_kwargs")
+        if isinstance(raw, dict)
+        else getattr(raw, "additional_kwargs", None)
+    )
+    return (
+        _queue_request_id(raw) is not None
+        and isinstance(additional, dict)
+        and additional.get("progena_queue_send_now") is True
+    )
+
+
+def _interruption_marker_id(message: ChatMessage, raw: Any) -> str:
+    request_id = _queue_request_id(raw)
+    if request_id is not None:
+        return f"msg_{request_id}"
+    if message.id.startswith("user_") and message.id.removeprefix("user_"):
+        return f"msg_{message.id.removeprefix('user_')}"
+    return f"{message.id}_interruption"
+
+
+def _mark_previous_turn_as_continued(
+    messages: list[ChatMessage], previous_user_raw: Any | None
+) -> None:
+    """Project Send now immediately before its selected HumanMessage."""
+    previous_user_index = next(
+        (index for index in range(len(messages) - 1, -1, -1) if messages[index].role == "user"),
+        None,
+    )
+    if previous_user_index is None:
+        return
+    for message in reversed(messages[previous_user_index + 1 :]):
+        if message.role == "assistant":
+            if message.interruption_reason is None:
+                message.interruption_reason = "new_message"
+            return
+    previous_user = messages[previous_user_index]
+    messages.append(
+        ChatMessage(
+            id=_interruption_marker_id(previous_user, previous_user_raw),
+            role="assistant",
+            content="",
+            created_at=previous_user.created_at,
+            interruption_reason="new_message",
+        )
+    )
+
+
 def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:
     """Return tool_calls list from an AIMessage (normalized LangChain format).
 
@@ -571,9 +637,11 @@ def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:
 CANCELLED_SUFFIX = " [Cancelled]"
 
 
-def _is_cancelled_reply(raw: Any) -> bool:
-    """An assistant reply the runtime saved from a cancelled turn."""
-    return extract_response_status(raw) == "cancelled"
+def _without_cancelled_sentinel(content: str) -> str:
+    """Drop only the exact suffix emitted by the retired history projection."""
+    if content == CANCELLED_SUFFIX.strip():
+        return ""
+    return content.removesuffix(CANCELLED_SUFFIX)
 
 
 def _chat_message_from_raw(
@@ -590,19 +658,21 @@ def _chat_message_from_raw(
     if role == "tool":
         return None
     content = _raw_message_content(raw)
-    if role == "assistant" and _is_cancelled_reply(raw):
-        content = f"{content}{CANCELLED_SUFFIX}" if content else CANCELLED_SUFFIX.strip()
     response_status: ResponseStatus = (
         _answer_response_status(raw) if role == "assistant" else "unknown"
     )
+    interruption_reason: InterruptionReason | None = None
+    if role == "assistant" and response_status == "cancelled":
+        content = _without_cancelled_sentinel(content)
+        interruption_reason = "user_cancelled"
     reasoning_text = extract_reasoning_trace(raw) or ""
     if not content and role == "assistant":
-        if response_status != "failed":
+        if response_status not in {"failed", "cancelled"}:
             return None
-        # Retain an otherwise empty provider failure so a reload can expose
-        # its terminal status and authoritative usage. Work/reasoning already
-        # renders its own failed status, so only a truly empty turn needs text.
-        if not tool_calls and not reasoning_text:
+        # Retain otherwise empty terminal rows so reload can expose their
+        # native status and authoritative usage. Work/reasoning already renders
+        # its own terminal status, so only a truly empty failure needs prose.
+        if response_status == "failed" and not tool_calls and not reasoning_text:
             content = "Error: Response failed."
     created_at = _raw_message_created_at(raw)
     display_metadata = _display_metadata_from_raw(raw)
@@ -619,6 +689,7 @@ def _chat_message_from_raw(
         token_count=extract_output_token_count(raw),
         final_call_token_count=final_call_token_count,
         response_status=response_status,
+        interruption_reason=interruption_reason,
         reasoning_token_count=extract_reasoning_token_count(raw) or 0,
         cache_read_token_count=extract_cache_read_token_count(raw) or 0,
         reasoning_text=reasoning_text,
@@ -748,6 +819,7 @@ def _messages_from_checkpoint(
     pending_reasoning_parts: list[ReasoningSegment] = []
     pending_reasoning_timestamp: str | None = None
     pending_context_usage: ContextUsage | None = None
+    previous_user_raw: Any | None = None
 
     for index, raw in enumerate(snapshot.messages):
         role = _raw_message_role(raw)
@@ -769,6 +841,8 @@ def _messages_from_checkpoint(
                 synthetic.context_usage = pending_context_usage
                 messages.append(synthetic)
                 pending_tool_calls = []
+            if _is_send_now_queue_input(raw):
+                _mark_previous_turn_as_continued(messages, previous_user_raw)
             pending_token_count = 0
             pending_terminal_status = None
             pending_reasoning_parts = []
@@ -849,6 +923,8 @@ def _messages_from_checkpoint(
                 pending_context_usage = None
             if role in ("assistant", "user"):
                 pending_tool_calls = []
+            if role == "user":
+                previous_user_raw = raw
             messages.append(message)
 
     if pending_tool_calls or pending_reasoning_parts:

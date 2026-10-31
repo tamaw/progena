@@ -84,6 +84,21 @@ The dedicated stream is keyed by the acknowledged `request_id`. It carries only
 response-content transport for that request; canonical lifecycle ownership stays
 on `/api/ui/stream`.
 
+### Queued follow-ups
+
+Runtime-owned `chat_queue:<conversation_id>` documents hold pending inputs,
+ordering, delivery claims and bounded command deduplication. Queue commands cross
+the backend gateway; snapshots return through canonical `chat.queue.updated`
+events. The browser renders state and issues commands, not delivery decisions.
+
+Ordinary inputs drain after the active turn under `ConversationTurnGate`.
+**Send now** selects an input for native root middleware at the next model
+boundary, after outstanding tools finish, without starting a competing graph run
+or cancelling work. Stable human-message checkpoint IDs reconcile interrupted
+claims. A request-scoped boundary event separates live transcript rows when one
+invocation handles another user instruction. Deferred execution publishes its
+actual lifecycle so open conversations can reconcile committed history.
+
 ## Stream lifecycle
 
 ### Canonical stream
