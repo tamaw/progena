@@ -4332,9 +4332,9 @@ body,
   gap: 6px;
 }
 
-/* Servers can expose 50+ tools: show five rows and scroll the rest
-   (max-height is measured from the rendered rows in ToolsPage). */
-.tools-tool-list--capped {
+/* CappedScrollList (components/layout/CappedScrollList.jsx) sets data-capped
+   and a max-height measured from the rendered rows when rows overflow. */
+.capped-scroll-list[data-capped] {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 4px;

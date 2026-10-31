@@ -12,6 +12,7 @@ import {
   PaneListSortButton,
   PaneListToolbar,
 } from '../../components/layout/PaneList';
+import CappedScrollList from '../../components/layout/CappedScrollList';
 import DetailHeader, {
   ConfigureActionIcon,
   CopyActionIcon,
@@ -247,6 +248,22 @@ function FeedbackPatterns() {
               <DetailStatus key={tone} tone={tone}>{label}</DetailStatus>
             ))}
           </div>
+        </article>
+        <article className="dlp-card">
+          <div className="dlp-card__head"><h3>Capped list</h3><span className="dlp-pattern-tag">shared component</span></div>
+          <p className="dlp-note">Long detail lists (MCP tools, schedule runs) show five rows and scroll the rest; shorter lists render unchanged.</p>
+          <CappedScrollList className="agents-mini-list">
+            {Array.from({ length: 12 }, (_, index) => (
+              <div key={index} className="agents-mini-row">
+                <span className="agents-mini-row__icon">run</span>
+                <div>
+                  <strong>Run {12 - index}</strong>
+                  {index % 3 ? <p>{index * 7}s duration</p> : null}
+                </div>
+                <DetailStatus tone={index === 0 ? 'ok' : 'idle'}>{index === 0 ? 'Running' : 'Completed'}</DetailStatus>
+              </div>
+            ))}
+          </CappedScrollList>
         </article>
       </div>
       {modalOpen ? <PopupModal eyebrow="Local demonstration" title="Archive this fixture?" message="No item is changed; this only demonstrates the shared modal's focus restoration and Escape handling." confirmLabel="Archive fixture" onClose={closeModal} onConfirm={closeModal} /> : null}

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector, useStore } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../../lib/routes';
-import { scheduleRunDetail, scheduleRunStatusTone } from './scheduleRunsModel';
+import { scheduleRunDetail, scheduleRunStatus } from './scheduleRunsModel';
 import { createUuid } from '../../lib/uuid';
 import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
 
@@ -18,6 +18,7 @@ import {
   PaneListRows,
 } from '../../components/layout/PaneList';
 import PageShell from '../../components/layout/PageShell';
+import CappedScrollList from '../../components/layout/CappedScrollList';
 import DetailPane from '../../components/layout/DetailPane';
 import { MetricCard } from '../../components/DetailCards';
 import DetailHeader, {
@@ -912,21 +913,22 @@ function SchedulesPage() {
                   <h2>Recent runs</h2>
                 </header>
                 {recentScheduleRuns.length ? (
-                  <div className="agents-mini-list">
-                    {recentScheduleRuns.map((run) => (
-                      <div key={run.run_id} className="agents-mini-row">
-                        <span className="agents-mini-row__icon">run</span>
-                        <div>
-                          <strong>{formatLogTime(run.started_at) || 'Scheduled run'}</strong>
-                          <p>{scheduleRunDetail(run)}</p>
+                  <CappedScrollList className="agents-mini-list">
+                    {recentScheduleRuns.map((run) => {
+                      const runStatus = scheduleRunStatus(run.status);
+                      return (
+                        <div key={run.run_id} className="agents-mini-row">
+                          <span className="agents-mini-row__icon">run</span>
+                          <div>
+                            <strong>{formatLogTime(run.started_at) || 'Scheduled run'}</strong>
+                            <p>{scheduleRunDetail(run)}</p>
+                          </div>
+                          <DetailStatus tone={runStatus.tone}>{runStatus.label}</DetailStatus>
                         </div>
-                        <DetailStatus tone={scheduleRunStatusTone(run.status)}>
-                          {run.status}
-                        </DetailStatus>
-                      </div>
-                    ))}
-                  </div>
-                ) : <p className="muted">No runs yet.</p>}
+                      );
+                    })}
+                  </CappedScrollList>
+                ) : <PaneEmptyState>No runs yet.</PaneEmptyState>}
               </section>
 
               <section className="agents-section">
