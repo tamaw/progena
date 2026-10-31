@@ -93,6 +93,23 @@ describe('interruption markers', () => {
     expect(host.textContent).toContain('Cancelled by you.');
     expect(host.querySelector('.message-wrapper.assistant')).toBeNull();
   });
+
+  it('keeps a persisted interrupted turn before the next user message and completed answer', async () => {
+    await act(async () => root.render(
+      <>
+        <Message message={message([], { responseStatus: 'interrupted' })} />
+        <Message message={{ id: 'next-user', role: 'user', content: 'Please retry.' }} />
+        <Message message={message([answer('The retry succeeded.', 2)], { id: 'next-answer' })} />
+      </>,
+    ));
+
+    const markers = host.querySelectorAll('article[aria-label="Interrupted"]');
+    expect(markers).toHaveLength(1);
+    expect(markers[0].textContent).toContain('This turn stopped before it finished.');
+    const retry = host.querySelector('.message-wrapper.user');
+    expect(markers[0].compareDocumentPosition(retry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(host.lastElementChild.textContent).toContain('The retry succeeded.');
+  });
 });
 
 
@@ -234,7 +251,14 @@ describe('terminal replies without tool work', () => {
         responseStatus: status,
       }));
       expect(host.querySelector('section[aria-label="Assistant work"]')).toBeNull();
-      expect(host.querySelector('[role="status"]')?.textContent.toLowerCase()).toBe(status);
+      const statusRow = status === 'interrupted'
+        ? host.querySelector('article[aria-label="Interrupted"]')
+        : host.querySelector('[role="status"]');
+      expect(statusRow?.textContent.toLowerCase()).toContain(status);
+      if (status === 'interrupted') {
+        expect(host.querySelector('.message-wrapper.assistant').compareDocumentPosition(statusRow)
+          & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      }
       expect(host.textContent).toContain('Partial answer');
     },
   );

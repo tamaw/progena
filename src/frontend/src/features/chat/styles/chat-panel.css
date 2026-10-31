@@ -821,6 +821,10 @@
     white-space: nowrap;
 }
 
+.subagent-card__header {
+    display: block;
+}
+
 /* The delegated task follows the subagent's name: "repo-manager <task>". */
 .subagent-card__title-summary {
     flex: 1 1 auto;
@@ -968,7 +972,6 @@
     font-size: 9px;
 }
 
-.subagent-card__children .message-stream-event-body,
 .a2a-sub-entry__text {
     flex: 1 1 auto;
     min-width: 0;
@@ -981,7 +984,6 @@
 }
 
 .subagent-card__children .message-stream-event-body {
-    height: 1.45em;
     margin-top: 0;
 }
 

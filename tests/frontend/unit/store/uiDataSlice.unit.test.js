@@ -213,6 +213,36 @@ describe('applyUiEvent reducer', () => {
     expect(s.chats.active.loading).toBe(false);
   });
 
+  it('clears an obsolete session interruption only when a new response starts in that thread', () => {
+    const interruption = { next: ['model'], at: '2026-10-28T12:00:00Z' };
+    let s = reducer(undefined, requestChatSessionDetail.pending('SELECT', {
+      chatsUrl: '/x', threadId: 'interrupted-thread', requestId: 'SELECT',
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'chat.session.selected',
+      payload: {
+        request_id: 'SELECT',
+        session: { thread_id: 'interrupted-thread', interruption },
+      },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.started',
+      payload: { request_id: 'OTHER', thread_id: 'other-thread' },
+    }));
+    expect(selectActiveChatSessionState({ uiData: s }).detail.interruption).toEqual(interruption);
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.started',
+      payload: { request_id: 'RETRY', thread_id: 'interrupted-thread' },
+    }));
+    expect(selectActiveChatSessionState({ uiData: s }).detail.interruption).toBeNull();
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.completed',
+      payload: { request_id: 'RETRY', thread_id: 'interrupted-thread' },
+    }));
+    expect(selectActiveChatSessionState({ uiData: s }).detail.interruption).toBeNull();
+  });
+
   it('uses the started-response registry to mark a background chat unread and errored when failure omits thread_id', () => {
     let s = reducer(undefined, applyUiEvent({
       type: 'chat.response.started',

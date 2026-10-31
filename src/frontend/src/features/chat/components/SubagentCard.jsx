@@ -32,6 +32,7 @@ import { selectRecentLines } from '../models/workGroupModel';
 import useRunningDisclosure from '../hooks/useRunningDisclosure';
 import EarlierLinesToggle from './EarlierLinesToggle';
 import ConversationSummaryMarker, { ConversationSummaryActivity } from './ConversationSummaryMarker';
+import ChatInfoTooltip from './ChatInfoTooltip';
 
 // One nested tool call = one mini entry in the chain, the same "mini card/
 // event" treatment A2ACallCard's A2ASubEntry gives each status update:
@@ -97,11 +98,9 @@ const SubagentChild = memo(function SubagentChild({ child, isLast }) {
   );
 });
 
-// One burst of the subagent's own streamed text = one mini entry in the
-// chain, rendered in the same compact header row as an A2A progress update.
-// `isStreaming` only ever applies to the chain's trailing entry. Render that
-// entry as literal text until it settles: parsing the growing response here
-// would re-highlight an already-closed fenced block for every later delta.
+// Render growing text literally to avoid re-highlighting fenced code on every
+// delta. Settled Markdown remains fully readable inside the card disclosure;
+// a one-line height clamp can hide an entire leading heading or code block.
 //
 // Memoized for the same reason as SubagentChild above -- settled entries keep
 // their identity while the trailing entry updates, so they never re-render.
@@ -124,12 +123,10 @@ const SubagentMessageEntry = memo(function SubagentMessageEntry({ entry, isLast,
             </div>
           </div>
         ) : bodyHtml && (
-          <div className="entry__head">
-            <div
-              className="message-stream-event-body"
-              dangerouslySetInnerHTML={{ __html: bodyHtml }}
-            />
-          </div>
+          <div
+            className="message-stream-event-body message-content"
+            dangerouslySetInnerHTML={{ __html: bodyHtml }}
+          />
         )}
       </div>
     </div>
@@ -162,28 +159,36 @@ const SubagentCard = memo(function SubagentCard({ item, summaryMarkers = [], sum
     ? <div className="subagent-card__error">{item.error}</div>
     : null;
 
+  const header = (
+    <button type="button" className="entry__head entry-toggle" aria-expanded={open} onClick={toggle}>
+      <span className="entry__role subagent-card__name">{item.subagentName || 'subagent'}</span>
+      {item.taskSummary && (
+        <span className="subagent-card__title-summary">{item.taskSummary}</span>
+      )}
+      {item.status === 'running' && <span className="muted" role="status">Working…</span>}
+      {statusLabel && <span className="muted">{statusLabel}</span>}
+      {failedToolCount > 0 && <span className="work-group__failed">{failedToolCount} failed</span>}
+      <span className="msg__head-trailing">
+        {toolCount > 0 && (
+          <span className="muted">{toolCount} tool call{toolCount === 1 ? '' : 's'}</span>
+        )}
+        {durationLabel && <span className="muted">{durationLabel}</span>}
+        {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
+      </span>
+      <span className="tool-event-disclosure__chevron" aria-hidden="true" />
+    </button>
+  );
   return (
     <div className={`entry entry--chain-item subagent-card subagent-card--${item.status}`}>
       <div className="entry__gutter" aria-hidden="true">
         <span className={`entry__badge subagent-card__badge subagent-card__badge--${item.status}`} />
       </div>
       <div className="entry__main">
-        <button type="button" className="entry__head entry-toggle" aria-expanded={open} onClick={toggle}>
-          <span className="entry__role subagent-card__name">{item.subagentName || 'subagent'}</span>
-          {item.taskSummary && (
-            <span className="subagent-card__title-summary" title={item.taskSummary}>{item.taskSummary}</span>
-          )}
-          {statusLabel && <span className="muted">{statusLabel}</span>}
-          {failedToolCount > 0 && <span className="work-group__failed">{failedToolCount} failed</span>}
-          <span className="msg__head-trailing">
-            {toolCount > 0 && (
-              <span className="muted">{toolCount} tool call{toolCount === 1 ? '' : 's'}</span>
-            )}
-            {durationLabel && <span className="muted">{durationLabel}</span>}
-            {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
-          </span>
-          <span className="tool-event-disclosure__chevron" aria-hidden="true" />
-        </button>
+        {item.taskSummary ? (
+          <ChatInfoTooltip className="subagent-card__header" content={item.taskSummary}>
+            {header}
+          </ChatInfoTooltip>
+        ) : header}
         {summaryActivities.map((activity) => (
           <ConversationSummaryActivity key={activity.id} activity={activity} />
         ))}
@@ -191,7 +196,7 @@ const SubagentCard = memo(function SubagentCard({ item, summaryMarkers = [], sum
           <ConversationSummaryMarker key={marker.id} marker={marker} />
         ))}
         {!open && error}
-        {open && (
+        {open && (visibleLines.length > 0 || error) && (
           <div className="subagent-card__body entry__content">
             <EarlierLinesToggle hiddenCount={hiddenCount} showAll={showAll} onToggle={() => setShowAll((value) => !value)} />
             {visibleLines.length > 0 && (

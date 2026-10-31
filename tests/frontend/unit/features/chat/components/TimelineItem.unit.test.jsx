@@ -148,6 +148,8 @@ describe('TimelineItem subagent summaries', () => {
     container.innerHTML = markup;
     expect(container.querySelector('#conversation-summary-nested-summary')).not.toBeNull();
     expect(container.querySelector('#conversation-summary-other-summary')).toBeNull();
-    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
+    const activity = [...container.querySelectorAll('[role="status"]')].map((node) => node.textContent).join(' ');
+    expect(activity).toContain('Subagent: Researcher');
+    expect(activity).not.toContain('Subagent: Other');
   });
 });
