@@ -105,3 +105,50 @@ def test_workflow_content_round_trip_keeps_typed_schemas(workflow_env):
 
     saved = save_workflow_definition(workflow_env, payload)
     assert saved.graph.nodes[agent_id].input_schema["required"] == ["card"]
+
+
+def test_strict_manual_trigger_payload_keeps_request_correlation_in_lifecycle_event(
+    workflow_env,
+):
+    from src.backend.workflows.service import save_workflow_definition
+    from src.progena.workflows.documents import default_workflow_definition
+
+    workflow = default_workflow_definition(workflow_id="strict-manual-trigger")
+    workflow["graph"] = {
+        "nodes": {
+            "manual": {
+                "kind": "manual",
+                "title": "Manual",
+                "output_schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["n"],
+                    "properties": {"n": {"type": "integer"}},
+                },
+            }
+        },
+        "edges": [],
+    }
+    save_workflow_definition(workflow_env, workflow)
+
+    queue = asyncio.Queue()
+    events_stream._ui_stream_subscribers[queue] = None
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/ui/workflows/strict-manual-trigger/trigger",
+                json={"payload": {"n": 3}},
+                headers={"X-Operation-Id": "strict-manual-request"},
+            )
+            events = _drain(queue)
+        assert_acknowledged(
+            response,
+            ["workflow.run.started"],
+            request_id="strict-manual-request",
+        )
+        event = next(event for event in events if event.type == "workflow.run.started")
+        assert event.payload["request_id"] == "strict-manual-request"
+        assert event.payload["run"]["trigger_event"]["n"] == 3
+        assert "request_id" not in event.payload["run"]["trigger_event"]
+    finally:
+        events_stream._ui_stream_subscribers.pop(queue, None)
