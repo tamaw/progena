@@ -3834,6 +3834,8 @@ body,
   border-color: color-mix(in oklab, var(--color-accent) 34%, var(--color-border));
 }
 
+/* Geometry only: the colour comes from the shared sess-row__dot--<tone>.
+   No background here -- this rule sits after the tone rules and would win. */
 .repo-source-row__mark {
   grid-row: 1 / span 2;
   grid-column: 1;
@@ -3841,28 +3843,7 @@ body,
   height: 8px;
   margin-top: 5px;
   border-radius: 50%;
-  background: var(--color-text-muted);
-  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.08);
-}
-
-.repo-source-row__mark--ok {
-  background: var(--color-success);
-  box-shadow: 0 0 0 3px rgba(76, 199, 144, 0.12);
-}
-
-.repo-source-row__mark--muted {
-  background: var(--color-text-muted);
-  box-shadow: none;
-}
-
-.repo-source-row__mark--warning {
-  background: var(--color-warning);
-  box-shadow: 0 0 0 3px rgba(247, 177, 70, 0.14);
-}
-
-.repo-source-row__mark--error {
-  background: var(--color-error);
-  box-shadow: 0 0 0 3px rgba(224, 82, 74, 0.14);
+  box-sizing: border-box;
 }
 
 .repo-source-row__age {

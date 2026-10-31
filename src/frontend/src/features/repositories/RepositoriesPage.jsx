@@ -203,7 +203,7 @@ export default function RepositoriesPage() {
                   className={`repo-source-row ${selectedRow?.id === row.id ? 'is-selected' : ''}`}
                   onClick={() => setSelectedId(row.id)}
                 >
-                  <span className={`repo-source-row__mark repo-source-row__mark--${REPO_STATUS_TONE[rowStatus]}`} />
+                  <span className={`repo-source-row__mark sess-row__dot--${REPO_STATUS_TONE[rowStatus]}`} title={REPO_STATUS_LABEL[rowStatus]} />
                   <span className="repo-source-row__title">{row.declared?.name}</span>
                   <span className="repo-source-row__age">{row.scan?.last_commit?.relative_time || '—'}</span>
                   <span className="repo-source-row__meta">{row.scan?.dirty_count ?? 0} uncommitted</span>
