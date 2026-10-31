@@ -24,6 +24,7 @@ the native `write`/`edit` file tools.
 | `marketplace_entry.schema.v1.json` | One marketplace under `marketplaces` (keyed by marketplace name) | object | `managing-marketplaces` |
 | `agent_entry.schema.v1.json` | One object in `registry`'s `agents` array | object | registry validation, `managing-a2a` |
 | `knowledge_base_entry.schema.v1.json` | One object in `knowledge`'s `bases` array | object | `managing-knowledge` |
+| `model_profile_entry.schema.v1.json` | One profile under `profile` (`/config/profiles.json`, keyed by name) | object | model profile validation |
 | `task.schema.v1.json` | A single kanban card (`kanban_card:<id>`) | object | `managing-tasks` |
 | `inbox_message.schema.v1.json` | A single inbox message (`inbox_message:<id>`) | object | `managing-inbox` |
 | `preferences.schema.v1.json` | The whole `preferences` document | object | `managing-preferences` |

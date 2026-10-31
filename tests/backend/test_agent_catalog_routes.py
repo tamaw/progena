@@ -302,9 +302,7 @@ def _a2a_profile(agent_id: str = "a2a-example-agent") -> dict[str, Any]:
         "transport": "JSONRPC",
         "url": "http://localhost:8080",
         "skills": [{"id": "health", "name": "Health"}],
-        "tasks": [
-            {"id": "t1", "status": "completed", "context_id": "ctx-1", "title": "run health"}
-        ],
+        "tasks": [{"id": "t1", "status": "completed", "context_id": "ctx-1"}],
         "card": {"protocolVersion": "0.3.0"},
         "metrics": {"tasks": "1", "checkpoints": "1"},
         "graph": None,

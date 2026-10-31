@@ -1164,6 +1164,7 @@ body,
   color: var(--color-text-muted);
 }
 
+/* Card-sized status dot; colour comes from the shared sess-row__dot--<tone>. */
 .kb-card__dot {
   display: inline-block;
   flex-shrink: 0;
@@ -1174,23 +1175,6 @@ body,
   border-radius: 50%;
   background: var(--color-text-muted);
   box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.08);
-}
-
-/* The dot encodes the store's connection status. */
-.kb-card__dot--ok {
-  background: var(--color-success);
-}
-
-.kb-card__dot--warning {
-  background: var(--color-warning);
-}
-
-.kb-card__dot--error {
-  background: var(--color-error);
-}
-
-.kb-card__dot--muted {
-  background: var(--color-text-muted);
 }
 
 .app-shell__content {
@@ -3850,6 +3834,8 @@ body,
   border-color: color-mix(in oklab, var(--color-accent) 34%, var(--color-border));
 }
 
+/* Geometry only: the colour comes from the shared sess-row__dot--<tone>.
+   No background here -- this rule sits after the tone rules and would win. */
 .repo-source-row__mark {
   grid-row: 1 / span 2;
   grid-column: 1;
@@ -3857,28 +3843,7 @@ body,
   height: 8px;
   margin-top: 5px;
   border-radius: 50%;
-  background: var(--color-text-muted);
-  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.08);
-}
-
-.repo-source-row__mark--ok {
-  background: var(--color-success);
-  box-shadow: 0 0 0 3px rgba(76, 199, 144, 0.12);
-}
-
-.repo-source-row__mark--muted {
-  background: var(--color-text-muted);
-  box-shadow: none;
-}
-
-.repo-source-row__mark--warning {
-  background: var(--color-warning);
-  box-shadow: 0 0 0 3px rgba(247, 177, 70, 0.14);
-}
-
-.repo-source-row__mark--error {
-  background: var(--color-error);
-  box-shadow: 0 0 0 3px rgba(224, 82, 74, 0.14);
+  box-sizing: border-box;
 }
 
 .repo-source-row__age {
@@ -4184,18 +4149,6 @@ body,
   opacity: 0.82;
 }
 
-.tools-status-dot--connected {
-  background: var(--color-success);
-}
-
-.tools-status-dot--disabled {
-  background: var(--color-text-muted);
-}
-
-.tools-status-dot--error {
-  background: var(--color-error);
-}
-
 .tools-server-row--disabled,
 .tools-server-row--error {
   opacity: 0.82;
@@ -4377,6 +4330,14 @@ body,
 .tools-tool-list {
   display: grid;
   gap: 6px;
+}
+
+/* CappedScrollList (components/layout/CappedScrollList.jsx) sets data-capped
+   and a max-height measured from the rendered rows when rows overflow. */
+.capped-scroll-list[data-capped] {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
 }
 
 .tools-tool-row {
@@ -4873,22 +4834,13 @@ body,
   grid-column: 1 / span 2;
 }
 
-.agents-agent-row__status {
-  background: var(--color-text-muted);
-}
-
-.agents-agent-row__status--paused {
-  background: var(--color-warning);
-}
-
-.agents-agent-row__status--draft {
-  background: var(--color-text-muted);
-}
-.agents-agent-row__status--disabled {
-  background: var(--color-text-muted);
-}
-
+/* Long names shrink and ellipsize instead of pushing the row wider (the shared
+   .sess-row__agent never shrinks). */
 .agents-agent-row__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-weight: 700;
   color: var(--color-text-primary);
 }
@@ -4932,23 +4884,12 @@ body,
   min-height: 1.35em;
 }
 
-.schedule-pane-row__status {
-  background: var(--color-text-muted);
-}
-
-.schedule-pane-row__status--active {
-  background: var(--color-success);
-}
-
-.schedule-pane-row__status--paused {
-  background: var(--color-warning);
-}
-
-.schedule-pane-row__status--failed {
-  background: var(--color-error);
-}
-
+/* Long schedule names shrink and ellipsize instead of pushing the row wider. */
 .schedule-pane-row__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--color-text-secondary);
   font-weight: 700;
 }
@@ -5305,56 +5246,10 @@ body,
   border: 0;
 }
 
-.agents-status-pill--running {
-  color: var(--color-text-muted);
-  background: var(--color-bg-tertiary);
-}
-
 .agents-chip--ok {
   color: var(--color-success);
   background: color-mix(in oklab, var(--color-success) 13%, transparent);
   border-color: transparent;
-}
-
-.agents-status-pill--paused {
-  color: var(--color-warning);
-  background: color-mix(in oklab, var(--color-warning) 13%, transparent);
-  border-color: transparent;
-}
-
-.agents-status-pill--active {
-  color: var(--color-success);
-  background: color-mix(in oklab, var(--color-success) 13%, transparent);
-  border-color: transparent;
-}
-
-.agents-status-pill--failed {
-  color: var(--color-error);
-  background: color-mix(in oklab, var(--color-error) 13%, transparent);
-  border-color: transparent;
-}
-
-.agents-status-pill--executing,
-.agents-status-pill--waiting {
-  color: var(--color-info);
-  background: color-mix(in oklab, var(--color-info) 13%, transparent);
-  border-color: transparent;
-}
-
-.agents-status-pill--starting,
-.agents-status-pill--stopping {
-  color: var(--color-warning);
-  background: color-mix(in oklab, var(--color-warning) 13%, transparent);
-  border-color: transparent;
-}
-
-.agents-status-pill--stopped {
-  color: var(--color-text-muted);
-  background: var(--color-bg-tertiary);
-}
-.agents-status-pill--disabled {
-  color: var(--color-text-muted);
-  background: var(--color-bg-tertiary);
 }
 
 .agents-status-pill--draft,
@@ -5463,17 +5358,38 @@ body,
   font-size: 12px;
 }
 
-.agents-skill-card__time {
+.agents-run-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+}
+
+.agents-run-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.agents-run-row + .agents-run-row {
+  border-top: 1px solid var(--color-border);
+}
+
+.agents-run-row__time {
+  color: var(--color-text-secondary);
+}
+
+.agents-run-row__age {
+  margin-left: auto;
   color: var(--color-text-muted);
   font-size: 11px;
   white-space: nowrap;
-}
-
-.agents-task-meta {
-  margin: 8px 0 0;
-  color: var(--color-text-muted);
-  font-size: 11px;
-  word-break: break-all;
 }
 
 .agents-metrics {

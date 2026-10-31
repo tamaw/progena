@@ -22,33 +22,11 @@ export function formatPluginVersion(version) {
   return `v${version}`;
 }
 
-// A plugin row's status dot. 'ring' (hollow, muted) means "not installed" --
-// the only state with a hollow dot. 'installed' is a solid gray dot: a
-// steady state with nothing to act on, but visually present the same way an
-// error/pending/update dot is (just neutral-colored).
-export function pluginRowStatus(entry) {
-  if (!entry) {
-    return 'ring';
-  }
-  if (entry.status === 'error') {
-    return 'error';
-  }
-  if (entry.status === 'pending') {
-    return 'pending';
-  }
-  if (entry.available_version) {
-    return 'update';
-  }
-  return 'installed';
-}
-
-// Detail-header status badge tone/label, sharing the exact same status
-// precedence as pluginRowStatus (error > pending > update > steady state) so
-// the header dot never contradicts the row dot. Only "not installed" gets
-// the hollow ring (tone "idle"); "installed, up to date" gets a solid muted
-// dot. Green is reserved for "something needs your attention" (an update),
-// not for "installed and fine."
-export function pluginDetailStatus(entry) {
+// Row dot and detail-header status share this one mapping, so they can never
+// disagree. Precedence: error > pending > update > installed. Only "not
+// installed" gets the hollow ring; installing and an available update are
+// green (work / something new); installed and up to date is solid grey.
+export function pluginStatus(entry) {
   if (!entry) {
     return { tone: 'idle', label: 'Not installed' };
   }
@@ -56,7 +34,7 @@ export function pluginDetailStatus(entry) {
     return { tone: 'error', label: 'Install failed' };
   }
   if (entry.status === 'pending') {
-    return { tone: 'warning', label: 'Installing…' };
+    return { tone: 'ok', label: 'Installing…' };
   }
   if (entry.available_version) {
     return { tone: 'ok', label: 'Update available' };
