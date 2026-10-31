@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Knowledge status colours**: Indexed bases show the quiet hollow grey ring, Indexing is green (new data arriving), Failed stays red, and a missing or unrecognised status is an amber "Unknown" in its own group. The backend snapshot reports `unknown` instead of claiming `indexing` when no index record exists.
+- **Agents list status and recent runs**: list-row status dots now use the same colours as the detail-header status (failed red, paused/starting/stopping amber, executing/waiting blue, active green). A2A Recent tasks and ACP Recent runs show one compact row per run—status, local time and age—instead of prompts and output text; the backend no longer sends request/prompt or summary text in those per-agent task lists.
 - **Resumed async task cards**: check/list observations of running tasks now emit correlated progress updates, clearing stale “Awaiting approval” state after a resume.
 - **Chat constant ownership**: UI request source metadata uses the canonical backend HTTP contract, and live cancellation rendering reuses the frontend cancellation suffix constant without changing stored values or adding duplicate suffixes.
 - **Contract-only frontend deployments**: shared event vocabulary and imported routine-schema changes now trigger a frontend image rebuild.
