@@ -151,7 +151,7 @@ class ConversationUsageTotals(BaseModel):
     reasoning_token_message_count: int = 0
 
 
-InterruptionReason = Literal["user_cancelled", "new_message"]
+InterruptionReason = Literal["user_cancelled"]
 
 
 class ChatMessage(BaseModel):
@@ -591,16 +591,6 @@ def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:
     return result
 
 
-CANCELLED_SUFFIX = " [Cancelled]"
-
-
-def _without_cancelled_sentinel(content: str) -> str:
-    """Drop only the exact suffix emitted by the retired history projection."""
-    if content == CANCELLED_SUFFIX.strip():
-        return ""
-    return content.removesuffix(CANCELLED_SUFFIX)
-
-
 def _chat_message_from_raw(
     raw: Any,
     index: int,
@@ -623,7 +613,6 @@ def _chat_message_from_raw(
     )
     interruption_reason: InterruptionReason | None = None
     if role == "assistant" and response_status == "cancelled":
-        content = _without_cancelled_sentinel(content)
         interruption_reason = "user_cancelled"
     reasoning_text = extract_reasoning_trace(raw) or ""
     if not content and role == "assistant":

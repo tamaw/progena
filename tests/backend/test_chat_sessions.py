@@ -439,14 +439,14 @@ class TestGetChatDetail:
                     {
                         "id": "a1",
                         "type": "ai",
-                        "content": "Partial answer. [Cancelled]",
+                        "content": "Partial answer.",
                         "response_metadata": {"status": "cancelled"},
                     },
                     {"id": "u2", "type": "human", "content": "try again"},
                     {
                         "id": "a2",
                         "type": "ai",
-                        "content": "[Cancelled]",
+                        "content": "",
                         "response_metadata": {"status": "cancelled"},
                     },
                 ],

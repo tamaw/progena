@@ -238,7 +238,6 @@ empty cancelled turns. The frontend renders this as a terminal timeline disclosu
 rather than appending cancellation prose. Partial output and native cancelled
 status are preserved.
 
-
 Reasoning-only checkpoint tails remain visible even without tool calls or answer
 text. They retain reported aggregate output but do not invent final-answer usage
 or successful completion. Unknown response status does not erase a known final

@@ -220,29 +220,3 @@ export function appendStreamEvent(events, nextEvent) {
   }
   return next;
 }
-
-// Finalize an assistant placeholder that is being superseded (new send / new
-// chat) so its spinner clears. Returns null to drop an empty placeholder.
-export function finalizeSupersededAssistant(message) {
-  if (!message?.isStreaming) {
-    return message;
-  }
-
-  const content = typeof message.content === 'string' ? message.content : '';
-  const reasoningText = typeof message.reasoningText === 'string' ? message.reasoningText : '';
-  const streamEvents = Array.isArray(message.streamEvents) ? message.streamEvents : [];
-  const hasVisibleOutput =
-    content.trim().length > 0
-    || reasoningText.trim().length > 0
-    || streamEvents.length > 0;
-
-  if (!hasVisibleOutput) {
-    return null;
-  }
-
-  return {
-    ...message,
-    isStreaming: false,
-    interruptionReason: 'user_cancelled',
-  };
-}

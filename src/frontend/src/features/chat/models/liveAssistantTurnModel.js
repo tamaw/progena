@@ -1091,8 +1091,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage, int
     turn.content.trim().length > 0
     || hasVisibleTimelineOutput(turn.timelineItems)
   );
-  const preservesEmptyInterruptedTurn = resolvedInterruptionReason === 'user_cancelled'
-    || resolvedInterruptionReason === 'new_message';
+  const preservesEmptyInterruptedTurn = resolvedInterruptionReason === 'user_cancelled';
 
   if (responseStatus === 'cancelled' && !hasVisibleOutput && !preservesEmptyInterruptedTurn) {
     return null;
@@ -1237,7 +1236,6 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage, int
     ];
     return toCommittedAssistantMessage(finalTurn);
   }
-
 
   // Ensure the timeline items reflect the final state.
   finalTurn.timelineItems = finalTurn.timelineItems.map((item) => {

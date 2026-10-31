@@ -71,15 +71,14 @@ async function renderMessage(value, props = {}) {
 }
 
 describe('interruption markers', () => {
-  it('renders the cancellation marker after partial content without its legacy suffix', async () => {
-    await renderMessage(message([answer('Partial [Cancelled]', 1)], {
+  it('renders the cancellation marker after partial content', async () => {
+    await renderMessage(message([answer('Partial', 1)], {
       responseStatus: 'cancelled',
       interruptionReason: 'user_cancelled',
     }));
 
     expect(host.textContent).toContain('Partial');
     expect(host.textContent).toContain('Cancelled by you.');
-    expect(host.textContent).not.toContain('[Cancelled]');
     expect(host.querySelector('.message-wrapper.assistant')?.classList.contains('entry--chain-item')).toBe(true);
     expect(host.querySelector('article[aria-label="Interrupted"]')?.classList.contains('entry--chain-end')).toBe(true);
   });

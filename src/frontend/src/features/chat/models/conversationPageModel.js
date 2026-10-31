@@ -2,7 +2,7 @@ import { PERSISTED_CATEGORIES, categoryForEventType } from './streamFilters';
 import { appendStreamEvent, normalizeStreamEvent } from './streamEventsModel';
 import { buildDefaultAssistantTimeline } from './liveAssistantTurnModel';
 import { normalizeContextUsage } from './contextWindowModel';
-import { normalizeCancelledContent } from './cancelledContentModel';
+import { normalizeInterruptionReason } from './interruptionReasonModel';
 
 const WEEKDAY_WELCOME_MESSAGES = [
   'Sunday reset 🌿',
@@ -78,15 +78,6 @@ function normalizeResponseStatus(value) {
   if (value === 'incomplete') return 'interrupted';
   return typeof value === 'string' && RESPONSE_STATUSES.has(value) ? value : 'unknown';
 }
-
-const INTERRUPTION_REASONS = new Set(['user_cancelled', 'new_message']);
-
-function normalizeInterruptionReason(value) {
-  return typeof value === 'string' && INTERRUPTION_REASONS.has(value) ? value : null;
-}
-
-
-
 
 function normalizeOutputTokenCount(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -173,11 +164,6 @@ export function normalizeStoredMessage(message, index, { preserveTimeline = fals
     }
   }
   const responseStatus = normalizeResponseStatus(message.responseStatus);
-  if (role === 'assistant') {
-    content = normalizeCancelledContent(content, responseStatus);
-  }
-
-
   const messageWithoutTimelineItems = { ...message };
   delete messageWithoutTimelineItems.timelineItems;
 

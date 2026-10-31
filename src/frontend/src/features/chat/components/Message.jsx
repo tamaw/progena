@@ -13,9 +13,7 @@ import MessageActions from './MessageActions';
 import { appendStreamingCursor } from '../models/messageRenderUtils';
 import { renderSafeMarkdown } from '../../../lib/safeMarkdown';
 import { filterTimelineItems } from '../models/streamFilters';
-import { normalizeCancelledContent } from '../models/cancelledContentModel';
 import InterruptedMarker from './InterruptedMarker';
-
 
 function buildSyntheticReasoningEvent(
   reasoningText,
@@ -132,17 +130,12 @@ function MessageView({
   );
 
   const isAssistant = role === 'assistant';
-  const assistantTimeline = useMemo(() => {
-    if (!isAssistant) return [];
-    const source = Array.isArray(timelineItems) && timelineItems.length > 0
-      ? timelineItems
-      : buildDefaultAssistantTimeline({ ...message, content: normalizeCancelledContent(content, responseStatus) });
-    return source.map((item) => (
-      item.kind === 'assistant_message'
-        ? { ...item, content: normalizeCancelledContent(item.content, responseStatus) }
-        : item
-    ));
-  }, [content, isAssistant, message, responseStatus, timelineItems]);
+  const assistantTimeline = useMemo(() => (
+    isAssistant
+      ? (Array.isArray(timelineItems) && timelineItems.length > 0
+        ? timelineItems : buildDefaultAssistantTimeline(message))
+      : []
+  ), [isAssistant, message, timelineItems]);
 
   const formattedContent = useMemo(() => {
     if (!content || isAssistant) return '';

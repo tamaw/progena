@@ -57,7 +57,7 @@ describe('normalizeStoredMessage', () => {
     const restored = normalizeStoredMessage({
       id: 'stored-cancelled',
       role: 'assistant',
-      content: '[Cancelled]',
+      content: '',
       timestamp: NOW,
       responseStatus: 'cancelled',
       interruptionReason: 'user_cancelled',
@@ -67,7 +67,6 @@ describe('normalizeStoredMessage', () => {
       responseStatus: 'cancelled',
       interruptionReason: 'user_cancelled',
     });
-    expect(restored.content).toBe('');
   });
 
   it('invalidates old serialized chunk counters, including denormalized timelines', () => {

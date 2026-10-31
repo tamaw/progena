@@ -121,7 +121,7 @@ describe('normalizeBackendChatMessage', () => {
     const message = normalizeBackendChatMessage({
       id: 'm-cancelled',
       role: 'assistant',
-      content: 'Partial [Cancelled]',
+      content: 'Partial',
       response_status: 'cancelled',
       interruption_reason: 'user_cancelled',
     }, 0);
