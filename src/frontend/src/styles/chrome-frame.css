@@ -1164,6 +1164,7 @@ body,
   color: var(--color-text-muted);
 }
 
+/* Card-sized status dot; colour comes from the shared sess-row__dot--<tone>. */
 .kb-card__dot {
   display: inline-block;
   flex-shrink: 0;
@@ -1174,25 +1175,6 @@ body,
   border-radius: 50%;
   background: var(--color-text-muted);
   box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.08);
-}
-
-/* The dot encodes the base's search-index status (see KB_STATUS_META). */
-.kb-card__dot--idle {
-  background: transparent;
-  border: 1.5px solid var(--color-text-muted);
-  box-sizing: border-box;
-}
-
-.kb-card__dot--ok {
-  background: var(--color-success);
-}
-
-.kb-card__dot--warning {
-  background: var(--color-warning);
-}
-
-.kb-card__dot--error {
-  background: var(--color-error);
 }
 
 .app-shell__content {
@@ -4186,18 +4168,6 @@ body,
   opacity: 0.82;
 }
 
-.tools-status-dot--connected {
-  background: var(--color-success);
-}
-
-.tools-status-dot--disabled {
-  background: var(--color-text-muted);
-}
-
-.tools-status-dot--error {
-  background: var(--color-error);
-}
-
 .tools-server-row--disabled,
 .tools-server-row--error {
   opacity: 0.82;
@@ -4875,30 +4845,6 @@ body,
   grid-column: 1 / span 2;
 }
 
-.agents-agent-row__status {
-  background: var(--color-text-muted);
-}
-
-/* Row dot tones mirror the detail-header .agents-status-pill--<status> colours. */
-.agents-agent-row__status--active {
-  background: var(--color-success);
-}
-
-.agents-agent-row__status--failed {
-  background: var(--color-error);
-}
-
-.agents-agent-row__status--executing,
-.agents-agent-row__status--waiting {
-  background: var(--color-info);
-}
-
-.agents-agent-row__status--paused,
-.agents-agent-row__status--starting,
-.agents-agent-row__status--stopping {
-  background: var(--color-warning);
-}
-
 .agents-agent-row__name {
   font-weight: 700;
   color: var(--color-text-primary);
@@ -4941,22 +4887,6 @@ body,
   /* Reserve the second line so the card height stays stable as the cadence
      resolves — otherwise an empty/late cadence collapses the row to one line. */
   min-height: 1.35em;
-}
-
-.schedule-pane-row__status {
-  background: var(--color-text-muted);
-}
-
-.schedule-pane-row__status--active {
-  background: var(--color-success);
-}
-
-.schedule-pane-row__status--paused {
-  background: var(--color-warning);
-}
-
-.schedule-pane-row__status--failed {
-  background: var(--color-error);
 }
 
 .schedule-pane-row__name {
@@ -5316,56 +5246,10 @@ body,
   border: 0;
 }
 
-.agents-status-pill--running {
-  color: var(--color-text-muted);
-  background: var(--color-bg-tertiary);
-}
-
 .agents-chip--ok {
   color: var(--color-success);
   background: color-mix(in oklab, var(--color-success) 13%, transparent);
   border-color: transparent;
-}
-
-.agents-status-pill--paused {
-  color: var(--color-warning);
-  background: color-mix(in oklab, var(--color-warning) 13%, transparent);
-  border-color: transparent;
-}
-
-.agents-status-pill--active {
-  color: var(--color-success);
-  background: color-mix(in oklab, var(--color-success) 13%, transparent);
-  border-color: transparent;
-}
-
-.agents-status-pill--failed {
-  color: var(--color-error);
-  background: color-mix(in oklab, var(--color-error) 13%, transparent);
-  border-color: transparent;
-}
-
-.agents-status-pill--executing,
-.agents-status-pill--waiting {
-  color: var(--color-info);
-  background: color-mix(in oklab, var(--color-info) 13%, transparent);
-  border-color: transparent;
-}
-
-.agents-status-pill--starting,
-.agents-status-pill--stopping {
-  color: var(--color-warning);
-  background: color-mix(in oklab, var(--color-warning) 13%, transparent);
-  border-color: transparent;
-}
-
-.agents-status-pill--stopped {
-  color: var(--color-text-muted);
-  background: var(--color-bg-tertiary);
-}
-.agents-status-pill--disabled {
-  color: var(--color-text-muted);
-  background: var(--color-bg-tertiary);
 }
 
 .agents-status-pill--draft,

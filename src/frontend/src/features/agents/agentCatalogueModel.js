@@ -46,6 +46,32 @@ function recentSections(items) {
     .filter((section) => section.items.length);
 }
 
+// Registry AgentStatus values (src/progena/registry/models.py) -> shared status
+// tone. Running is the healthy resting state; work in flight is green.
+const AGENT_STATUS_TONE = {
+  running: 'idle',
+  starting: 'ok',
+  executing: 'ok',
+  stopping: 'ok',
+  waiting: 'info',
+  failed: 'error',
+  stopped: 'muted',
+};
+
+/**
+ * List-dot and header status for an agent; null for object manifests, which
+ * have no runtime status. Unrecognised or missing values are Unknown (amber).
+ */
+export function agentStatusPresentation(agent) {
+  if (agent.kind === 'object') return null;
+  if (agent.enabled === false) return { label: 'Disabled', tone: 'muted' };
+  const status = String(agent.status || '').toLowerCase();
+  const tone = AGENT_STATUS_TONE[status];
+  return tone
+    ? { label: status.replace(/^./, (char) => char.toUpperCase()), tone }
+    : { label: 'Unknown', tone: 'warning' };
+}
+
 /**
  * Applies the Agents page's domain rules: object manifests have no run state,
  * so status filters only apply to protocol-backed agents.

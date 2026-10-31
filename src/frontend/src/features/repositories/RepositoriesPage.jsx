@@ -45,12 +45,14 @@ function scanStatus(scan) {
   return 'clean';
 }
 
+// `pending` is a missing scan or checkout ("Not yet cloned"), not a scan in
+// progress, so it is amber rather than a working colour.
 const REPO_STATUS_TONE = {
-  clean: 'muted',
+  clean: 'idle',
   upstream: 'ok',
   dirty: 'warning',
   error: 'error',
-  pending: 'muted',
+  pending: 'warning',
 };
 
 const REPO_STATUS_LABEL = {

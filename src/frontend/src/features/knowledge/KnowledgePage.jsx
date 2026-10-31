@@ -91,7 +91,7 @@ function KnowledgeCard({ base, selected, onSelect }) {
     <article className={`task-card ${selected ? 'is-selected' : ''}`}>
       <button type="button" className="task-card__button" onClick={() => onSelect(base.id)}>
         <div className="task-card__title kb-card__title">
-          <span className={`kb-card__dot kb-card__dot--${meta.tone}`} title={meta.label} aria-label={meta.label} />
+          <span className={`kb-card__dot sess-row__dot--${meta.tone}`} title={meta.label} aria-label={meta.label} />
           <span className="kb-card__name">{base.name}</span>
         </div>
         <div className="task-card__meta">

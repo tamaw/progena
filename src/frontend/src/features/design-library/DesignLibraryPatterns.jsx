@@ -241,9 +241,9 @@ function FeedbackPatterns() {
         </article>
         <article className="dlp-card">
           <div className="dlp-card__head"><h3>Status tones</h3><span className="dlp-pattern-tag">shared component</span></div>
-          <p className="dlp-note">Idle (hollow ring) is the quiet default; filled colour is for states that need the user. List rows use the matching <code>sess-row__dot--&lt;tone&gt;</code>.</p>
+          <p className="dlp-note">One meaning per tone across every page. List rows use the matching <code>sess-row__dot--&lt;tone&gt;</code>, so a row dot always matches its header status.</p>
           <div className="dlp-button-row">
-            {[['idle', 'Available'], ['muted', 'Installed'], ['ok', 'Update available'], ['info', 'Updated'], ['warning', 'Installing…'], ['error', 'Error']].map(([tone, label]) => (
+            {[['idle', 'Healthy, at rest'], ['ok', 'Working / new data'], ['info', 'Waiting'], ['warning', 'Unknown / degraded'], ['error', 'Failed'], ['muted', 'Off by choice']].map(([tone, label]) => (
               <DetailStatus key={tone} tone={tone}>{label}</DetailStatus>
             ))}
           </div>

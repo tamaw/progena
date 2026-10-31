@@ -103,11 +103,11 @@ function ChannelRow({ channel, selected, onSelect }) {
   return (
     <button
       type="button"
-      className={`sess-row agents-agent-row agents-agent-row--${channel.status || 'disconnected'} ${selected ? 'is-selected' : ''}`}
+      className={`sess-row agents-agent-row ${selected ? 'is-selected' : ''}`}
       onClick={() => onSelect(channel.id)}
     >
       <span className="sess-row__top">
-        <span className={`sess-row__dot agents-agent-row__status agents-agent-row__status--${status.dotClass}`} />
+        <span className={`sess-row__dot sess-row__dot--${status.tone}`} title={status.label} />
         <span className="sess-row__agent agents-agent-row__name">{channel.name}</span>
         <span className="sess-row__project">{channel.handle || '—'}</span>
       </span>

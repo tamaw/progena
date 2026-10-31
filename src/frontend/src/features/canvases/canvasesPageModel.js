@@ -21,7 +21,8 @@ export function canvasState(canvas) {
 }
 
 export const CANVAS_STATE_LABEL = { available: 'Available', updated: 'Updated', error: 'Error' };
-export const CANVAS_STATE_TONE = { available: 'idle', updated: 'info', error: 'error' };
+// Updated: the canvas changed since its last reported error -- new data, green.
+export const CANVAS_STATE_TONE = { available: 'idle', updated: 'ok', error: 'error' };
 
 /** Why a canvas is in `error`, one message per problem, for the alert under the header. */
 export function canvasProblems(canvas) {

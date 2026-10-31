@@ -343,7 +343,9 @@ export function DetailTabs({ tabs = [], activeTab, onTabChange, className = '', 
 }
 
 // Status indicator for a detail-header meta row: a coloured dot + coloured
-// label, no surrounding bubble. `tone` picks the colour (ok/info/error/muted).
+// label, no surrounding bubble. `tone`: idle (healthy, at rest; hollow ring),
+// ok (working / new data), info (waiting), warning (unknown / degraded),
+// error (failed), muted (off by choice). List rows use sess-row__dot--<tone>.
 export function DetailStatus({ tone = 'muted', children, className = '' }) {
   return (
     <span className={`detail-status detail-status--${tone} ${className}`.trim()}>

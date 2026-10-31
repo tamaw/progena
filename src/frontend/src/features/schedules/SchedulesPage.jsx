@@ -197,6 +197,18 @@ function statusOf(schedule) {
   return schedule.paused ? 'paused' : 'active';
 }
 
+// List-dot and header status. The lifecycle (statusOf) drives filters and
+// grouping; the scheduler's `last_run_status` (src/progena/schedules/dispatch.py:
+// running while queued work is in flight, error when the last run failed)
+// overrides it so a running or failed schedule is visible at a glance.
+function statusPresentation(schedule) {
+  if (schedule.last_run_status === 'running') return { label: 'Running', tone: 'ok' };
+  if (schedule.last_run_status === 'error') return { label: 'Failed', tone: 'error' };
+  const status = statusOf(schedule);
+  if (status === 'paused') return { label: 'Paused', tone: 'muted' };
+  return { label: status === 'completed' ? 'Completed' : 'Active', tone: 'idle' };
+}
+
 function formatLogTime(value) {
   const date = parseDate(value);
   if (!date) return '';
@@ -254,14 +266,15 @@ function compareSchedules(a, b, sortMode) {
 
 function ScheduleRow({ schedule, selected, onSelect, timeZone }) {
   const status = statusOf(schedule);
+  const presentation = statusPresentation(schedule);
   return (
     <button
       type="button"
-      className={`sess-row schedule-pane-row schedule-pane-row--${status} ${selected ? 'is-selected' : ''}`}
+      className={`sess-row schedule-pane-row ${selected ? 'is-selected' : ''}`}
       onClick={() => onSelect(schedule.id)}
     >
       <span className="sess-row__top">
-        <span className={`sess-row__dot schedule-pane-row__status schedule-pane-row__status--${status}`} />
+        <span className={`sess-row__dot sess-row__dot--${presentation.tone}`} title={presentation.label} />
         <span className="sess-row__agent schedule-pane-row__name">{schedule.name || 'Untitled schedule'}</span>
       </span>
       <span className="sess-row__age">
@@ -681,11 +694,8 @@ function SchedulesPage() {
                 />
               )}
               meta={[
-                <DetailStatus
-                  key="status"
-                  tone={statusOf(selectedSchedule) === 'active' ? 'ok' : statusOf(selectedSchedule) === 'paused' ? 'warning' : 'muted'}
-                >
-                  {statusOf(selectedSchedule)}
+                <DetailStatus key="status" tone={statusPresentation(selectedSchedule).tone}>
+                  {statusPresentation(selectedSchedule).label}
                 </DetailStatus>,
                 <span key="type" className="muted">{scheduleKind(selectedSchedule)}</span>,
                 <span key="cadence" className="muted">{cadenceFor(selectedSchedule, selectedScheduleTimezone)}</span>,
