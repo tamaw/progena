@@ -163,14 +163,17 @@ document events (see [CANVASES.md](CANVASES.md)).
 `GET /api/ui/model-profiles`, `PATCH /api/ui/model-profiles/{name}`, and
 `DELETE /api/ui/model-profiles/{name}` publish `profiles.snapshot` with
 `{profiles, request_id}` before returning the standard `202` acknowledgement.
-Each public entry contains `name`, `provider`, `deployment`, supported reasoning
-overrides, and optional `pricing`; unrelated private fields are never published.
-PATCH accepts deployment, `reasoning_enabled`, `reasoning_effort`,
-`reasoning_summary`, and `pricing`. A null optional field removes its override;
-deployment remains required. Pricing is an object with a three-letter currency
-and nonnegative finite decimal-string `input_per_million`,
-`cached_input_per_million`, and `output_per_million` rates. Zero is valid;
-absent pricing means unpriced, and PATCH `pricing: null` removes all rates.
+Each public entry contains `name`, `provider_id`, `deployment`, optional
+`description`, supported reasoning overrides, and optional pricing; unrelated
+private fields are never published. Every profile field is top-level (no nested
+objects), so each maps to one Profiles form field. PATCH accepts `description`
+(trimmed, at most 280 characters), `provider_id`, `deployment`, `context_window`,
+`cache_ttl_seconds`, `reasoning_enabled`, `reasoning_effort`,
+`reasoning_summary`, `currency`, `input_per_million`,
+`cached_input_per_million`, and `output_per_million`. A null optional field
+removes it; deployment remains required. Pricing is a three-letter `currency`
+plus nonnegative finite decimal-string rates, all four present or none. Zero is
+valid; absent pricing means unpriced. A nested `pricing` object is rejected.
 Insights applies current configured rates to retained checkpoint usage, with
 separate currency totals and explicit cache/attribution coverage. See
 [BACKEND.md](BACKEND.md#insights-and-estimated-model-cost).

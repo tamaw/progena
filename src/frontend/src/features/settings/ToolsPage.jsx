@@ -16,6 +16,7 @@ import {
   PaneListRows,
 } from '../../components/layout/PaneList';
 import PageShell from '../../components/layout/PageShell';
+import CappedScrollList from '../../components/layout/CappedScrollList';
 import DetailPane from '../../components/layout/DetailPane';
 import DetailHeader, {
   DeleteActionIcon,
@@ -42,33 +43,39 @@ import { selectRealtime } from '../../realtime/realtimeSlice';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { createUuid } from '../../lib/uuid';
 import { selectAgentName } from './state/preferences';
-const SERVER_FILTERS = ['All', 'Connected', 'Disabled', 'Errors'];
+const SERVER_FILTERS = ['All', 'Available', 'Syncing', 'Disabled', 'Errors'];
 const SERVER_SORTS = ['Status', 'Name', 'Transport'];
 
 const serverIdOf = (server) => server.id;
 
-// Derive a coarse status from the live MCP widget. Disabled wins (the runtime
-// won't connect a disabled server); otherwise an error-ish status surfaces, and
-// everything else counts as connected.
+// MCP widget statuses from the backend (src/backend/monitoring/state.py):
+// `disabled`; `stopped`/`running` for an enabled server (available whether or
+// not the runtime is live); `discovering` while an enabled server has no
+// discovery outcome yet; `error` when discovery failed. Anything else is
+// Unknown rather than silently healthy.
+const SERVER_STATUS = {
+  syncing: { label: 'Syncing tools', tone: 'ok', group: 'Syncing' },
+  available: { label: 'Available', tone: 'idle', group: 'Available' },
+  error: { label: 'Error', tone: 'error', group: 'Needs attention' },
+  unknown: { label: 'Unknown', tone: 'warning', group: 'Needs attention' },
+  disabled: { label: 'Disabled', tone: 'muted', group: 'Disabled' },
+};
+
 function statusOf(server) {
   if (server.enabled === false) return 'disabled';
   const raw = String(server.status || '').toLowerCase();
-  if (raw.includes('error') || raw.includes('fail') || raw.includes('unhealthy')) return 'error';
-  // An enabled server counts as connected/available even if the runtime reports
-  // it as "stopped" (not actively connected in this read path).
-  return 'connected';
+  if (raw === 'error') return 'error';
+  if (raw === 'discovering') return 'syncing';
+  if (raw === 'running' || raw === 'stopped') return 'available';
+  return 'unknown';
 }
 
 function statusLabel(status) {
-  if (status === 'connected') return 'Connected';
-  if (status === 'disabled') return 'Disabled';
-  return 'Error';
+  return SERVER_STATUS[status].label;
 }
 
 function statusTone(status) {
-  if (status === 'connected') return 'ok';
-  if (status === 'error') return 'error';
-  return 'muted';
+  return SERVER_STATUS[status].tone;
 }
 
 function serverMatchesFilter(server, filter) {
@@ -78,7 +85,7 @@ function serverMatchesFilter(server, filter) {
   return status === filter.toLowerCase();
 }
 
-const STATUS_RANK = { connected: 0, error: 1, disabled: 2 };
+const STATUS_RANK = { syncing: 0, available: 1, error: 2, unknown: 3, disabled: 4 };
 
 function compareServers(a, b, sortMode) {
   if (sortMode === 'Name') {
@@ -94,8 +101,7 @@ function compareServers(a, b, sortMode) {
   return String(a.name || '').localeCompare(String(b.name || ''));
 }
 
-const STATUS_GROUP = { connected: 'Connected', disabled: 'Disabled', error: 'Needs attention' };
-const GROUP_ORDER = ['Connected', 'Needs attention', 'Disabled'];
+const GROUP_ORDER = ['Syncing', 'Available', 'Needs attention', 'Disabled'];
 
 function ToolIcon() {
   return (
@@ -195,9 +201,9 @@ export default function ToolsPage() {
   }, [servers, activeFilter, query, sortMode]);
 
   const groupedServers = useMemo(() => {
-    const groups = { Connected: [], 'Needs attention': [], Disabled: [] };
+    const groups = Object.fromEntries(GROUP_ORDER.map((group) => [group, []]));
     for (const server of visibleServers) {
-      groups[STATUS_GROUP[statusOf(server)]].push(server);
+      groups[SERVER_STATUS[statusOf(server)].group].push(server);
     }
     return groups;
   }, [visibleServers]);
@@ -244,7 +250,7 @@ export default function ToolsPage() {
   useEntityUrlSync('/tools', selectedServer?.id, selectedServer?.name);
 
   const totals = useMemo(() => ({
-    connected: servers.filter((server) => statusOf(server) === 'connected').length,
+    available: servers.filter((server) => statusOf(server) === 'available').length,
     disabled: servers.filter((server) => statusOf(server) === 'disabled').length,
     errors: servers.filter((server) => statusOf(server) === 'error').length,
   }), [servers]);
@@ -366,7 +372,6 @@ export default function ToolsPage() {
   const isDetailLoading = Boolean(selectedServer) && !serverDetail && serverDetailRequest.loading;
   const serverTools = Array.isArray(serverDetail?.data?.tools) ? serverDetail.data.tools : [];
   const enabledToolCount = serverTools.filter((tool) => tool.enabled !== false).length;
-  const selectedLogs = Array.isArray(serverDetail?.data?.logs) ? serverDetail.data.logs.slice(0, 5) : [];
 
   return (
     <PageShell className="tools-page">
@@ -408,7 +413,7 @@ export default function ToolsPage() {
                   onClick={() => navigate(buildEntityPath('/tools', server.id, server.name), { replace: true })}
                 >
                   <span className="sess-row__top">
-                    <span className={`sess-row__dot tools-status-dot--${status}`} />
+                    <span className={`sess-row__dot sess-row__dot--${statusTone(status)}`} />
                     <span className="sess-row__agent tools-pane-row__name">{server.name}</span>
                   </span>
                   <span className="sess-row__title">{server.description || server.url || '—'}</span>
@@ -419,7 +424,7 @@ export default function ToolsPage() {
         )}
 
         <PaneListFooter>
-          <span><span className="num">{totals.connected}</span> connected</span>
+          <span><span className="num">{totals.available}</span> available</span>
           <span><span className="num">{totals.disabled}</span> disabled</span>
           <span><span className="num">{totals.errors}</span> errors</span>
         </PaneListFooter>
@@ -548,7 +553,7 @@ export default function ToolsPage() {
                     Tools {serverTools.length ? <span>{enabledToolCount}/{serverTools.length} enabled</span> : null}
                   </h2>
                 </div>
-                <div className="tools-tool-list">
+                <CappedScrollList className="tools-tool-list">
                   {serverTools.length ? serverTools.map((tool, index) => (
                     <ToolRow
                       key={tool.name || index}
@@ -564,25 +569,7 @@ export default function ToolsPage() {
                         ? 'Enable the server to discover its tools.'
                         : `No tools discovered yet. ${agentName} lists them on its next MCP refresh.`)}</PaneEmptyState>
                   )}
-                </div>
-              </section>
-
-              <section className="tools-section">
-                <h2>Activity</h2>
-                <div className="tools-tool-list">
-                  {selectedLogs.length ? selectedLogs.map((entry, index) => (
-                    <article className="tools-tool-row" key={entry.id || entry.timestamp || index}>
-                      <span className="tools-tool-row__icon">log</span>
-                      <div className="tools-tool-row__body">
-                        <strong>{entry.message || entry.event || 'Server activity'}</strong>
-                        <p>{formatShortLocalDateTime(entry.timestamp || entry.time || entry.updated_at) || 'recent'}</p>
-                      </div>
-                      <span className="tools-tool-row__calls">{String(entry.level || entry.source || 'info').toLowerCase()}</span>
-                    </article>
-                  )) : (
-                    <PaneEmptyState>{isDetailLoading ? 'Loading activity…' : 'No recent activity for this server.'}</PaneEmptyState>
-                  )}
-                </div>
+                </CappedScrollList>
               </section>
             </div>
           </>

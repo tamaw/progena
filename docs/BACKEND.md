@@ -550,10 +550,11 @@ This work runs off the async request loop. Measure large installations before
 adding a checkpoint-derived projection; current request cost scales with
 retained message history, not just the selected range.
 
-Profiles expose optional public/PATCH `pricing` with `currency` and
-`input_per_million`, `cached_input_per_million`, `output_per_million` decimal
-strings. All rates must be finite/nonnegative; zero is valid; PATCH `null`
-removes pricing. Profiles may also carry an optional positive-integer
+Profiles expose optional top-level `currency`, `input_per_million`,
+`cached_input_per_million` and `output_per_million` (decimal strings) in public
+snapshots and PATCH bodies. The four are all-or-nothing: none means unpriced, a
+partial set is rejected, and PATCH `null` on each removes them. All rates must
+be finite/nonnegative; zero is valid. Profiles may also carry an optional positive-integer
 `context_window`; absent capacity is never inferred from a model name. Cached-input
 tokens use the cache rate instead of the input rate. Unknown cache detail is
 labelled as an estimate charged at the input rate; unknown pricing is unpriced,
@@ -575,11 +576,7 @@ USD preset, verified against the [Azure pricing page](https://azure.microsoft.co
 on 2026-10-20: input `0.25`, cached input `0.025`, output `2.00` per million
 tokens. Displayed rounded prices are not used for calculation. This preset
 does not establish prices for other models, regions or deployment tiers.
-An absent catalog is seeded with this pricing only when
-`PROGENA_MODEL_DEFAULT_MODEL=gpt-5-mini` and
-`PROGENA_MODEL_DEFAULT_PRICING_TIER=global_standard` are both explicit.
-Existing catalogs are never silently repriced; arbitrary deployment names
-remain unpriced until configured.
+Arbitrary deployment names remain unpriced until configured.
 
 
 ## Local development

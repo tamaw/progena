@@ -36,6 +36,7 @@ const defaultConfig = {
       actionGenerate: '/api/ui/actions/generate',
       attachments: '/api/attachments',
       preferences: '/api/ui/preferences',
+      canvases: '/api/ui/canvases',
       channels: '/api/ui/channels',
     },
     timeout: 120000,

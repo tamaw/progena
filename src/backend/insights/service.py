@@ -23,6 +23,7 @@ from src.backend.storage.documents import (
 from src.progena.settings.model_profiles import (
     MODEL_PROFILES_DOC_KEY,
     default_model_profiles_payload,
+    profile_pricing,
     validate_model_profiles_payload,
 )
 from src.progena.utils import parse_provider_timestamp
@@ -143,9 +144,7 @@ def build_token_usage_snapshot(
         series[bucket_start] = _Metrics()
 
     for call in filtered_calls:
-        pricing = (
-            profiles.get(call.profile_name or "", {}).get("pricing") if call.profile_name else None
-        )
+        pricing = profile_pricing(profiles.get(call.profile_name)) if call.profile_name else None
         totals.add(call, pricing if isinstance(pricing, Mapping) else None, warnings)
         profile_metrics = by_profile.setdefault((call.profile_name, call.deployment), _Metrics())
         profile_metrics.add(call, pricing if isinstance(pricing, Mapping) else None, warnings)

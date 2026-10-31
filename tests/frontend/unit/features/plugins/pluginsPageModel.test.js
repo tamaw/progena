@@ -4,8 +4,7 @@ import {
   formatPluginVersion,
   matchesPluginFilter,
   matchesPluginQuery,
-  pluginDetailStatus,
-  pluginRowStatus,
+  pluginStatus,
   sortPlugins,
 } from '@frontend/features/plugins/pluginsPageModel';
 
@@ -25,70 +24,19 @@ describe('formatPluginVersion', () => {
   });
 });
 
-describe('pluginRowStatus', () => {
-  it('is "ring" for a plugin with no install record', () => {
-    expect(pluginRowStatus(null)).toBe('ring');
-    expect(pluginRowStatus(undefined)).toBe('ring');
-  });
-
-  it('is "error" when the last install/reconcile failed', () => {
-    expect(pluginRowStatus({ status: 'error' })).toBe('error');
-  });
-
-  it('is "pending" while an install is in flight', () => {
-    expect(pluginRowStatus({ status: 'pending' })).toBe('pending');
-  });
-
-  it('is "update" when installed and an upstream change was detected', () => {
-    expect(pluginRowStatus({ status: 'installed', available_version: '2.0.0' })).toBe('update');
-  });
-
-  it('is "installed" when installed, up to date, with no error', () => {
-    expect(pluginRowStatus({ status: 'installed' })).toBe('installed');
-  });
-
-  it('prioritizes error over pending and update', () => {
-    expect(pluginRowStatus({ status: 'error', available_version: '2.0.0' })).toBe('error');
-  });
-});
-
-describe('pluginDetailStatus', () => {
-  it('is an idle (hollow ring) "Not installed" for no install record', () => {
-    expect(pluginDetailStatus(null)).toEqual({ tone: 'idle', label: 'Not installed' });
-  });
-
-  it('is error "Install failed" for a failed install', () => {
-    expect(pluginDetailStatus({ status: 'error' })).toEqual({ tone: 'error', label: 'Install failed' });
-  });
-
-  it('is warning "Installing…" while pending', () => {
-    expect(pluginDetailStatus({ status: 'pending' })).toEqual({ tone: 'warning', label: 'Installing…' });
-  });
-
-  it('is ok "Update available" when an upstream change was detected', () => {
-    expect(pluginDetailStatus({ status: 'installed', available_version: '2.0.0' }))
+describe('pluginStatus', () => {
+  it('maps each install state to its tone and label', () => {
+    expect(pluginStatus(null)).toEqual({ tone: 'idle', label: 'Not installed' });
+    expect(pluginStatus({ status: 'error' })).toEqual({ tone: 'error', label: 'Install failed' });
+    expect(pluginStatus({ status: 'pending' })).toEqual({ tone: 'ok', label: 'Installing…' });
+    expect(pluginStatus({ status: 'installed', available_version: '2.0.0' }))
       .toEqual({ tone: 'ok', label: 'Update available' });
+    expect(pluginStatus({ status: 'installed' })).toEqual({ tone: 'muted', label: 'Installed' });
   });
 
-  it('is muted "Installed" with a solid (non-ring) dot when up to date', () => {
-    expect(pluginDetailStatus({ status: 'installed' })).toEqual({ tone: 'muted', label: 'Installed' });
-  });
-
-  it('never contradicts pluginRowStatus\'s precedence (error > pending > update > steady)', () => {
-    const entries = [
-      null,
-      { status: 'error' },
-      { status: 'pending' },
-      { status: 'installed', available_version: '2.0.0' },
-      { status: 'installed' },
-    ];
-    const expectedRowStatuses = ['ring', 'error', 'pending', 'update', 'installed'];
-    entries.forEach((entry, index) => {
-      expect(pluginRowStatus(entry)).toBe(expectedRowStatuses[index]);
-      const detail = pluginDetailStatus(entry);
-      // A hollow ring in the header should only ever occur for "not installed".
-      expect(detail.tone === 'idle').toBe(expectedRowStatuses[index] === 'ring');
-    });
+  it('prioritizes error over pending and an available update', () => {
+    expect(pluginStatus({ status: 'error', available_version: '2.0.0' }).label).toBe('Install failed');
+    expect(pluginStatus({ status: 'pending', available_version: '2.0.0' }).label).toBe('Installing…');
   });
 });
 
