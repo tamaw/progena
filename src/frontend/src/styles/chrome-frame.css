@@ -4878,7 +4878,12 @@ body,
   min-height: 1.35em;
 }
 
+/* Long schedule names shrink and ellipsize instead of pushing the row wider. */
 .schedule-pane-row__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--color-text-secondary);
   font-weight: 700;
 }

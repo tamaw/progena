@@ -276,7 +276,7 @@ function ScheduleRow({ schedule, selected, onSelect, timeZone }) {
     >
       <span className="sess-row__top">
         <span className={`sess-row__dot sess-row__dot--${presentation.tone}`} title={presentation.label} />
-        <span className="sess-row__agent schedule-pane-row__name">{schedule.name || 'Untitled schedule'}</span>
+        <span className="sess-row__agent schedule-pane-row__name" title={schedule.name || 'Untitled schedule'}>{schedule.name || 'Untitled schedule'}</span>
       </span>
       <span className="sess-row__age">
         {status === 'completed' ? 'completed' : schedule.paused ? 'paused' : formatRelative(schedule.next_run, timeZone)}
