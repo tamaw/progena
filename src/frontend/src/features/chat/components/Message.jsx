@@ -122,8 +122,11 @@ function MessageView({
   const workResponseStatus = ['running', 'completed', 'failed', 'cancelled', 'interrupted', 'unknown'].includes(responseStatus)
     ? responseStatus
     : 'unknown';
+  // A turn that never finished (the backend reports `interrupted` once a later
+  // message superseded it) keeps its Interrupted row in place in history.
   const effectiveInterruptionReason = interruptionReason
-    ?? (responseStatus === 'cancelled' ? 'user_cancelled' : undefined);
+    ?? (responseStatus === 'cancelled' ? 'user_cancelled' : undefined)
+    ?? (responseStatus === 'interrupted' ? 'stopped_early' : undefined);
   const regenerateMessage = useMemo(
     () => onRegenerate ? () => onRegenerate(messageId) : undefined,
     [messageId, onRegenerate],

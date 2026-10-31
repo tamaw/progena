@@ -1,35 +1,23 @@
-import React from 'react';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderToStaticMarkup } from 'react-dom/server';
-
-const renderers = vi.hoisted(() => ({
-  renderSafeMarkdown: vi.fn(() => '<pre><code class="language-js">const answer = 42;</code></pre>'),
-  formatMessage: vi.fn(() => '<pre><code class="language-js">legacy answer</code></pre>'),
-  sanitizeHtmlFragment: vi.fn((html) => html),
-  appendStreamingCursor: vi.fn((html) => `${html}<span class="stream-cursor" aria-hidden="true">▋</span>`),
-}));
-
-vi.mock("@frontend/lib/safeMarkdown", () => ({
-  renderSafeMarkdown: renderers.renderSafeMarkdown,
-  formatMessage: renderers.formatMessage,
-  sanitizeHtmlFragment: renderers.sanitizeHtmlFragment
-}));
-vi.mock("@frontend/features/chat/models/messageRenderUtils", () => ({
-  appendStreamingCursor: renderers.appendStreamingCursor,
-  formatArgsPreview: () => '',
-  formatToolInputSummary: () => '',
-  formatDuration: () => '',
-  formatTimestamp: () => '',
-}));
-
+// @vitest-environment jsdom
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SubagentCard from '@frontend/features/chat/components/SubagentCard';
 
-const previousReact = globalThis.React;
-beforeAll(() => {
-  globalThis.React = React;
+let host;
+let root;
+
+beforeEach(() => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  host = document.createElement('div');
+  document.body.append(host);
+  root = createRoot(host);
 });
-afterAll(() => {
-  globalThis.React = previousReact;
+
+afterEach(async () => {
+  await act(async () => root.unmount());
+  host.remove();
+  vi.unstubAllGlobals();
 });
 
 function subagentItem(overrides = {}) {
@@ -37,53 +25,88 @@ function subagentItem(overrides = {}) {
     id: 'subagent-1',
     kind: 'subagent',
     status: 'running',
-    subagentName: 'researcher',
-    entries: [{
-      kind: 'message',
-      id: 'subagent-message-1',
-      text: '```js\nconst answer = 42;\n```',
-    }],
+    subagentName: 'repo-manager',
+    entries: [],
     ...overrides,
   };
 }
 
-describe('SubagentCard message entries', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+async function render(item) {
+  await act(async () => root.render(<SubagentCard item={item} />));
+}
+
+async function toggle() {
+  await act(async () => host.querySelector('button[aria-expanded]').click());
+}
+
+describe('SubagentCard', () => {
+  it('reveals a persisted Markdown result after completion and can collapse it again', async () => {
+    await render(subagentItem({
+      status: 'success',
+      resultPreview: '## Repository inspection\n\n- Found the branch.\n- Reviewed changes.\n\n```js\nconst answer = 42;\n```',
+    }));
+    expect(host.querySelector('.subagent-card__body')).toBeNull();
+
+    await toggle();
+    expect(host.querySelector('h2')?.textContent).toBe('Repository inspection');
+    expect([...host.querySelectorAll('li')].map((node) => node.textContent)).toEqual([
+      'Found the branch.', 'Reviewed changes.',
+    ]);
+    expect(host.querySelector('pre code')?.textContent).toContain('const answer = 42;');
+
+    await toggle();
+    expect(host.querySelector('.subagent-card__body')).toBeNull();
   });
 
-  it('renders a running trailing fenced code block literally with a cursor, then formats the settled entry', () => {
-    const streamingMarkup = renderToStaticMarkup(React.createElement(SubagentCard, {
-      item: subagentItem(),
-    }));
+  it('shows activity before any output, while collapsed, and removes it on completion', async () => {
+    await render(subagentItem());
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('Working');
+    expect(host.querySelector('.subagent-card__body')).toBeNull();
 
-    expect(streamingMarkup).toContain('```js\nconst answer = 42;\n```');
-    expect(streamingMarkup).toContain('▋');
-    expect(streamingMarkup).not.toContain('<pre><code class="language-js">');
+    await toggle();
+    expect(host.querySelector('button').getAttribute('aria-expanded')).toBe('false');
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('Working');
 
-    // A nested tool call after the message settles it while the card runs on.
-    const base = subagentItem();
-    const settledMarkup = renderToStaticMarkup(React.createElement(SubagentCard, {
-      item: subagentItem({
-        entries: [...base.entries, { kind: 'tool', id: 'tool-1', toolName: 'ls', status: 'running' }],
-      }),
-    }));
-
-    expect(settledMarkup).toContain('<pre><code class="language-js">const answer = 42;</code></pre>');
+    await render(subagentItem({ status: 'success', resultPreview: 'Inspection finished.' }));
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    await toggle();
+    expect(host.textContent).toContain('Inspection finished.');
   });
 
-  it('shows its latest lines while running and collapses to its header once finished, keeping errors visible', () => {
-    const finished = renderToStaticMarkup(React.createElement(SubagentCard, {
-      item: subagentItem({ status: 'success' }),
-    }));
-    expect(finished).toContain('researcher');
-    expect(finished).toContain('aria-expanded="false"');
-    expect(finished).not.toContain('subagent-card__body');
+  it('keeps streaming code literal, then renders it as Markdown when a tool starts', async () => {
+    const entry = { kind: 'message', id: 'm1', text: '```js\nconst answer = 42;\n```' };
+    await render(subagentItem({ entries: [entry] }));
+    expect(host.textContent).toContain(entry.text);
+    expect(host.querySelector('pre code')).toBeNull();
 
-    const failed = renderToStaticMarkup(React.createElement(SubagentCard, {
-      item: subagentItem({ status: 'error', error: 'mount missing' }),
-    }));
-    expect(failed).not.toContain('subagent-card__body');
-    expect(failed).toContain('mount missing');
+    await render(subagentItem({ entries: [
+      entry,
+      { kind: 'tool', id: 't1', toolName: 'read_file', status: 'running' },
+    ] }));
+    expect(host.querySelector('pre code')?.textContent).toContain('const answer = 42;');
+    expect(host.textContent).toContain('read_file');
+    expect(host.querySelector('[role="status"]')).not.toBeNull();
+  });
+
+  it('exposes the full task in a keyboard-accessible styled tooltip without expanding the result', async () => {
+    const taskSummary = 'Inspect the interrupted preparation and report repository status.';
+    await render(subagentItem({ status: 'success', taskSummary, resultPreview: 'Done.' }));
+    expect(host.querySelector('[title]')).toBeNull();
+
+    await act(async () => host.querySelector('.subagent-card__header').focus());
+    const tooltip = document.querySelector('[role="tooltip"]');
+    expect(tooltip?.textContent).toBe(taskSummary);
+    expect(host.querySelector('.subagent-card__body')).toBeNull();
+    await act(async () => host.querySelector('.subagent-card__header').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    ));
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+  });
+
+  it('keeps a failed delegate error visible while its transcript is collapsed', async () => {
+    await render(subagentItem({ status: 'error', error: 'Repository unavailable' }));
+    expect(host.querySelector('.subagent-card__body')).toBeNull();
+    expect(host.textContent).toContain('Repository unavailable');
+    expect(host.querySelector('[role="status"]')).toBeNull();
   });
 });

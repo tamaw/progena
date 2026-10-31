@@ -149,6 +149,15 @@ Partial answers and visible work keep their failure status without a duplicate
 synthetic row. Background completion may use provider status only from its own
 stream ID, never from the currently selected conversation's live turn.
 
+Subagent cards identify the delegate before its task summary. Running cards keep
+a visible `Working…` status even before their first output or when collapsed;
+completion removes it. The header's full task is available through the shared
+`ChatInfoTooltip`, not a native browser title. Expanding a completed card reveals
+the available result as full sanitized Markdown, without a single-line height
+clamp that can hide headings, lists or code. This does not add durable storage
+for nested streaming deltas; checkpoint history still reconstructs the card
+from the persisted task result.
+
 The conversation header uses backend `session.usage_totals`, not sums over the
 currently loaded message page or streamed reasoning text. These are cumulative
 root output tokens and their reasoning subset; partial coverage is shown as a
@@ -205,9 +214,12 @@ chain rather than following its terminal dot.
 Interruptions share a terminal `Interrupted` disclosure with a warning-colored dot.
 Its connector enters from above and never continues below. User cancellation
 shows `Cancelled by you.` and preserves any partial answer above the marker,
-including an otherwise empty cancelled turn. Runtime restart shows the existing
-restart/partial-step warning and remains hidden while generation is active.
-Cancellation is not appended as synthetic assistant prose.
+including an otherwise empty cancelled turn. Persisted interrupted turns keep
+their own marker before subsequent messages, even without an explicit reason.
+Runtime restart shows the existing restart/partial-step warning and remains
+hidden while generation is active. Starting a new response clears the obsolete
+session-level restart flag only for that thread, so it cannot reappear below the
+retry's answer. Cancellation is not appended as synthetic assistant prose.
 
 Original messages remain visible and searchable. Nested summaries stay inside
 their subagent activity. Completed markers must remain visible with debug events

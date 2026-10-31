@@ -327,6 +327,12 @@ export const eventHandlers = {
     beginResponseTracking(state.chatRuntime, requestId, threadId);
     state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
     state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
+    // The restart interruption describes the conversation's latest turn. A new
+    // turn supersedes it; the interrupted turn itself keeps its own row once
+    // the canonical transcript reports it `interrupted`.
+    if (state.chats.active.threadId === threadId && state.chats.active.detail?.interruption) {
+      state.chats.active.detail.interruption = null;
+    }
     // Tracked even for the thread this tab is currently viewing: a generation
     // started elsewhere still needs to be discoverable so a spectator stream
     // can attach to it.
