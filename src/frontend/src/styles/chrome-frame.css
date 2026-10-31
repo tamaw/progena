@@ -4332,6 +4332,14 @@ body,
   gap: 6px;
 }
 
+/* Servers can expose 50+ tools: show five rows and scroll the rest
+   (max-height is measured from the rendered rows in ToolsPage). */
+.tools-tool-list--capped {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
 .tools-tool-row {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) auto 36px;

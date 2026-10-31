@@ -1,5 +1,5 @@
 import { UI_EVENT } from '../../realtime/eventVocabulary';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../../lib/routes';
@@ -124,6 +124,35 @@ function ToolToggle({ checked, disabled, onChange }) {
       <span className="set-switch__knob" aria-hidden="true" />
     </label>
   );
+}
+
+const VISIBLE_TOOL_ROWS = 5;
+
+// Caps a list at its first `rows` children and scrolls the rest. Rows vary in
+// height (a description line is optional), so the cap is measured from the
+// rendered rows rather than a fixed CSS height.
+function useRowCappedHeight(rows, deps) {
+  const ref = useRef(null);
+  const [maxHeight, setMaxHeight] = useState(null);
+  useLayoutEffect(() => {
+    const list = ref.current;
+    if (!list) return undefined;
+    const measure = () => {
+      const items = list.children;
+      if (items.length <= rows) {
+        setMaxHeight(null);
+        return;
+      }
+      const last = items[rows - 1];
+      setMaxHeight(last.getBoundingClientRect().bottom - list.getBoundingClientRect().top + list.scrollTop);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(list);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return [ref, maxHeight];
 }
 
 function ToolRow({ tool, index, serverId, onToggle }) {
@@ -371,6 +400,7 @@ export default function ToolsPage() {
   const isDetailLoading = Boolean(selectedServer) && !serverDetail && serverDetailRequest.loading;
   const serverTools = Array.isArray(serverDetail?.data?.tools) ? serverDetail.data.tools : [];
   const enabledToolCount = serverTools.filter((tool) => tool.enabled !== false).length;
+  const [toolListRef, toolListMaxHeight] = useRowCappedHeight(VISIBLE_TOOL_ROWS, [serverTools]);
   const selectedLogs = Array.isArray(serverDetail?.data?.logs) ? serverDetail.data.logs.slice(0, 5) : [];
 
   return (
@@ -553,7 +583,11 @@ export default function ToolsPage() {
                     Tools {serverTools.length ? <span>{enabledToolCount}/{serverTools.length} enabled</span> : null}
                   </h2>
                 </div>
-                <div className="tools-tool-list">
+                <div
+                  ref={toolListRef}
+                  className={`tools-tool-list ${toolListMaxHeight ? 'tools-tool-list--capped' : ''}`}
+                  style={toolListMaxHeight ? { maxHeight: toolListMaxHeight } : undefined}
+                >
                   {serverTools.length ? serverTools.map((tool, index) => (
                     <ToolRow
                       key={tool.name || index}
