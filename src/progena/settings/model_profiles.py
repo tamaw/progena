@@ -1,8 +1,10 @@
 """Validation, migration and optional pricing for ``/config/profiles.json``.
 
 Model profiles refer exclusively to persisted providers. Legacy Azure discriminator
-profiles are migrated once after a default Foundry provider exists. Optional pricing
-rates are explicit estimates; they never infer a deployment's model or service tier.
+profiles are migrated once after a default Foundry provider exists. Every profile
+field is top-level (no nested objects) so each maps to one form field. Optional
+pricing rates are explicit estimates; they never infer a deployment's model or
+service tier, and are all present or all absent.
 """
 
 from __future__ import annotations
@@ -24,15 +26,17 @@ _PRICING_RATE_FIELDS = (
     "cached_input_per_million",
     "output_per_million",
 )
-_PRICING_FIELDS = ("currency", *_PRICING_RATE_FIELDS)
+PRICING_FIELDS = ("currency", *_PRICING_RATE_FIELDS)
+DESCRIPTION_MAX_LENGTH = 280
 _SUPPORTED_PROFILE_FIELDS = frozenset(
     {
+        "description",
         "provider_id",
         "deployment",
-        "pricing",
         "context_window",
         "cache_ttl_seconds",
         *_OPTIONAL_REASONING_FIELDS,
+        *PRICING_FIELDS,
     }
 )
 _CURRENCY_PATTERN = re.compile(r"^[A-Z]{3}$")
@@ -51,55 +55,57 @@ def _normalize_provider_id(value: Any, *, profile_name: str) -> str:
     return value.strip()
 
 
-def _normalize_pricing(name: str, pricing: Any) -> dict[str, str] | None:
-    """Validate the optional current-rate estimate stored with one profile."""
-    if pricing is None:
-        return None
-    if not isinstance(pricing, dict):
-        raise ValueError(f"profile {name!r}: pricing must be an object or null")
-    extra_fields = set(pricing) - set(_PRICING_FIELDS)
-    missing_fields = set(_PRICING_FIELDS) - set(pricing)
-    if extra_fields or missing_fields:
-        details = []
-        if extra_fields:
-            details.append(f"unsupported fields {sorted(extra_fields)}")
-        if missing_fields:
-            details.append(f"missing fields {sorted(missing_fields)}")
-        raise ValueError(f"profile {name!r}: pricing has {', '.join(details)}")
+def _normalize_pricing(name: str, profile: dict[str, Any]) -> dict[str, str]:
+    """Validate the optional current-rate estimate stored on one profile.
 
-    currency = pricing["currency"]
+    The four pricing fields are top-level and all-or-nothing: none means the
+    profile is unpriced.
+    """
+    present = [field for field in PRICING_FIELDS if field in profile]
+    if not present:
+        return {}
+    missing = [field for field in PRICING_FIELDS if field not in profile]
+    if missing:
+        raise ValueError(
+            f"profile {name!r}: pricing needs all of {list(PRICING_FIELDS)}; missing {missing}"
+        )
+
+    currency = profile["currency"]
     if not isinstance(currency, str) or not _CURRENCY_PATTERN.fullmatch(currency):
-        raise ValueError(f"profile {name!r}: pricing.currency must be an uppercase ISO 4217 code")
+        raise ValueError(f"profile {name!r}: currency must be an uppercase ISO 4217 code")
 
     normalized = {"currency": currency}
     for field in _PRICING_RATE_FIELDS:
-        value = pricing[field]
+        value = profile[field]
         if (
             not isinstance(value, str)
             or not value.strip()
             or not _DECIMAL_STRING_PATTERN.fullmatch(value.strip())
         ):
-            raise ValueError(
-                f"profile {name!r}: pricing.{field} must be a finite non-negative decimal"
-            )
+            raise ValueError(f"profile {name!r}: {field} must be a finite non-negative decimal")
         try:
             decimal = Decimal(value)
         except InvalidOperation as exc:
             raise ValueError(
-                f"profile {name!r}: pricing.{field} must be a finite non-negative decimal"
+                f"profile {name!r}: {field} must be a finite non-negative decimal"
             ) from exc
         if not decimal.is_finite() or decimal < 0:
-            raise ValueError(
-                f"profile {name!r}: pricing.{field} must be a finite non-negative decimal"
-            )
+            raise ValueError(f"profile {name!r}: {field} must be a finite non-negative decimal")
         exponent = decimal.as_tuple().exponent
         if isinstance(exponent, int) and -exponent > _MAX_PRICING_DECIMAL_PLACES:
             raise ValueError(
-                f"profile {name!r}: pricing.{field} has more than "
+                f"profile {name!r}: {field} has more than "
                 f"{_MAX_PRICING_DECIMAL_PLACES} decimal places"
             )
         normalized[field] = value.strip()
     return normalized
+
+
+def profile_pricing(profile: Any) -> dict[str, str] | None:
+    """The pricing fields of a validated profile, or ``None`` when unpriced."""
+    if not isinstance(profile, dict) or not all(field in profile for field in PRICING_FIELDS):
+        return None
+    return {field: profile[field] for field in PRICING_FIELDS}
 
 
 def _normalize_profile(name: str, profile: Any) -> dict[str, Any]:
@@ -117,9 +123,18 @@ def _normalize_profile(name: str, profile: Any) -> dict[str, Any]:
         "provider_id": _normalize_provider_id(profile.get("provider_id"), profile_name=name),
         "deployment": deployment.strip(),
     }
-    pricing = _normalize_pricing(name, profile.get("pricing"))
-    if pricing is not None:
-        normalized["pricing"] = pricing
+    if "description" in profile:
+        description = profile["description"]
+        if not isinstance(description, str):
+            raise ValueError(f"profile {name!r}: description must be a string")
+        description = description.strip()
+        if len(description) > DESCRIPTION_MAX_LENGTH:
+            raise ValueError(
+                f"profile {name!r}: description must be at most {DESCRIPTION_MAX_LENGTH} characters"
+            )
+        if description:
+            normalized["description"] = description
+    normalized.update(_normalize_pricing(name, profile))
     if "context_window" in profile:
         context_window = profile["context_window"]
         if type(context_window) is not int or context_window <= 0:

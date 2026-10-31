@@ -69,22 +69,18 @@ def _profiles() -> dict:
         "fast": {
             "provider_id": "foundry-1",
             "deployment": "deployed-fast",
-            "pricing": {
-                "currency": "USD",
-                "input_per_million": "2",
-                "cached_input_per_million": "1",
-                "output_per_million": "4",
-            },
+            "currency": "USD",
+            "input_per_million": "2",
+            "cached_input_per_million": "1",
+            "output_per_million": "4",
         },
         "euro": {
             "provider_id": "foundry-1",
             "deployment": "deployed-euro",
-            "pricing": {
-                "currency": "EUR",
-                "input_per_million": "1",
-                "cached_input_per_million": "0",
-                "output_per_million": "3",
-            },
+            "currency": "EUR",
+            "input_per_million": "1",
+            "cached_input_per_million": "0",
+            "output_per_million": "3",
         },
     }
 

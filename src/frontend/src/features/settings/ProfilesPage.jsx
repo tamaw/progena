@@ -34,8 +34,8 @@ import { useSnapshotSave } from '../../hooks/useSnapshotSave';
 import './profiles.css';
 
 const FILTERS = ['All'];
-const EDITABLE_FIELDS = ['provider_id', 'deployment', 'reasoning_enabled', 'reasoning_effort', 'reasoning_summary'];
 const PRICING_FIELDS = ['currency', 'input_per_million', 'cached_input_per_million', 'output_per_million'];
+const DESCRIPTION_MAX_LENGTH = 280;
 const providerLabel = (profile, providers) => {
   const provider = profile.provider_id ? providers.find((candidate) => candidate.id === profile.provider_id) : null;
   return provider ? provider.name : 'Provider unavailable';
@@ -56,56 +56,106 @@ const GPT_5_MINI_GLOBAL_STANDARD_PRICING = Object.freeze({
 const EMPTY_PROFILE_EDIT = Object.freeze({ draft: null, baseline: null, validationError: null });
 const PROFILE_SNAPSHOT_EVENTS = Object.freeze([UI_EVENT.PROFILES_SNAPSHOT]);
 
-const emptyPricing = () => Object.fromEntries(PRICING_FIELDS.map((field) => [field, '']));
-
+// Every profile field is top-level, so the draft is one flat object of strings
+// (one per form field) and the patch is the set of fields whose value changed.
 function toDraft(profile) {
+  const text = (value) => (value == null ? '' : String(value));
   return {
-    provider_id: profile.provider_id ?? '',
-    deployment: profile.deployment ?? '',
-    reasoning_enabled: profile.reasoning_enabled == null ? '' : String(profile.reasoning_enabled),
-    reasoning_effort: profile.reasoning_effort ?? '',
-    reasoning_summary: profile.reasoning_summary ?? '',
-    pricing: profile.pricing ? { ...profile.pricing } : emptyPricing(),
+    description: text(profile.description),
+    provider_id: text(profile.provider_id),
+    deployment: text(profile.deployment),
+    context_window: text(profile.context_window),
+    cache_ttl_seconds: text(profile.cache_ttl_seconds),
+    reasoning_enabled: text(profile.reasoning_enabled),
+    reasoning_effort: text(profile.reasoning_effort),
+    reasoning_summary: text(profile.reasoning_summary),
+    ...Object.fromEntries(PRICING_FIELDS.map((field) => [field, text(profile[field])])),
   };
 }
 
-function buildPricing(draft) {
-  const pricing = Object.fromEntries(
-    PRICING_FIELDS.map((field) => [field, draft.pricing[field].trim()]),
-  );
-  return Object.values(pricing).some(Boolean) ? pricing : null;
-}
+const POSITIVE_INTEGER = /^[1-9]\d*$/;
 
-function validatePricing(draft) {
-  const pricing = buildPricing(draft);
-  if (!pricing) return null;
-  if (PRICING_FIELDS.some((field) => !pricing[field])) {
-    return 'Complete currency and all per-million rates, or clear every pricing field to mark this deployment unpriced.';
+function validateDraft(draft) {
+  if (draft.description.trim().length > DESCRIPTION_MAX_LENGTH) {
+    return `Description must be at most ${DESCRIPTION_MAX_LENGTH} characters.`;
   }
-  if (!/^[A-Z]{3}$/.test(pricing.currency)) {
-    return 'Currency must be a three-letter uppercase ISO 4217 code.';
+  for (const [field, label] of [['context_window', 'Context window'], ['cache_ttl_seconds', 'Cache lifetime']]) {
+    const value = draft[field].trim();
+    if (value && !POSITIVE_INTEGER.test(value)) return `${label} must be a positive whole number.`;
   }
-  if (PRICING_FIELDS.slice(1).some((field) => !/^\d+(?:\.\d+)?$/.test(pricing[field]))) {
-    return 'Rates must be non-negative decimal strings.';
+  const pricing = PRICING_FIELDS.map((field) => draft[field].trim());
+  if (pricing.some(Boolean)) {
+    if (pricing.some((value) => !value)) {
+      return 'Complete currency and all per-million rates, or clear every pricing field to mark this deployment unpriced.';
+    }
+    if (!/^[A-Z]{3}$/.test(pricing[0])) return 'Currency must be a three-letter uppercase ISO 4217 code.';
+    if (pricing.slice(1).some((value) => !/^\d+(?:\.\d+)?$/.test(value))) return 'Rates must be non-negative decimal strings.';
   }
   return null;
 }
 
-function buildPatch(draft, base) {
-  const values = {
-    provider_id: draft.provider_id || null,
+// Wire values for a draft: blanks become null, which the PATCH treats as "remove".
+function draftValues(draft) {
+  const textOrNull = (value) => value.trim() || null;
+  const integerOrNull = (value) => (value.trim() ? Number(value.trim()) : null);
+  return {
+    description: textOrNull(draft.description),
+    provider_id: textOrNull(draft.provider_id),
     deployment: draft.deployment.trim(),
+    context_window: integerOrNull(draft.context_window),
+    cache_ttl_seconds: integerOrNull(draft.cache_ttl_seconds),
     reasoning_enabled: draft.reasoning_enabled === '' ? null : draft.reasoning_enabled === 'true',
-    reasoning_effort: draft.reasoning_effort.trim() || null,
-    reasoning_summary: draft.reasoning_summary.trim() || null,
+    reasoning_effort: textOrNull(draft.reasoning_effort),
+    reasoning_summary: textOrNull(draft.reasoning_summary),
+    ...Object.fromEntries(PRICING_FIELDS.map((field) => [field, textOrNull(draft[field])])),
   };
-  const patch = Object.fromEntries(EDITABLE_FIELDS
-    .filter((field) => values[field] !== (base[field] ?? null))
-    .map((field) => [field, values[field]]));
-  const pricing = buildPricing(draft);
-  const basePricing = buildPricing(base);
-  if (JSON.stringify(pricing) !== JSON.stringify(basePricing)) patch.pricing = pricing;
-  return patch;
+}
+
+function buildPatch(draft, base) {
+  const values = draftValues(draft);
+  const baseValues = draftValues(base);
+  const changed = Object.keys(values).filter((field) => values[field] !== baseValues[field]);
+  // Pricing is all-or-nothing on the server, so any pricing change sends all four.
+  const fields = changed.some((field) => PRICING_FIELDS.includes(field))
+    ? [...new Set([...changed, ...PRICING_FIELDS])]
+    : changed;
+  return Object.fromEntries(fields.map((field) => [field, values[field]]));
+}
+
+function Fact({ label, children }) {
+  return (
+    <div className="agents-card-fact">
+      <dt className="agents-card-fact__label">{label}</dt>
+      <dd className="agents-card-fact__value">{children}</dd>
+    </div>
+  );
+}
+
+function Field({ label, required = false, children }) {
+  return (
+    <label className="agents-draft-field profiles-field">
+      <span className="agents-draft-field__label">
+        {label}{required ? <> <span aria-hidden="true" className="profiles-field__required">*</span></> : null}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+// One titled group of flat profile fields: a form grid while editing, the
+// shared card facts otherwise.
+function ProfileSection({ title, editing, actions = null, children }) {
+  return (
+    <section className="agents-section">
+      <header className="agents-section__head">
+        <h2>{title}</h2>
+        {actions}
+      </header>
+      {editing
+        ? <div className="agents-card-facts agents-draft profiles-form">{children}</div>
+        : <dl className="agents-card-facts profiles-config-grid">{children}</dl>}
+    </section>
+  );
 }
 
 function ProfileDetails({ profile, catalogue, providers, goModels, url, connected }) {
@@ -176,9 +226,9 @@ function ProfileDetails({ profile, catalogue, providers, goModels, url, connecte
       setEditState((current) => ({ ...current, validationError: 'Choose a model available to this ChatGPT account.' }));
       return;
     }
-    const pricingError = validatePricing(draft);
-    if (pricingError) {
-      setEditState((current) => ({ ...current, validationError: pricingError }));
+    const draftError = validateDraft(draft);
+    if (draftError) {
+      setEditState((current) => ({ ...current, validationError: draftError }));
       return;
     }
     if (!Object.keys(buildPatch(draft, baseline)).length) {
@@ -192,20 +242,9 @@ function ProfileDetails({ profile, catalogue, providers, goModels, url, connecte
     draft: { ...current.draft, [field]: value },
     validationError: null,
   }));
-  const updatePricing = (field, value) => setEditState((current) => ({
-    ...current,
-    draft: {
-      ...current.draft,
-      pricing: { ...current.draft.pricing, [field]: value },
-    },
-    validationError: null,
-  }));
   const applyGpt5MiniGlobalStandardPricing = () => setEditState((current) => ({
     ...current,
-    draft: {
-      ...current.draft,
-      pricing: { ...GPT_5_MINI_GLOBAL_STANDARD_PRICING },
-    },
+    draft: { ...current.draft, ...GPT_5_MINI_GLOBAL_STANDARD_PRICING },
     validationError: null,
   }));
 
@@ -243,113 +282,128 @@ function ProfileDetails({ profile, catalogue, providers, goModels, url, connecte
             <button type="button" className="repo-btn repo-btn--ghost" onClick={startEdit} disabled={saving}>Restart edit</button>
           </div>
         ) : null}
-        <section className="agents-section">
-          <header className="agents-section__head">
-            <h2>Configuration</h2>
-            {draft ? (
+        <form className="profiles-sections" onSubmit={(event) => { event.preventDefault(); handleSave(); }}>
+          <ProfileSection
+            title="Profile"
+            editing={Boolean(draft)}
+            actions={draft ? (
               <div className="profiles-section__actions">
                 <button type="button" className="repo-btn repo-btn--ghost" onClick={cancelEdit} disabled={saving}>Cancel</button>
-                <button type="button" className="repo-btn repo-btn--primary" onClick={handleSave} disabled={saving || conflict || !connected}>{saving ? 'Saving…' : 'Save'}</button>
+                <button type="submit" className="repo-btn repo-btn--primary" disabled={saving || conflict || !connected}>{saving ? 'Saving…' : 'Save'}</button>
               </div>
             ) : (
               <button type="button" className="repo-btn repo-btn--ghost" onClick={startEdit} disabled={!connected || catalogue.loading || Boolean(catalogue.error)}>Edit</button>
             )}
-          </header>
-          {draft ? (
-            <form className="agents-card-facts agents-draft profiles-form" onSubmit={(event) => { event.preventDefault(); handleSave(); }}>
-              <label className="agents-draft-field profiles-field">
-                <span className="agents-draft-field__label">Provider</span>
-                <Select
-                  value={draft.provider_id}
-                  onChange={(value) => updateDraft('provider_id', value)}
-                  options={providerOptions}
-                  ariaLabel="Provider"
-                  disabled={saving || !providers.length}
-                />
-              </label>
-              <label className="agents-draft-field profiles-field">
-                <span className="agents-draft-field__label">{isGoProvider || isChatgptProvider ? 'Responses model' : 'Deployment'} <span aria-hidden="true" className="profiles-field__required">*</span></span>
-                {isGoProvider ? (
-                  <Select
-                    value={draft.deployment}
-                    onChange={(value) => updateDraft('deployment', value)}
-                    options={goModelOptions}
-                    ariaLabel="OpenCode Go Responses model"
-                    placeholder="Choose a supported model"
-                    disabled={saving || !goModels.length}
-                  />
-                ) : isChatgptProvider ? (
-                  <Select
-                    value={draft.deployment}
-                    onChange={(value) => updateDraft('deployment', value)}
-                    options={chatgptModelOptions}
-                    ariaLabel="ChatGPT plan model"
-                    placeholder="Choose an available model"
-                    disabled={saving || !chatgptModels.length}
-                  />
-                ) : (
-                  <input className="set-text-input" type="text" value={draft.deployment} onChange={(event) => updateDraft('deployment', event.target.value)} disabled={saving} required />
-                )}
-              </label>
-              <label className="agents-draft-field profiles-field">
-                <span className="agents-draft-field__label">Reasoning enabled</span>
-                <Select
-                  value={draft.reasoning_enabled}
-                  onChange={(value) => updateDraft('reasoning_enabled', value)}
-                  options={REASONING_ENABLED_OPTIONS}
-                  ariaLabel="Reasoning enabled"
-                  disabled={saving || isGoProvider}
-                />
-              </label>
-              {['reasoning_effort', 'reasoning_summary'].map((field) => (
-                <label className="agents-draft-field profiles-field" key={field}>
-                  <span className="agents-draft-field__label">{field === 'reasoning_effort' ? 'Reasoning effort' : 'Reasoning summary'}</span>
-                  <input className="set-text-input" type="text" value={draft[field]} onChange={(event) => updateDraft(field, event.target.value)} disabled={saving || isGoProvider} placeholder="Inherit" />
-                </label>
-              ))}
-              <fieldset className="profiles-pricing">
-                <legend>Estimated token pricing</legend>
-                <div className="profiles-pricing__preset">
-                  <button type="button" className="repo-btn repo-btn--ghost" onClick={applyGpt5MiniGlobalStandardPricing} disabled={saving}>Use GPT-5 mini Global Standard preset</button>
-                  <a href="https://azure.microsoft.com/en-us/pricing/details/azure-openai/" target="_blank" rel="noreferrer">Pricing source</a>
-                </div>
-                <label className="agents-draft-field profiles-field">
-                  <span className="agents-draft-field__label">Currency</span>
-                  <input className="set-text-input" type="text" value={draft.pricing.currency} onChange={(event) => updatePricing('currency', event.target.value)} disabled={saving} placeholder="USD" maxLength="3" />
-                </label>
+          >
+            {draft ? (
+              <Field label="Description">
+                <textarea className="set-text-input profiles-description" rows={2} maxLength={DESCRIPTION_MAX_LENGTH} value={draft.description} onChange={(event) => updateDraft('description', event.target.value)} disabled={saving} placeholder="What this profile is for" />
+              </Field>
+            ) : (
+              <>
+                <Fact label="Name">{profile.name}</Fact>
+                <Fact label="Description">{profile.description || '—'}</Fact>
+              </>
+            )}
+          </ProfileSection>
+
+          <ProfileSection title="Model" editing={Boolean(draft)}>
+            {draft ? (
+              <>
+                <Field label="Provider">
+                  <Select value={draft.provider_id} onChange={(value) => updateDraft('provider_id', value)} options={providerOptions} ariaLabel="Provider" disabled={saving || !providers.length} />
+                </Field>
+                <Field label="Model" required>
+                  {isGoProvider ? (
+                    <Select value={draft.deployment} onChange={(value) => updateDraft('deployment', value)} options={goModelOptions} ariaLabel="OpenCode Go Responses model" placeholder="Choose a supported model" disabled={saving || !goModels.length} />
+                  ) : isChatgptProvider ? (
+                    <Select value={draft.deployment} onChange={(value) => updateDraft('deployment', value)} options={chatgptModelOptions} ariaLabel="ChatGPT plan model" placeholder="Choose an available model" disabled={saving || !chatgptModels.length} />
+                  ) : (
+                    <input className="set-text-input" type="text" value={draft.deployment} onChange={(event) => updateDraft('deployment', event.target.value)} disabled={saving} required aria-label="Model" />
+                  )}
+                </Field>
+                <Field label="Context window (tokens)">
+                  <input className="set-text-input" type="text" inputMode="numeric" value={draft.context_window} onChange={(event) => updateDraft('context_window', event.target.value)} disabled={saving} placeholder="Unknown" />
+                </Field>
+                <Field label="Cache lifetime (seconds)">
+                  <input className="set-text-input" type="text" inputMode="numeric" value={draft.cache_ttl_seconds} onChange={(event) => updateDraft('cache_ttl_seconds', event.target.value)} disabled={saving} placeholder="Unknown" />
+                </Field>
+              </>
+            ) : (
+              <>
+                <Fact label="Provider">{providerLabel(profile, providers)}</Fact>
+                <Fact label="Model">{profile.deployment}</Fact>
+                <Fact label="Context window">{profile.context_window ? `${profile.context_window.toLocaleString()} tokens` : '—'}</Fact>
+                <Fact label="Cache lifetime">{profile.cache_ttl_seconds ? `${profile.cache_ttl_seconds.toLocaleString()} s` : '—'}</Fact>
+              </>
+            )}
+          </ProfileSection>
+
+          <ProfileSection title="Reasoning" editing={Boolean(draft)}>
+            {draft ? (
+              <>
+                <Field label="Reasoning">
+                  <Select value={draft.reasoning_enabled} onChange={(value) => updateDraft('reasoning_enabled', value)} options={REASONING_ENABLED_OPTIONS} ariaLabel="Reasoning enabled" disabled={saving || isGoProvider} />
+                </Field>
+                {[['reasoning_effort', 'Effort'], ['reasoning_summary', 'Summary']].map(([field, label]) => (
+                  <Field label={label} key={field}>
+                    <input className="set-text-input" type="text" value={draft[field]} onChange={(event) => updateDraft(field, event.target.value)} disabled={saving || isGoProvider} placeholder="Inherit" />
+                  </Field>
+                ))}
+              </>
+            ) : (
+              <>
+                <Fact label="Reasoning">{profile.reasoning_enabled == null ? 'Inherit' : profile.reasoning_enabled ? 'Enabled' : 'Disabled'}</Fact>
+                <Fact label="Effort">{profile.reasoning_effort || 'Inherit'}</Fact>
+                <Fact label="Summary">{profile.reasoning_summary || 'Inherit'}</Fact>
+              </>
+            )}
+          </ProfileSection>
+
+          <ProfileSection
+            title="Pricing"
+            editing={Boolean(draft)}
+            actions={draft ? (
+              <div className="profiles-pricing__preset">
+                <button type="button" className="repo-btn repo-btn--ghost" onClick={applyGpt5MiniGlobalStandardPricing} disabled={saving}>Use GPT-5 mini Global Standard preset</button>
+                <a href="https://azure.microsoft.com/en-us/pricing/details/azure-openai/" target="_blank" rel="noreferrer">Pricing source</a>
+              </div>
+            ) : null}
+          >
+            {draft ? (
+              <>
+                <Field label="Currency">
+                  <input className="set-text-input" type="text" value={draft.currency} onChange={(event) => updateDraft('currency', event.target.value)} disabled={saving} placeholder="USD" maxLength="3" />
+                </Field>
                 {[
                   ['input_per_million', 'Input per 1M tokens', '0.25'],
                   ['cached_input_per_million', 'Cached input per 1M tokens', '0.025'],
                   ['output_per_million', 'Output per 1M tokens', '2.00'],
                 ].map(([field, label, placeholder]) => (
-                  <label className="agents-draft-field profiles-field" key={field}>
-                    <span className="agents-draft-field__label">{label}</span>
-                    <input className="set-text-input" type="text" inputMode="decimal" value={draft.pricing[field]} onChange={(event) => updatePricing(field, event.target.value)} disabled={saving} placeholder={placeholder} />
-                  </label>
+                  <Field label={label} key={field}>
+                    <input className="set-text-input" type="text" inputMode="decimal" value={draft[field]} onChange={(event) => updateDraft(field, event.target.value)} disabled={saving} placeholder={placeholder} />
+                  </Field>
                 ))}
-              </fieldset>
+              </>
+            ) : profile.currency ? (
+              <>
+                <Fact label="Currency">{profile.currency}</Fact>
+                <Fact label="Input per 1M">{profile.input_per_million}</Fact>
+                <Fact label="Cached input per 1M">{profile.cached_input_per_million}</Fact>
+                <Fact label="Output per 1M">{profile.output_per_million}</Fact>
+              </>
+            ) : (
+              <Fact label="Estimated pricing">Unpriced</Fact>
+            )}
+          </ProfileSection>
+
+          {draft ? (
+            <>
               {error ? <InlineFailure failure={error} operation="Save profile" /> : null}
-              <p className="profiles-form__hint">{saving ? 'Saving…' : isGoProvider ? 'Foundry reasoning overrides do not apply to OpenCode Go.' : isChatgptProvider && !chatgptModels.length ? 'The selected ChatGPT account has no available model catalog. Reconnect it in Providers.' : 'Clear effort or summary to remove its override.'}</p>
-            </form>
-          ) : (
-            <dl className="agents-card-facts profiles-config-grid">
-              <div className="agents-card-fact"><dt className="agents-card-fact__label">Name</dt><dd className="agents-card-fact__value">{profile.name}</dd></div>
-              <div className="agents-card-fact"><dt className="agents-card-fact__label">Provider</dt><dd className="agents-card-fact__value">{providerLabel(profile, providers)}</dd></div>
-              <div className="agents-card-fact"><dt className="agents-card-fact__label">{selectedProvider?.kind === 'opencode_go' || selectedProvider?.kind === 'chatgpt' ? 'Responses model' : 'Deployment'}</dt><dd className="agents-card-fact__value">{profile.deployment}</dd></div>
-              <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning enabled</dt><dd className="agents-card-fact__value">{profile.reasoning_enabled == null ? 'Inherit' : profile.reasoning_enabled ? 'Enabled' : 'Disabled'}</dd></div>
-              <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning effort</dt><dd className="agents-card-fact__value">{profile.reasoning_effort || 'Inherit'}</dd></div>
-              <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning summary</dt><dd className="agents-card-fact__value">{profile.reasoning_summary || 'Inherit'}</dd></div>
-              <div className="agents-card-fact"><dt className="agents-card-fact__label">Estimated pricing</dt><dd className="agents-card-fact__value">{profile.pricing ? `${profile.pricing.currency} current rates` : 'Unpriced'}</dd></div>
-              {profile.pricing ? (
-                <>
-                  <div className="agents-card-fact"><dt className="agents-card-fact__label">Input per 1M</dt><dd className="agents-card-fact__value">{profile.pricing.input_per_million}</dd></div>
-                  <div className="agents-card-fact"><dt className="agents-card-fact__label">Cached input per 1M</dt><dd className="agents-card-fact__value">{profile.pricing.cached_input_per_million}</dd></div>
-                  <div className="agents-card-fact"><dt className="agents-card-fact__label">Output per 1M</dt><dd className="agents-card-fact__value">{profile.pricing.output_per_million}</dd></div>
-                </>
-              ) : null}
-            </dl>
-          )}
-        </section>
+              <p className="profiles-form__hint">{saving ? 'Saving…' : isGoProvider ? 'Foundry reasoning overrides do not apply to OpenCode Go.' : isChatgptProvider && !chatgptModels.length ? 'The selected ChatGPT account has no available model catalog. Reconnect it in Providers.' : 'Clear a field to remove it from the profile; pricing needs all four values or none.'}</p>
+            </>
+          ) : null}
+        </form>
       </div>
       {deleteAction.open ? (
         <PopupModal
