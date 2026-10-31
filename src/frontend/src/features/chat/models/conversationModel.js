@@ -40,6 +40,21 @@ export function shouldShowNewChatEmptyState({
   );
 }
 
+// A no-route visit creates its local draft asynchronously. No response may be
+// submitted before that draft has a stable runtime thread id.
+export function shouldDisableChatComposer({ connectionState, isClearingSession, threadId }) {
+  return connectionState === 'error' || isClearingSession || !threadId;
+}
+
+// A blank no-route conversation is a local draft and needs no server round
+// trip. Allocate its id before preference hydration so the composer can never
+// fall back to the backend's session-default thread.
+export function resolveInitialChatThreadId({ urlThreadId, handoffThreadId, createThreadId }) {
+  if (typeof handoffThreadId === 'string' && handoffThreadId) return handoffThreadId;
+  if (urlThreadId) return null;
+  return createThreadId();
+}
+
 export function getActiveRouteThreadId({
   selectedBackendChatId,
   messages,

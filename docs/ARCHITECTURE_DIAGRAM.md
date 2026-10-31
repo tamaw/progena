@@ -84,6 +84,22 @@ The dedicated stream is keyed by the acknowledged `request_id`. It carries only
 response-content transport for that request; canonical lifecycle ownership stays
 on `/api/ui/stream`.
 
+### Queued follow-ups
+
+Runtime-owned `chat_queue:<conversation_id>` documents hold pending inputs,
+ordering, delivery claims and bounded command deduplication. Queue commands cross
+the backend gateway; snapshots return through canonical `chat.queue.updated`
+events. The browser renders state and issues commands, not delivery decisions.
+
+Ordinary inputs drain after the active turn under `ConversationTurnGate`.
+**Send now** durably prioritizes the selected input, cancels the captured current
+root execution, then starts a new turn after that execution releases the gate.
+The cancelled partial answer remains in history. Each deferred turn has its own
+replayable runtime content stream, browser content stream and cancellation target;
+canonical lifecycle remains separate from high-rate content. Durable claims
+survive restart until a terminal checkpoint outcome is known; unfinished native
+graph execution resumes without appending the same human message again.
+
 ## Stream lifecycle
 
 ### Canonical stream

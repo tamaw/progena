@@ -182,6 +182,9 @@ class DeepAgentSSEStream:
         received_at: float | None = None,
         attachments: list[dict[str, Any]] | None = None,
         source: str | None = None,
+        message_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        resume: bool = False,
     ) -> AsyncGenerator[dict[str, Any]]:
         """Yield SSE stream items from ``graph.astream``."""
 
@@ -192,19 +195,30 @@ class DeepAgentSSEStream:
         self._output_tokens_by_message_id.clear()
         self._emitted_context_usage_by_message_id.clear()
         self._turn_interrupted = False
-
-        additional_kwargs: dict[str, Any] = {
-            "created_at": received_at if received_at is not None else time.time()
-        }
-        if attachments:
-            additional_kwargs["attachments"] = attachments
-        human_message = HumanMessage(content=message, additional_kwargs=additional_kwargs)
-        graph_input: dict[str, Any] = {"messages": [human_message]}
         self._summary_thread_id = thread_id
         summary_observer = SummarizationCallbackObserver(self._summary_scope_for_callback)
         self._trace_begin(thread_id=thread_id)
-        self.state["current_input"] = message
-        self.state["cycle_count"] = int(self.state.get("cycle_count") or 0) + 1
+
+        graph_input: dict[str, Any] | None = None
+        if not resume:
+            additional_kwargs: dict[str, Any] = {
+                "created_at": received_at if received_at is not None else time.time()
+            }
+            if attachments:
+                additional_kwargs["attachments"] = attachments
+            if metadata:
+                additional_kwargs["metadata"] = metadata
+            if source is not None:
+                additional_kwargs["source"] = source
+            message_kwargs: dict[str, Any] = {
+                "content": message,
+                "additional_kwargs": additional_kwargs,
+            }
+            if message_id is not None:
+                message_kwargs["id"] = message_id
+            graph_input = {"messages": [HumanMessage(**message_kwargs)]}
+            self.state["current_input"] = message
+            self.state["cycle_count"] = int(self.state.get("cycle_count") or 0) + 1
         configurable: dict[str, Any] = {"thread_id": thread_id}
         if source is not None:
             configurable["progena_source"] = source

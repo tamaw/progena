@@ -27,11 +27,13 @@ from langgraph.channels.delta import DeltaChannel, _DeltaSnapshot
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.store.memory import InMemoryStore
 
 from src.backend.config import ChatServerConfig
 from src.backend.integrations.runtime import SSEProgenaClient
 from src.backend.integrations.runtime_history import RuntimeConversationReader
 from src.progena.config import RuntimeConfig
+from src.progena.persistence.store import LangGraphRuntimeStore
 from src.progena.runtime.http.server import ProgenaHTTPServer
 from src.progena.runtime.queues import RuntimeQueues
 
@@ -60,7 +62,29 @@ class ScriptedBridge:
         received_at: float | None = None,
         source: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        message_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ):
+        additional_kwargs: dict[str, Any] = {}
+        if received_at is not None:
+            additional_kwargs["created_at"] = received_at
+        if source is not None:
+            additional_kwargs["source"] = source
+        if attachments:
+            additional_kwargs["attachments"] = attachments
+        if metadata:
+            additional_kwargs["metadata"] = metadata
+        message_kwargs: dict[str, Any] = {
+            "content": message,
+            "additional_kwargs": additional_kwargs,
+        }
+        if message_id is not None:
+            message_kwargs["id"] = message_id
+        await self.graph.aupdate_state(
+            {"configurable": {"thread_id": thread_id}},
+            {"messages": [HumanMessage(**message_kwargs)]},
+            as_node="noop",
+        )
         items = self._script(message) if callable(self._script) else self._script
         for item in items:
             if isinstance(item, _Wait):
@@ -87,7 +111,12 @@ def _graph() -> Any:
     return builder.compile(checkpointer=InMemorySaver())
 
 
+@dataclass
 class FakeStateManager:
+    _runtime_store: LangGraphRuntimeStore = field(
+        default_factory=lambda: LangGraphRuntimeStore(InMemoryStore())
+    )
+
     async def get_current_state(self) -> dict[str, Any]:
         return {"thread_id": "thread-test", "cycle_count": 0}
 
@@ -113,9 +142,14 @@ class _RuntimeServer:
     base_url: str
 
 
-async def _start_runtime_server(*, bridge_factory: Any = None) -> _RuntimeServer:
+async def _start_runtime_server(
+    *, bridge_factory: Any = None, enable_chat_queue: bool = False
+) -> _RuntimeServer:
     loop_runner = FakeLoopRunner()
-    server = ProgenaHTTPServer(state_manager=FakeStateManager(), loop_runner=loop_runner, port=0)
+    state_manager = FakeStateManager()
+    if enable_chat_queue:
+        loop_runner.heartbeat_context = SimpleNamespace(state_manager=state_manager)
+    server = ProgenaHTTPServer(state_manager=state_manager, loop_runner=loop_runner, port=0)
     # Test seam: inject a scripted bridge instead of the real DeepAgentSSEStream.
     assert server._chat_service is not None
     if bridge_factory is not None:
@@ -197,16 +231,55 @@ async def test_stream_events_translate_back_to_internal_chunks_and_events() -> N
         await client.stop()
         await runtime.server.stop()
 
+    assert events[0] == {"type": "response_started", "request_id": "req-2"}
+    assert events[-1]["type"] == "response_terminal"
+    assert events[-1]["status"] == "completed"
+    events = events[1:-1]
     assert [(e["type"], e.get("event_type"), e["content"], e.get("is_final")) for e in events] == [
         ("stream_event", "tool_start", "", None),
         ("stream_chunk", None, "ok", False),
-        ("stream_chunk", None, "", True),
     ]
     assert all(event["request_id"] == "req-2" for event in events)
     assert events[0]["metadata"] == {"tool": "x"}
     sequences = [events[0]["runtime_stream_seq"], events[1]["runtime_stream_seq"]]
     assert sequences == sorted(sequences)
     assert isinstance(events[1]["runtime_emitted_at_ms"], int)
+
+
+async def test_queue_client_actions_use_runtime_actions_route() -> None:
+    runtime = await _start_runtime_server(enable_chat_queue=True)
+    client = SSEProgenaClient(_client_config(runtime.base_url))
+    assert runtime.server._chat_service is not None
+    queue = runtime.server._chat_service._chat_queue
+    assert queue is not None
+    try:
+        initial, message_id = await queue.enqueue(
+            "queue-client-route",
+            text="Queued prompt",
+            attachments=[],
+            metadata={},
+            source="ui",
+            received_at=1.0,
+            response_id="queue-response-1",
+            model="progena-v1",
+        )
+        snapshot = await client.get_chat_queue("queue-client-route")
+        result = await client.apply_chat_queue_action(
+            "queue-client-route",
+            {
+                "action": "delete",
+                "message_id": message_id,
+                "revision": snapshot["revision"],
+                "command_id": "delete-queue-message-1",
+            },
+        )
+    finally:
+        await client.stop()
+        await runtime.server.stop()
+
+    assert initial["messages"][0]["id"] == message_id
+    assert result["conversation_id"] == "queue-client-route"
+    assert result["messages"] == []
 
 
 async def test_stream_events_raise_on_failed_response() -> None:

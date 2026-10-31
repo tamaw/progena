@@ -61,6 +61,32 @@ lifecycle event, then reconciles the persisted chat detail. A `202`
 acknowledgement remains pending across reconnect until its matching terminal,
 request failure, or explicit cancellation policy.
 
+## Queued messages
+
+The conversation page can compose another message, including attachments, while
+a response runs. `ChatQueue` renders authoritative `chat.queue.updated` snapshots
+with delete, drag/drop or keyboard-button reordering, and **Send now**. Mutations
+send a revision and command ID; failures are reported through existing notifications
+and followed by a fresh snapshot. Reconnect also rehydrates the selected queue.
+There is no optimistic queue ordering or speculative queued transcript row.
+
+Send now cancels the current root turn and starts the selected message separately;
+it is not mid-turn steering. Actual `queue_execution` started claims the stable
+human row once and observes that request's own content stream. When an already
+pending browser transport is adopted as that execution, its callbacks and
+speculative human row transfer to the queued owner rather than creating a
+second row. Enqueue acceptance does not take A's stream or Stop target; once B
+starts, A's late completion cannot clear B. Observed queued streams use the same
+pending transport, cursor replay, terminal draining and Stop machinery as
+directly submitted responses. Rich tool, reasoning and subagent events retain
+the shared live-turn renderer.
+
+After terminal reconciliation the canonical transcript owns the result, including
+the cancelled turn's interruption marker. Navigation releases the local observer
+without cancelling the durable execution. Queue controls are currently on the
+conversation page; Quick Chat queue controls and inline queued-message editing
+are not part of this feature.
+
 ## Session card layout
 
 Cards have three rows: time/pin (top), title (middle), and counts (bottom).

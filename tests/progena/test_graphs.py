@@ -166,6 +166,9 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle() -> None:
     tool_registry = _tool_registry()
 
     class _FakeAgentGraph:
+        async def aget_state(self, config):  # noqa: ANN001
+            return MagicMock(values={"messages": []})
+
         async def ainvoke(self, graph_input, config):  # noqa: ANN001
             assert config["configurable"] == {"thread_id": "thread-1"}
             assert graph_input["messages"][0].content == "hello"
@@ -227,6 +230,9 @@ async def test_runtime_heartbeat_graph_emits_agent_callback_for_notified_input()
     tool_registry = _tool_registry()
 
     class _FakeAgentGraph:
+        async def aget_state(self, config):  # noqa: ANN001
+            return MagicMock(values={"messages": []})
+
         async def ainvoke(self, graph_input, config):  # noqa: ANN001
             assert config["configurable"] == {"thread_id": "thread-1"}
             assert graph_input["messages"][0].content == "hello"
@@ -288,6 +294,9 @@ async def test_runtime_heartbeat_graph_reports_startup_node_errors() -> None:
     tool_registry = _tool_registry()
 
     class _FakeAgentGraph:
+        async def aget_state(self, config):  # noqa: ANN001
+            return MagicMock(values={"messages": []})
+
         async def ainvoke(self, graph_input, config):  # noqa: ANN001
             assert config["configurable"] == {"thread_id": "thread-1"}
             assert graph_input["messages"][0].content == "hello"

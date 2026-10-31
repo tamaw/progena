@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterable, Mapping
-from typing import Any, LiteralString, Protocol
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from contextlib import asynccontextmanager
+from typing import Any, LiteralString, Protocol, TypeVar
 
 from psycopg.sql import SQL, Composable
 
 STATE_NAMESPACE = ("progena", "state")
+
+_T = TypeVar("_T")
 
 
 class AsyncLangGraphStore(Protocol):
@@ -46,6 +49,26 @@ class LangGraphRuntimeStore:
     def __init__(self, store: AsyncLangGraphStore) -> None:
         self._store = store
         self._document_locks: dict[str, asyncio.Lock] = {}
+        self._native_connection_lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def _native_connection(self) -> AsyncIterator[Any]:
+        """Yield a connection that no other coroutine is using.
+
+        A pool hands out a dedicated connection. A single shared connection is
+        also used by ``AsyncPostgresStore``, which serialises its cursors with
+        ``self._store.lock``; direct queries must hold that same lock or they
+        interleave with store reads and break the connection's protocol state.
+        """
+        conn = getattr(self._store, "conn", None)
+        assert conn is not None
+        if callable(getattr(conn, "connection", None)):
+            async with conn.connection() as connection:
+                yield connection
+            return
+        lock = getattr(self._store, "lock", None) or self._native_connection_lock
+        async with lock:
+            yield conn
 
     async def open(self) -> None:
         """Match the old store lifecycle; native LangGraph store is already open."""
@@ -78,6 +101,73 @@ class LangGraphRuntimeStore:
         """Persist one runtime document."""
         await self._store.aput(STATE_NAMESPACE, name, {"payload": payload})
 
+    async def mutate_document(
+        self,
+        name: str,
+        mutation: Callable[[Any | None], tuple[Any, _T]],
+    ) -> _T:
+        """Atomically replace one document payload using ``mutation``.
+
+        Queue transitions require a read/decide/write transaction rather than
+        the field-level JSON merges used by the older state documents. Native
+        Postgres stores lock the row until the replacement is committed; the
+        in-memory implementation uses the matching process-local per-key lock.
+        """
+        conn = getattr(self._store, "conn", None)
+        if conn is None:
+            lock = self._document_locks.get(name)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._document_locks[name] = lock
+            async with lock:
+                current = await self.peek_document(name)
+                payload, result = mutation(current)
+                await self.save_document(name, payload)
+                return result
+
+        async def _mutate(connection: Any) -> _T:
+            async with connection.transaction(), connection.cursor() as cur:
+                # ``FOR UPDATE`` cannot protect an absent document row. Lock
+                # the logical state-document key first so concurrent first
+                # enqueues cannot both replace an empty queue.
+                await cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (name,),
+                )
+                await cur.execute(
+                    """
+                    SELECT value->'payload' AS payload
+                    FROM store
+                    WHERE prefix = 'progena.state' AND key = %s
+                    FOR UPDATE
+                    """,
+                    (name,),
+                )
+                row = await cur.fetchone()
+                current = (
+                    row["payload"]
+                    if isinstance(row, Mapping)
+                    else row[0]
+                    if row is not None
+                    else None
+                )
+                if isinstance(current, str):
+                    current = json.loads(current)
+                payload, result = mutation(current)
+                await cur.execute(
+                    """
+                    INSERT INTO store (prefix, key, value)
+                    VALUES ('progena.state', %s, jsonb_build_object('payload', %s::jsonb))
+                    ON CONFLICT (prefix, key) DO UPDATE
+                    SET value = EXCLUDED.value, updated_at = now()
+                    """,
+                    (name, json.dumps(payload)),
+                )
+                return result
+
+        async with self._native_connection() as connection:
+            return await _mutate(connection)
+
     async def merge_document(self, name: str, fields: dict[str, Any]) -> bool:
         """Atomically merge top-level ``fields`` into one runtime document's payload.
 
@@ -103,16 +193,9 @@ class LangGraphRuntimeStore:
             WHERE prefix = 'progena.state' AND key = %s
             RETURNING 1
         """
-        # A pool hands out connections; a single AsyncConnection's `connection`
-        # is a non-callable property.
-        if callable(getattr(conn, "connection", None)):
-            async with conn.connection() as connection, connection.cursor() as cur:
-                await cur.execute(sql, params)
-                row = await cur.fetchone()
-        else:
-            async with conn.cursor() as cur:
-                await cur.execute(sql, params)
-                row = await cur.fetchone()
+        async with self._native_connection() as connection, connection.cursor() as cur:
+            await cur.execute(sql, params)
+            row = await cur.fetchone()
         return row is not None
 
     async def append_document_list(self, name: str, field: str, item: Any) -> bool:
@@ -184,16 +267,9 @@ class LangGraphRuntimeStore:
 
     async def _execute_document_mutation(self, sql: str, params: tuple[Any, ...]) -> bool:
         """Run one SQL mutation against the native store connection."""
-        conn = getattr(self._store, "conn", None)
-        assert conn is not None
-        if callable(getattr(conn, "connection", None)):
-            async with conn.connection() as connection, connection.cursor() as cur:
-                await cur.execute(sql, params)
-                row = await cur.fetchone()
-        else:
-            async with conn.cursor() as cur:
-                await cur.execute(sql, params)
-                row = await cur.fetchone()
+        async with self._native_connection() as connection, connection.cursor() as cur:
+            await cur.execute(sql, params)
+            row = await cur.fetchone()
         return row is not None
 
     async def delete_document(self, name: str) -> None:
@@ -333,13 +409,7 @@ class LangGraphRuntimeStore:
 
     async def _fetch_native_rows(self, sql: str | Composable, params: tuple[Any, ...]) -> list[Any]:
         """Execute a read against a direct connection or LangGraph connection pool."""
-        conn = getattr(self._store, "conn", None)
-        assert conn is not None
-        if callable(getattr(conn, "connection", None)):
-            async with conn.connection() as connection, connection.cursor() as cur:
-                await cur.execute(sql, params)
-                return await cur.fetchall()
-        async with conn.cursor() as cur:
+        async with self._native_connection() as connection, connection.cursor() as cur:
             await cur.execute(sql, params)
             return await cur.fetchall()
 

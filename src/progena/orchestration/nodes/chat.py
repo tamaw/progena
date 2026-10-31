@@ -42,14 +42,15 @@ async def chat_node(
     turn = await ProviderTurn.create(llm_config, session_id=thread_id)
 
     async def invoke() -> Any:
+        config = {
+            "configurable": {"thread_id": thread_id},
+            "metadata": {"runtime_instance": RUNTIME_INSTANCE_ID},
+        }
         with activate_provider_turn(turn):
-            return await runtime.context.agent_graph.ainvoke(
-                {"messages": [human_message]},
-                config={
-                    "configurable": {"thread_id": thread_id},
-                    "metadata": {"runtime_instance": RUNTIME_INSTANCE_ID},
-                },
+            result = await runtime.context.agent_graph.ainvoke(
+                {"messages": [human_message]}, config=config
             )
+        return result
 
     gate = getattr(runtime.context, "conversation_gate", None)
     if not isinstance(gate, ConversationTurnGate):

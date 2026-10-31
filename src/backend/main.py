@@ -10,6 +10,7 @@ from starlette.middleware.gzip import GZipMiddleware
 
 import src.backend.attachments.routes as attachments_routes
 import src.backend.canvases.routes as canvases_routes
+import src.backend.chat.queue_routes as chat_queue_routes
 import src.backend.http.router as http_router
 import src.backend.instructions.routes as instructions_routes
 import src.backend.knowledge.routes as knowledge_routes
@@ -34,6 +35,7 @@ app = FastAPI(
     lifespan=lifecycle_startup.lifespan,
 )
 app.include_router(http_router.router)
+app.include_router(chat_queue_routes.create_chat_queue_router())
 app.include_router(search_routes.router)
 app.include_router(knowledge_routes.router)
 app.include_router(instructions_routes.router)

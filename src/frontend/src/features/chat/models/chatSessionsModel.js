@@ -267,6 +267,7 @@ function normalizeResponseStatus(value) {
 }
 
 
+
 function normalizeOutputTokenCount(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }

@@ -220,3 +220,4 @@ export function appendStreamEvent(events, nextEvent) {
   }
   return next;
 }
+

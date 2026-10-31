@@ -67,6 +67,7 @@ describe('normalizeStoredMessage', () => {
       responseStatus: 'cancelled',
       interruptionReason: 'user_cancelled',
     });
+
   });
 
   it('invalidates old serialized chunk counters, including denormalized timelines', () => {

@@ -308,7 +308,7 @@ class ProgenaClient:
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        """Send a message and stream structured events from the subprocess client."""
+        """Send a message and project subprocess output to the shared protocol."""
         if not self._started:
             await self.start()
 
@@ -316,7 +316,6 @@ class ProgenaClient:
             raise RuntimeError("Progena process not running")
 
         async with self._lock:
-            # Send message as JSON line with stream flag
             payload: dict[str, Any] = {
                 "type": "user_message",
                 "content": message,
@@ -329,22 +328,21 @@ class ProgenaClient:
 
             self._process.stdin.write((json.dumps(payload) + "\n").encode())
             await self._process.stdin.drain()
+            yield {"type": "response_started", "request_id": request_id}
 
-            # Read streaming chunks until we get the final response
             try:
                 while True:
                     response_line = await asyncio.wait_for(
                         self._process.stdout.readline(),
                         timeout=self.config.progena_timeout,
                     )
-
                     if not response_line:
                         raise RuntimeError("Progena process closed unexpectedly")
+                    self._last_heartbeat = time.time()
 
                     try:
                         response = json.loads(response_line.decode())
                     except json.JSONDecodeError:
-                        # Non-JSON output, yield as a synthetic stream chunk
                         text = response_line.decode().strip()
                         if text:
                             yield {
@@ -355,36 +353,64 @@ class ProgenaClient:
                             }
                         continue
 
-                    msg_type = response.get("type", "")
+                    msg_type = str(response.get("type", ""))
                     content = response.get("content", "")
-
+                    response_request_id = response.get("request_id", request_id)
                     if msg_type == "stream_chunk":
-                        yield {
-                            "type": "stream_chunk",
-                            "content": content,
-                            "is_final": bool(response.get("is_final", False)),
-                            "request_id": response.get("request_id", request_id),
-                        }
+                        if content:
+                            yield {
+                                "type": "stream_chunk",
+                                "content": content,
+                                "is_final": False,
+                                "request_id": response_request_id,
+                            }
                         if response.get("is_final", False):
-                            break
-
+                            yield {
+                                "type": "response_terminal",
+                                "status": "completed",
+                                "request_id": response_request_id,
+                            }
+                            return
                     elif msg_type == "stream_event":
                         yield {
                             "type": "stream_event",
                             "event_type": response.get("event_type", "unknown"),
                             "content": content,
                             "metadata": response.get("metadata", {}),
-                            "request_id": response.get("request_id", request_id),
+                            "request_id": response_request_id,
                         }
-
-                    elif msg_type == "stream_end":
-                        # Explicit stream end signal
-                        break
-
+                    elif msg_type in {"stream_end", "response.completed"}:
+                        yield {
+                            "type": "response_terminal",
+                            "status": "completed",
+                            "request_id": response_request_id,
+                        }
+                        return
+                    elif msg_type in {"response.failed", "response.incomplete"}:
+                        status = "failed" if msg_type == "response.failed" else "incomplete"
+                        yield {
+                            "type": "response_terminal",
+                            "status": status,
+                            "error": str(response.get("error") or "Response generation failed"),
+                            "request_id": response_request_id,
+                        }
+                        return
+                    elif not msg_type:
+                        if content:
+                            yield {
+                                "type": "stream_chunk",
+                                "content": content,
+                                "is_final": False,
+                                "request_id": response_request_id,
+                            }
+                        yield {
+                            "type": "response_terminal",
+                            "status": "completed",
+                            "request_id": response_request_id,
+                        }
+                        return
                     else:
-                        # Unknown message type - log and continue
                         logger.debug("Received unknown message type: %s", msg_type)
-
             except TimeoutError:
                 raise TimeoutError(f"Progena did not respond within {self.config.progena_timeout}s")
 

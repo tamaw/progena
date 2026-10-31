@@ -109,10 +109,10 @@ class ProgenaHTTPServer:
             await self._agent_protocol.start()
         self._runner = web.AppRunner(app)
         await self._runner.setup()
-        self._site = web.TCPSite(self._runner, self.host, self.port, reuse_address=True)
-        await self._site.start()
         if self._chat_service is not None:
             await self._chat_service.start()
+        self._site = web.TCPSite(self._runner, self.host, self.port, reuse_address=True)
+        await self._site.start()
 
         server = getattr(self._site, "_server", None)
         sockets = getattr(server, "sockets", None)

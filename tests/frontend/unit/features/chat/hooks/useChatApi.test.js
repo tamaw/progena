@@ -33,7 +33,6 @@ import { useChatApi } from '@frontend/features/chat/hooks/useChatApi';
 const RESPONSES_URL = '/api/ui/responses';
 const REQUEST_ID = '11111111-1111-4111-8111-111111111111';
 const CANCEL_REQUEST_ID = '22222222-2222-4222-8222-222222222222';
-const FRONTEND_RESPONSE_OPTIONS_KEY = '__frontendResponse';
 
 class MockEventSource {
   static instances = [];
@@ -176,6 +175,30 @@ describe('useChatApi dedicated response transport', () => {
     ]);
   });
 
+  it('keeps the active response cancellable when a queued submission has its own terminal lifecycle', async () => {
+    const primaryRequestId = '11111111-1111-4111-8111-111111111111';
+    const queuedRequestId = '22222222-2222-4222-8222-222222222222';
+    const cancelRequestId = '33333333-3333-4333-8333-333333333333';
+    vi.stubGlobal('crypto', {
+      randomUUID: vi.fn()
+        .mockReturnValueOnce(primaryRequestId)
+        .mockReturnValueOnce(queuedRequestId)
+        .mockReturnValueOnce(cancelRequestId),
+    });
+    const hook = useChatApi();
+
+    void hook.sendMessageStream('Primary response', [], vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    await flushMicrotasks();
+    await hook.queueMessage('Queue this instead');
+    await flushMicrotasks();
+
+    void hook.cancelStream();
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${RESPONSES_URL}/${primaryRequestId}/cancel`,
+      expect.objectContaining({ method: 'PUT' }),
+    );
+  });
+
   it('reconnects after a transport error with the last dedicated frame cursor', async () => {
     vi.useFakeTimers();
     const hook = useChatApi();
@@ -244,7 +267,8 @@ describe('useChatApi dedicated response transport', () => {
     ]);
   });
 
-  it('allows opted-in chat streams to wait for the canonical terminal lifecycle after resynchronization', async () => {
+
+  it('reconciles a desynchronized direct chat response through its canonical completion', async () => {
     vi.useFakeTimers();
     const onComplete = vi.fn();
     const onError = vi.fn();
@@ -256,31 +280,55 @@ describe('useChatApi dedicated response transport', () => {
       onComplete,
       onError,
       vi.fn(),
-      { [FRONTEND_RESPONSE_OPTIONS_KEY]: { allowDesyncedCompletion: true } },
+      { __frontendResponse: { allowDesyncedCompletion: true }, thread_id: 'thread-1' },
     );
-    let settled = false;
-    terminal.then(() => {
-      settled = true;
-    });
     await flushMicrotasks();
 
     const source = MockEventSource.instances[0];
     source.emit('chat.response.resync_required', { request_id: REQUEST_ID, reason: 'cursor_expired' });
-    await flushMicrotasks();
-
-    expect(source.closed).toBe(true);
-    expect(settled).toBe(false);
-    expect(onComplete).not.toHaveBeenCalled();
-    expect(onError).not.toHaveBeenCalled();
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).metadata).toEqual({ thread_id: 'thread-1' });
 
     publishLifecycle('chat.response.completed');
     await vi.runOnlyPendingTimersAsync();
     await terminal;
 
-    expect(settled).toBe(true);
     expect(onComplete).toHaveBeenCalledOnce();
     expect(onComplete).toHaveBeenCalledWith('completed');
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('adopts an already pending transport for queued execution callbacks', async () => {
+    const directChunk = vi.fn();
+    const queuedChunk = vi.fn();
+    const queuedComplete = vi.fn();
+    const adopted = vi.fn();
+    const hook = useChatApi();
+    const terminal = hook.sendMessageStream(
+      'Queued by the runtime',
+      [],
+      directChunk,
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      null,
+      { humanMessageId: 'local-human' },
+    );
+    await flushMicrotasks();
+
+    hook.observeResponseStream(REQUEST_ID, {
+      onChunk: queuedChunk,
+      onComplete: queuedComplete,
+      onAdopt: adopted,
+    });
+    const source = MockEventSource.instances[0];
+    source.emit('chat.response.delta', { delta: 'claimed' }, `chat-response:${REQUEST_ID}:1`);
+    publishLifecycle('chat.response.completed');
+    await terminal;
+
+    expect(adopted).toHaveBeenCalledWith({ humanMessageId: 'local-human' });
+    expect(directChunk).not.toHaveBeenCalled();
+    expect(queuedChunk).toHaveBeenCalledWith('claimed');
+    expect(queuedComplete).toHaveBeenCalledWith('completed');
   });
 
   it('fails desynced quick-chat completions explicitly instead of silently completing empty', async () => {
@@ -357,12 +405,14 @@ describe('useChatApi dedicated response transport', () => {
 
     expect(MockEventSource.instances).toHaveLength(1);
     globalThis.crypto.randomUUID.mockReturnValueOnce(CANCEL_REQUEST_ID);
-    await hook.cancelStream();
+    const cancellation = hook.cancelStream();
 
     expect(fetchMock).toHaveBeenLastCalledWith(
       `${RESPONSES_URL}/${REQUEST_ID}/cancel`,
       expect.objectContaining({ method: 'PUT' }),
     );
+    publishLifecycle('chat.response.cancelled');
+    await cancellation;
 
     cleanup();
     expect(MockEventSource.instances[0].closed).toBe(true);

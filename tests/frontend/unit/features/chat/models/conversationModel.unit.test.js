@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   shouldShowChatContentLoading,
   shouldShowNewChatEmptyState,
+  shouldDisableChatComposer,
+  resolveInitialChatThreadId,
   toValidTimestamp,
   formatStartedTime,
   deriveChatTitle,
@@ -43,6 +45,34 @@ describe('chat selection race guards', () => {
       selectedBackendChatId: null,
       threadId: null,
       messageCount: 0,
+    })).toBe(false);
+  });
+
+  it('keeps the no-route composer disabled until its local draft has a thread id', () => {
+    expect(shouldDisableChatComposer({
+      connectionState: 'connected',
+      isClearingSession: false,
+      threadId: null,
+    })).toBe(true);
+    expect(shouldDisableChatComposer({
+      connectionState: 'connected',
+      isClearingSession: false,
+      threadId: 'draft-thread',
+    })).toBe(false);
+  });
+
+  it('allocates a no-route draft before preferences hydrate so the composer enables promptly', () => {
+    const threadId = resolveInitialChatThreadId({
+      urlThreadId: null,
+      handoffThreadId: null,
+      createThreadId: () => 'prompt-draft',
+    });
+
+    expect(threadId).toBe('prompt-draft');
+    expect(shouldDisableChatComposer({
+      connectionState: 'connected',
+      isClearingSession: false,
+      threadId,
     })).toBe(false);
   });
 

@@ -85,6 +85,9 @@ async def test_loop_clears_messages_when_thread_id_changes_mid_cycle(tmp_path: P
     )
 
     class _FakeGraph:
+        async def aget_state(self, config):  # noqa: ANN001
+            return MagicMock(values={"messages": []})
+
         async def ainvoke(self, graph_input, config):  # noqa: ANN001
             # Simulate new_conversation being invoked during the cycle.
             loop._state["thread_id"] = "thread_new"

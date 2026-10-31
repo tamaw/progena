@@ -59,6 +59,7 @@ function getSlashQuery(value) {
 
 const ChatInput = forwardRef(function ChatInput({
   onSend,
+  onQueue,
   onStop,
   onCommand,
   isGenerating,
@@ -66,6 +67,7 @@ const ChatInput = forwardRef(function ChatInput({
   placeholder = 'What should we work on next?',
   enableSlashCommands = true,
   allowStop = true,
+  allowQueue = false,
   autoFocus = false,
   focusToken = null,
   keepFocusAfterSend = false,
@@ -120,8 +122,9 @@ const ChatInput = forwardRef(function ChatInput({
       .filter(Boolean);
     return names.filter((name) => name.toLowerCase().includes(mentionContext.query));
   }, [agentProfiles, mentionContext]);
-  const isSlashMenuOpen = !disabled && !isGenerating && filteredSlashCommands.length > 0;
-  const isMentionMenuOpen = !disabled && !isGenerating && mentionCandidates.length > 0;
+  const canComposeWhileGenerating = isGenerating && allowQueue;
+  const isSlashMenuOpen = !disabled && (!isGenerating || allowQueue) && filteredSlashCommands.length > 0;
+  const isMentionMenuOpen = !disabled && (!isGenerating || allowQueue) && mentionCandidates.length > 0;
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -131,10 +134,10 @@ const ChatInput = forwardRef(function ChatInput({
   }, [message]);
 
   useEffect(() => {
-    if (autoFocus && !disabled && !isGenerating) {
+    if (autoFocus && !disabled && (!isGenerating || allowQueue)) {
       requestAnimationFrame(() => textareaRef.current?.focus());
     }
-  }, [autoFocus, disabled, focusToken, isGenerating]);
+  }, [allowQueue, autoFocus, disabled, focusToken, isGenerating]);
 
   // Request the roster once per stream session (the snapshot arrives on the
   // stream). A reconnect starts a new session, so a failed request is retried
@@ -308,7 +311,7 @@ const ChatInput = forwardRef(function ChatInput({
   }, [getApiUrl]);
 
   const handlePaste = (e) => {
-    if (!enableAttachments || disabled || isGenerating) return;
+    if (!enableAttachments || disabled || (isGenerating && !allowQueue)) return;
     const items = Array.from(e.clipboardData?.items || []);
     const files = items
       .filter((item) => item.kind === 'file')
@@ -332,7 +335,7 @@ const ChatInput = forwardRef(function ChatInput({
   }), [handleFilesSelected]);
 
   const handleDragEnter = (e) => {
-    if (!enableAttachments || disabled || isGenerating) return;
+    if (!enableAttachments || disabled || (isGenerating && !allowQueue)) return;
     if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
     e.preventDefault();
     // Stop here so a page-level drop zone wrapping the whole chat window
@@ -345,7 +348,7 @@ const ChatInput = forwardRef(function ChatInput({
   };
 
   const handleDragOver = (e) => {
-    if (!enableAttachments || disabled || isGenerating) return;
+    if (!enableAttachments || disabled || (isGenerating && !allowQueue)) return;
     if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
     e.preventDefault();
     e.stopPropagation();
@@ -362,7 +365,7 @@ const ChatInput = forwardRef(function ChatInput({
   };
 
   const handleDrop = (e) => {
-    if (!enableAttachments || disabled || isGenerating) return;
+    if (!enableAttachments || disabled || (isGenerating && !allowQueue)) return;
     e.preventDefault();
     e.stopPropagation();
     dragDepthRef.current = 0;
@@ -372,7 +375,12 @@ const ChatInput = forwardRef(function ChatInput({
 
   const handleSend = () => {
     const trimmedMessage = message.trim();
-    if ((!trimmedMessage && pendingAttachments.length === 0) || isGenerating || disabled || hasUploadingAttachments) {
+    if (
+      (!trimmedMessage && pendingAttachments.length === 0)
+      || (isGenerating && !allowQueue)
+      || disabled
+      || hasUploadingAttachments
+    ) {
       return;
     }
 
@@ -386,7 +394,7 @@ const ChatInput = forwardRef(function ChatInput({
 
     const attachments = pendingAttachments.filter((attachment) => attachment.id && !attachment.error);
     if (trimmedMessage || attachments.length > 0) {
-      onSend(trimmedMessage, attachments);
+      (canComposeWhileGenerating ? onQueue : onSend)?.(trimmedMessage, attachments);
       setMessage('');
       setPendingAttachments([]);
       if (keepFocusAfterSend) {
@@ -496,7 +504,7 @@ const ChatInput = forwardRef(function ChatInput({
           <textarea
             ref={textareaRef}
             className="chat-input"
-            placeholder={disabled || isGenerating ? '' : placeholder}
+            placeholder={disabled || (isGenerating && !allowQueue) ? '' : placeholder}
             value={message}
             onChange={(e) => {
               setMessage(e.target.value);
@@ -509,7 +517,7 @@ const ChatInput = forwardRef(function ChatInput({
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             rows={1}
-            disabled={disabled || isGenerating}
+            disabled={disabled || (isGenerating && !allowQueue)}
           />
           <div className="input-toolbar">
             <div className="input-toolbar__left">
@@ -530,7 +538,7 @@ const ChatInput = forwardRef(function ChatInput({
                     type="button"
                     className="btn-icon"
                     aria-label="Attach file"
-                    disabled={disabled || isGenerating}
+                    disabled={disabled || (isGenerating && !allowQueue)}
                     onClick={() => fileInputRef.current?.click()}
                   >
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -578,27 +586,33 @@ const ChatInput = forwardRef(function ChatInput({
                 </svg>
               </button>
               </ComposerTooltip>
-              <ComposerTooltip label={isGenerating && allowStop ? 'Stop generation' : 'Send message'}>
               {isGenerating && allowStop ? (
-                <button type="button" className="btn-send btn-send--stop" aria-label="Stop generation" onClick={onStop}>
-                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                    <rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" />
-                  </svg>
-                </button>
-              ) : (
+                <ComposerTooltip label="Stop generation">
+                  <button type="button" className="btn-send btn-send--stop" aria-label="Stop generation" onClick={onStop}>
+                    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                      <rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" />
+                    </svg>
+                  </button>
+                </ComposerTooltip>
+              ) : null}
+              <ComposerTooltip label={canComposeWhileGenerating ? 'Queue message' : 'Send message'}>
                 <button
                   type="button"
                   className="btn-send"
-                  aria-label="Send message"
+                  aria-label={canComposeWhileGenerating ? 'Queue message' : 'Send message'}
                   onClick={handleSend}
-                  disabled={(!message.trim() && pendingAttachments.length === 0) || disabled || isGenerating || hasUploadingAttachments}
+                  disabled={(
+                    (!message.trim() && pendingAttachments.length === 0)
+                    || disabled
+                    || (isGenerating && !allowQueue)
+                    || hasUploadingAttachments
+                  )}
                 >
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <line x1="12" y1="19" x2="12" y2="5" />
                     <polyline points="5 12 12 5 19 12" />
                   </svg>
                 </button>
-              )}
               </ComposerTooltip>
             </div>
           </div>

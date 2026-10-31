@@ -2188,6 +2188,7 @@ describe('finalizeLiveAssistantTurn', () => {
       });
 
       expect(result).toMatchObject({ content: 'Partial', interruptionReason: 'user_cancelled', isStreaming: false });
+
     });
   });
 

@@ -222,6 +222,68 @@ No additional EventSource, polling, database notification channel, or independen
 compaction ledger is used. Summary timestamps describe checkpoint commits, not
 exact generation duration; no token-saving percentage is inferred.
 
+### Pending chat messages and cancel-and-send
+
+The runtime owns a durable, revisioned input queue per conversation. The backend
+is a gateway; it never edits graph checkpoints to deliver user instructions.
+
+- `GET /api/chat/sessions/{conversation_id}/queue` requests a queue snapshot.
+- `POST /api/chat/sessions/{conversation_id}/queue/actions` accepts
+  `{action, revision, command_id, message_id?, order?}`.
+- Actions are `delete`, `reorder`, and `send_now`. Reorder supplies every unclaimed
+  message ID exactly once. Delete and send-now target one pending message.
+- Successful operations return only
+  `202 {request_id,event_types:["chat.queue.updated"]}`. Their correlated canonical
+  event supplies `{conversation_id,revision,messages,request_id}`.
+- Queue messages expose stable `id`, `text`, `attachments`, `status`
+  (`queued` or `sending`), creation/request identity, and optional `send_now`.
+  A selected but unclaimed message renders as **Sending next**.
+
+Commands are idempotent by command ID within the retained command history.
+Stale revisions and mutations of claimed messages fail with `409`; rejected
+commands emit no success event. The client requests a separately correlated
+snapshot to recover. Snapshots must not regress an already-observed revision;
+canonical reconnect requests fresh state rather than relying on bounded replay.
+
+Normal follow-ups wait for the active invocation to finish. **Send now** persists
+the selected input's priority, requests cancellation of the exact current root
+execution, and starts the selected input as a separate turn only after that
+execution releases `ConversationTurnGate`. Partial output keeps the ordinary
+`user_cancelled` interruption marker. Replaying a command, or selecting an
+already-prioritized item again, cannot cancel a newer execution. Pending inputs
+retain their server-accepted priority/FIFO ordering. Cancellation does not undo
+completed tool side effects or guarantee that independent remote delegates stop.
+
+Claiming and queue mutations are atomic. Claims remain durable until a terminal
+outcome is established: a checkpointed human message alone is not completion.
+Startup resumes a claimed thread's native pending graph with no duplicate human
+input; completed checkpoint segments are settled without replaying finished work.
+Uncommitted claims return to the queue. Claimed messages cannot be deleted or
+reordered. Different conversations do not share an execution gate.
+
+Durable enqueue is not execution completion. Acceptance of queued B while A runs
+does not replace A's content owner. Actual queued execution publishes canonical
+response lifecycle with `queue_execution: true`, `content_request_id` equal to
+B's request ID, and `queued_message: {id,text,attachments}` on started. B streams
+through its own existing `/api/ui/responses/{request_id}/stream` and has its own
+cancellation target. Late A terminal events cannot clear B's active state.
+The gateway reconciles the replayable execution stream against the live runtime
+broadcast: an unseen queued start or terminal is emitted once from the relay,
+while an observed runtime lifecycle edge suppresses the duplicate. This preserves
+one canonical terminal even when the live runtime event subscription disconnects.
+Terminal history reconciliation follows the session merge and retains native
+completed, failed, or cancelled status. Browser display projections omit the
+model-only attachment context suffix while preserving attachment descriptors.
+
+Internally the gateway follows deferred output on
+`GET /v1/responses/{response_id}/stream`, with bounded replay and a `cursor`
+query parameter or `Last-Event-ID` header. Slow followers reconnect from their
+last consumed frame; an expired cursor produces explicit resynchronization,
+not a truncated successful reply. Gateway restart discovers persisted sending
+queues and restores their response relays. Queue snapshots/lifecycle continue
+to use the existing canonical lane; no polling or additional app-lifetime
+EventSource is introduced.
+
 ### Message output usage and terminal work state
 
 Canonical chat messages carry nullable `token_count` and `final_call_token_count`,

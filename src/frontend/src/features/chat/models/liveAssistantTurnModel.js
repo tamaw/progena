@@ -27,9 +27,10 @@ import { applyConversationSummaryActivity } from './conversationSummaryModel';
 import { isToolEventFailure } from './toolFailureModel';
 
 /** Create a fresh live assistant turn with no visible output yet. */
-export function createLiveAssistantTurn({ streamId, startedAt }) {
+export function createLiveAssistantTurn({ streamId, startedAt, assistantIdPrefix = streamId }) {
   return {
     streamId,
+    assistantIdPrefix,
     startedAt,
     assistantMessageId: null,
     assistantTimestamp: null,
@@ -729,7 +730,7 @@ export function applyAssistantChunk(turn, chunk, materialiseAt) {
 
   // Materialise the assistant row on first text chunk.
   if (!next.assistantMessageId) {
-    next.assistantMessageId = `${turn.streamId}-assistant`;
+    next.assistantMessageId = `${turn.assistantIdPrefix ?? turn.streamId}-assistant`;
     next.assistantTimestamp = materialiseAt;
     next.timelineItems = [
       ...next.timelineItems,
@@ -1018,9 +1019,9 @@ export function buildDefaultAssistantTimeline(message) {
 export function toCommittedAssistantMessage(turn) {
   return {
     streamId: turn.streamId,
-    assistantMessageId: turn.assistantMessageId || `${turn.streamId}-assistant`,
+    assistantMessageId: turn.assistantMessageId || `${turn.assistantIdPrefix ?? turn.streamId}-assistant`,
     startedAt: turn.startedAt,
-    id: turn.assistantMessageId || `${turn.streamId}-assistant`,
+    id: turn.assistantMessageId || `${turn.assistantIdPrefix ?? turn.streamId}-assistant`,
     role: 'assistant',
     content: turn.content,
     timestamp: turn.assistantTimestamp || turn.startedAt,
@@ -1133,7 +1134,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage, int
         : item);
 
     if (!finalTurn.assistantMessageId) {
-      finalTurn.assistantMessageId = `${finalTurn.streamId}-assistant`;
+      finalTurn.assistantMessageId = `${finalTurn.assistantIdPrefix ?? finalTurn.streamId}-assistant`;
     }
     const hasAssistantItem = timelineItems.some((item) => item.kind === 'assistant_message');
     if (!hasAssistantItem && priorContent.trim().length > 0) {
@@ -1184,7 +1185,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage, int
     finalTurn.content = `Error: ${typeof errorMessage === 'string' && errorMessage.trim() ? errorMessage.trim() : 'Response failed.'}`;
     finalTurn.error = true;
     if (!finalTurn.assistantMessageId) {
-      finalTurn.assistantMessageId = `${finalTurn.streamId}-assistant`;
+      finalTurn.assistantMessageId = `${finalTurn.assistantIdPrefix ?? finalTurn.streamId}-assistant`;
     }
     finalTurn.timelineItems = [
       ...(Array.isArray(finalTurn.timelineItems) ? finalTurn.timelineItems : []),
@@ -1213,7 +1214,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage, int
     // No text and no visible events — show placeholder so the cursor doesn't vanish.
     finalTurn.content = '(No response text)';
     if (!finalTurn.assistantMessageId) {
-      finalTurn.assistantMessageId = `${finalTurn.streamId}-assistant`;
+      finalTurn.assistantMessageId = `${finalTurn.assistantIdPrefix ?? finalTurn.streamId}-assistant`;
     }
     finalTurn.timelineItems = [
       {
@@ -1236,6 +1237,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage, int
     ];
     return toCommittedAssistantMessage(finalTurn);
   }
+
 
   // Ensure the timeline items reflect the final state.
   finalTurn.timelineItems = finalTurn.timelineItems.map((item) => {

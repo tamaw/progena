@@ -79,6 +79,7 @@ function normalizeResponseStatus(value) {
   return typeof value === 'string' && RESPONSE_STATUSES.has(value) ? value : 'unknown';
 }
 
+
 function normalizeOutputTokenCount(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
@@ -164,6 +165,7 @@ export function normalizeStoredMessage(message, index, { preserveTimeline = fals
     }
   }
   const responseStatus = normalizeResponseStatus(message.responseStatus);
+
   const messageWithoutTimelineItems = { ...message };
   delete messageWithoutTimelineItems.timelineItems;
 

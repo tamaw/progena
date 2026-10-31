@@ -13,6 +13,8 @@ import src.backend.alerts.relay as alerts_relay
 import src.backend.alerts.routes as alerts_routes
 import src.backend.attachments.store as attachments_store
 import src.backend.channels.manager as channels_manager
+import src.backend.chat.responses as chat_responses
+import src.backend.events.contracts as events_contracts
 import src.backend.events.documents as events_documents
 import src.backend.events.routes as events_routes
 import src.backend.events.stream as events_stream
@@ -161,11 +163,31 @@ async def lifespan(app: FastAPI):
           agent messages, agent questions and scheduled responses
         """
 
-        # Always broadcast to SSE
-        metadata = data.get("metadata") or {}
-        thread_id = str(metadata.get("thread_id") or "").strip() or None
-        events_stream.broadcast_ui_event(event_type, data, scope="chat", session_id=thread_id)
-
+        # Always broadcast to SSE. Queue snapshots are runtime events rather
+        # than chat content, so their conversation identity is top-level.
+        metadata = data.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        thread_id = (
+            str(
+                metadata.get("thread_id")
+                or (
+                    data.get("conversation_id")
+                    if event_type == events_contracts.UiEvent.CHAT_QUEUE_UPDATED
+                    else data.get("thread_id", "")
+                )
+            ).strip()
+            or None
+        )
+        request_id = data.get("request_id")
+        should_broadcast = chat_responses.handle_runtime_queue_lifecycle(event_type, data)
+        if should_broadcast:
+            events_stream.broadcast_ui_event(
+                event_type,
+                data,
+                scope="chat",
+                session_id=thread_id,
+                request_id=request_id if isinstance(request_id, str) and request_id else None,
+            )
         # Reflect runtime-driven schedule changes on the canonical UI stream so
         # the Schedules page updates live (e.g. a one-off firing and removing
         # itself, or a schedule created from a chat).
@@ -182,10 +204,18 @@ async def lifespan(app: FastAPI):
         lifecycle_state.config, event_callback=combined_event_callback
     )
 
+    # Rehydrate relays only after the runtime client is connected. Runtime
+    # broadcasts are live-only, while its durable queue retains claimed work.
+    async def start_runtime_and_recover_queue(
+        client: integrations_runtime.SSEProgenaClient,
+    ) -> None:
+        await integrations_runtime.start_sse_client_with_retry(client)
+        await chat_responses.recover_runtime_queued_executions()
+
     # Register client shutdown callback
     if lifecycle_state.client:
         sse_event_forwarding_task = asyncio.create_task(
-            integrations_runtime.start_sse_client_with_retry(lifecycle_state.client)
+            start_runtime_and_recover_queue(lifecycle_state.client)
         )
 
         async def stop_sse_event_forwarding_task() -> None:

@@ -139,6 +139,13 @@ function removeChatRuntimeId(ids, threadId) {
 }
 
 function responseRequestIdFor(payload) {
+  if (
+    (payload?.queued === true || payload?.queue_execution === true)
+    && typeof payload?.content_request_id === 'string'
+    && payload.content_request_id
+  ) {
+    return payload.content_request_id;
+  }
   return typeof payload?.request_id === 'string' && payload.request_id ? payload.request_id : null;
 }
 

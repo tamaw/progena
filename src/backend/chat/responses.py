@@ -8,7 +8,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Coroutine
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -25,6 +25,8 @@ import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
 import src.backend.http.requests as http_requests
 import src.backend.lifecycle.state as lifecycle_state
+import src.backend.storage.documents as storage_documents
+from src.backend.storage.documents import PROGENA_STATE_PREFIX
 from src.progena.sessions.titles import ATTACHMENT_CONTEXT_MARKER
 
 router = APIRouter()
@@ -85,9 +87,13 @@ class ResponseActivityState:
 
 
 _response_streams: dict[str, ResponseStreamState] = {}
-
-
 _response_activities: dict[str, ResponseActivityState] = {}
+
+
+_response_execution_tasks: dict[str, asyncio.Task] = {}
+_queue_started_request_ids: set[str] = set()
+_queue_terminal_request_ids: set[str] = set()
+_terminal_response_request_ids: set[str] = set()
 
 
 _WAITING_DELEGATION_TOOL_NAMES = frozenset({"task", "a2a_send", "acp_send"})
@@ -340,6 +346,195 @@ def _spawn_background_task(coro: Coroutine[Any, Any, Any]) -> asyncio.Task:
     return task
 
 
+def _track_response_execution(request_id: str, coro: Coroutine[Any, Any, Any]) -> None:
+    """Run exactly one local content relay for a browser response request."""
+    existing = _response_execution_tasks.get(request_id)
+    if existing is not None and not existing.done():
+        return
+    task = _spawn_background_task(coro)
+    _response_execution_tasks[request_id] = task
+
+    def discard(completed: asyncio.Task) -> None:
+        if _response_execution_tasks.get(request_id) is completed:
+            _response_execution_tasks.pop(request_id, None)
+
+    task.add_done_callback(discard)
+
+
+def _claim_response_terminal(request_id: str) -> bool:
+    """Claim one browser-visible terminal lifecycle edge for a request."""
+    if request_id in _terminal_response_request_ids:
+        return False
+    _terminal_response_request_ids.add(request_id)
+    return True
+
+
+def _broadcast_response_terminal(
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    thread_id: str,
+    request_id: str,
+) -> None:
+    """Publish a terminal edge once across local relays and runtime broadcasts."""
+    if not _claim_response_terminal(request_id):
+        return
+    events_stream.broadcast_ui_event(
+        event_type,
+        payload,
+        scope="chat",
+        session_id=thread_id,
+        request_id=request_id,
+    )
+
+
+def _accepts_keyword(function: Callable[..., Any], keyword: str) -> bool:
+    """Whether a client method accepts a named optional protocol extension."""
+    parameters = inspect.signature(function).parameters
+    return keyword in parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+
+
+def handle_runtime_queue_lifecycle(event_type: str, payload: dict[str, Any]) -> bool:
+    """Maintain queue ownership and return whether its lifecycle edge is new."""
+    if not payload.get("queue_execution"):
+        return True
+    request_id = payload.get("request_id")
+    thread_id = payload.get("thread_id")
+    if not isinstance(request_id, str) or not request_id:
+        return True
+    if not isinstance(thread_id, str) or not thread_id:
+        return True
+
+    if event_type == events_contracts.UiEvent.CHAT_RESPONSE_STARTED:
+        if request_id in _terminal_response_request_ids:
+            return False
+        first_start = request_id not in _queue_started_request_ids
+        _queue_started_request_ids.add(request_id)
+        if request_id not in _response_activities:
+            _register_response_activity(request_id, thread_id)
+        _ensure_response_stream(
+            request_id,
+            str(payload.get("id") or request_id),
+            thread_id,
+            str(payload.get("model") or "progena-v1"),
+        )
+        if request_id in _response_execution_tasks:
+            return first_start
+        _active_response_streams.setdefault(request_id, asyncio.Event())
+        content_request_id = payload.get("content_request_id")
+        if not isinstance(content_request_id, str) or not content_request_id:
+            content_request_id = request_id
+        _track_response_execution(
+            request_id,
+            _run_response_event_stream(
+                message="",
+                model=str(payload.get("model") or "progena-v1"),
+                request_id=request_id,
+                response_id=str(payload.get("id") or request_id),
+                thread_id=thread_id,
+                stream=True,
+                deferred_only=True,
+                content_request_id=content_request_id,
+            ),
+        )
+        return first_start
+
+    if event_type in {
+        events_contracts.UiEvent.CHAT_RESPONSE_COMPLETED,
+        events_contracts.UiEvent.CHAT_RESPONSE_FAILED,
+        events_contracts.UiEvent.CHAT_RESPONSE_CANCELLED,
+    }:
+        first_terminal = _claim_response_terminal(request_id)
+        _queue_terminal_request_ids.add(request_id)
+        _clear_response_activity(request_id)
+        if request_id not in _response_execution_tasks:
+            state = _response_streams.get(request_id)
+            if state is not None:
+                _mark_response_stream_terminal(state)
+            _active_response_streams.pop(request_id, None)
+        return first_terminal
+    return True
+
+
+def _sending_queue_conversation_ids() -> set[str]:
+    """Find only durable queue documents that still need a content relay."""
+    try:
+        rows = storage_documents.get_default_document_store().list_documents(
+            PROGENA_STATE_PREFIX, "chat_queue:"
+        )
+    except Exception:
+        logger.warning("Unable to discover durable sending queue entries", exc_info=True)
+        return set()
+    return {
+        str(payload.get("conversation_id") or key.removeprefix("chat_queue:"))
+        for key, document in rows
+        if isinstance((payload := document.payload), dict)
+        and isinstance(payload.get("messages"), list)
+        and any(
+            isinstance(message, dict) and message.get("status") == "sending"
+            for message in payload["messages"]
+        )
+        and str(payload.get("conversation_id") or key.removeprefix("chat_queue:"))
+    }
+
+
+async def recover_runtime_queued_executions() -> None:
+    """Reattach this gateway to durable queue entries that are already sending."""
+    client = lifecycle_state.client
+    get_queue = getattr(client, "get_chat_queue", None) if client is not None else None
+    if not callable(get_queue):
+        return
+    conversation_ids = _sending_queue_conversation_ids()
+    for thread_id in conversation_ids:
+        try:
+            snapshot = await cast(Callable[[str], Awaitable[Any]], get_queue)(thread_id)
+        except Exception:
+            logger.warning("Unable to recover queue relay for %s", thread_id, exc_info=True)
+            continue
+        messages = snapshot.get("messages") if isinstance(snapshot, dict) else None
+        if not isinstance(messages, list):
+            continue
+        for message in messages:
+            if not isinstance(message, dict) or message.get("status") != "sending":
+                continue
+            request_id = message.get("request_id")
+            message_id = message.get("id")
+            if not isinstance(request_id, str) or not request_id:
+                continue
+            if request_id in _queue_terminal_request_ids:
+                continue
+            if not isinstance(message_id, str) or not message_id:
+                continue
+            content_request_id = message.get("content_request_id") or message.get("response_id")
+            if not isinstance(content_request_id, str) or not content_request_id:
+                content_request_id = request_id
+            attachments = message.get("attachments")
+            queued_message = {
+                "id": message_id,
+                "text": message.get("text") if isinstance(message.get("text"), str) else "",
+                "attachments": attachments if isinstance(attachments, list) else [],
+            }
+            payload = {
+                "id": message.get("response_id") or request_id,
+                "thread_id": thread_id,
+                "message_id": message_id,
+                "request_id": request_id,
+                "content_request_id": content_request_id,
+                "queue_execution": True,
+                "queued_message": queued_message,
+            }
+            handle_runtime_queue_lifecycle(events_contracts.UiEvent.CHAT_RESPONSE_STARTED, payload)
+            events_stream.broadcast_ui_event(
+                events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
+                payload,
+                scope="chat",
+                session_id=thread_id,
+                request_id=request_id,
+            )
+
+
 def _request_correlation_id(request: Request, header_request_id: str | None) -> str:
     """Resolve middleware correlation, with an explicit standalone fallback."""
     try:
@@ -477,15 +672,19 @@ async def responses(
     )
 
     response_id = f"resp-{uuid.uuid4().hex[:8]}"
+    active_response = _active_response_for_thread(thread_id)
+    content_request_id = active_response[0] if active_response is not None else None
     _active_response_streams[request_id] = asyncio.Event()
-    _register_response_activity(request_id, thread_id)
+    if active_response is None:
+        _register_response_activity(request_id, thread_id)
     if body.stream:
         _ensure_response_stream(request_id, response_id, thread_id, body.model)
     _response_request_ids[response_id] = request_id
 
-    # Task creation is the generation dispatch. Enqueue the causal started
-    # event only after that dispatch and before acknowledging it.
-    _spawn_background_task(
+    # A local relay persists through a queued admission and follows the
+    # runtime-owned content stream until the execution itself terminates.
+    _track_response_execution(
+        request_id,
         _run_response_event_stream(
             message=last_user_msg,
             model=body.model,
@@ -495,16 +694,22 @@ async def responses(
             metadata=request_metadata,
             stream=body.stream,
             include_reasoning=body.include_reasoning,
-        )
+            admission_queued=active_response is not None,
+        ),
     )
+    started_payload: dict[str, Any] = {
+        "id": response_id,
+        "model": body.model,
+        "thread_id": thread_id,
+        "stream": body.stream,
+    }
+    if content_request_id is not None:
+        started_payload["content_request_id"] = content_request_id
+    if active_response is not None:
+        started_payload["queued"] = True
     events_stream.broadcast_ui_event(
         events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
-        {
-            "id": response_id,
-            "model": body.model,
-            "thread_id": thread_id,
-            "stream": body.stream,
-        },
+        started_payload,
         scope="chat",
         session_id=thread_id,
         request_id=request_id,
@@ -706,14 +911,29 @@ async def _run_response_event_stream(
     *,
     stream: bool = True,
     include_reasoning: bool | None = None,
+    deferred_only: bool = False,
+    content_request_id: str | None = None,
+    admission_queued: bool = False,
 ) -> None:
-    """Run one dispatched generation and publish lifecycle plus response content."""
+    """Relay one direct or already-admitted runtime response to the browser."""
     assert lifecycle_state.client is not None, "Client must be initialized"
     cancel_event = _active_response_streams.get(request_id)
     if cancel_event is None:
         cancel_event = asyncio.Event()
         _active_response_streams[request_id] = cancel_event
     response_stream_state = _response_streams.get(request_id) if stream else None
+    deferred = deferred_only
+    terminal_received = False
+    admission_corrected = False
+    queued_message = {
+        "id": f"user_{request_id}",
+        "text": message.split(ATTACHMENT_CONTEXT_MARKER, 1)[0].rstrip(),
+        "attachments": (
+            list(metadata["attachments"])
+            if isinstance(metadata, dict) and isinstance(metadata.get("attachments"), list)
+            else []
+        ),
+    }
 
     def response_payload(**fields: Any) -> dict[str, Any]:
         return {"id": response_id, "model": model, "thread_id": thread_id, **fields}
@@ -726,43 +946,150 @@ async def _run_response_event_stream(
         }
 
     def mark_response_stream_terminal() -> None:
-        if response_stream_state is None:
-            return
-        _mark_response_stream_terminal(response_stream_state)
+        if response_stream_state is not None:
+            _mark_response_stream_terminal(response_stream_state)
 
     def emit_cancelled() -> None:
         _clear_response_activity(request_id)
-        events_stream.broadcast_ui_event(
+        _broadcast_response_terminal(
             events_contracts.UiEvent.CHAT_RESPONSE_CANCELLED,
             response_payload(cancelled=True),
-            scope="chat",
-            session_id=thread_id,
+            thread_id=thread_id,
             request_id=request_id,
         )
         mark_response_stream_terminal()
 
+    def emit_deferred_lifecycle(event_type: str, *, item: dict[str, Any] | None = None) -> None:
+        payload = response_payload(
+            request_id=request_id,
+            content_request_id=request_id,
+            queue_execution=True,
+        )
+        if event_type == events_contracts.UiEvent.CHAT_RESPONSE_STARTED:
+            payload["queued_message"] = queued_message
+        elif event_type == events_contracts.UiEvent.CHAT_RESPONSE_COMPLETED:
+            payload["completed"] = True
+        elif event_type == events_contracts.UiEvent.CHAT_RESPONSE_CANCELLED:
+            payload["cancelled"] = True
+        else:
+            payload["error"] = str((item or {}).get("error") or "Queued response failed")
+        if item is not None and isinstance(item.get("response"), dict):
+            payload["response"] = item["response"]
+        if not handle_runtime_queue_lifecycle(event_type, payload):
+            return
+        events_stream.broadcast_ui_event(
+            event_type,
+            payload,
+            scope="chat",
+            session_id=thread_id,
+            request_id=request_id,
+        )
+
     try:
-        if cancel_event.is_set():
+        if cancel_event.is_set() and not deferred:
             emit_cancelled()
             return
 
         if stream:
-            async for item in lifecycle_state.client.send_message_stream_events(
-                message,
-                request_id=request_id,
-                metadata=metadata,
-            ):
-                if cancel_event.is_set():
+            if deferred_only:
+                follow = getattr(lifecycle_state.client, "follow_response_stream_events", None)
+                if not callable(follow):
+                    raise RuntimeError("Runtime client cannot follow queued responses")
+                follow_kwargs = (
+                    {"cancel_event": cancel_event}
+                    if _accepts_keyword(follow, "cancel_event")
+                    else {}
+                )
+                events = cast(Callable[..., AsyncIterator[dict[str, Any]]], follow)(
+                    content_request_id or request_id, **follow_kwargs
+                )
+            else:
+                send_events = lifecycle_state.client.send_message_stream_events
+                send_kwargs = (
+                    {"cancel_event": cancel_event}
+                    if _accepts_keyword(send_events, "cancel_event")
+                    else {}
+                )
+                events = send_events(
+                    message,
+                    request_id=request_id,
+                    metadata=metadata,
+                    **send_kwargs,
+                )
+
+            async for item in events:
+                if cancel_event.is_set() and not deferred:
                     logger.info("Response stream cancelled for %s", request_id)
                     emit_cancelled()
                     return
 
                 item_type = str(item.get("type", ""))
+                if item.get("queue_execution") and not deferred:
+                    deferred = True
+                    if request_id not in _queue_started_request_ids:
+                        _clear_response_activity(request_id)
+                if item_type == "response_started":
+                    if request_id in _terminal_response_request_ids:
+                        continue
+                    if deferred:
+                        emit_deferred_lifecycle(events_contracts.UiEvent.CHAT_RESPONSE_STARTED)
+                    elif admission_queued and not admission_corrected:
+                        _register_response_activity(request_id, thread_id)
+                        events_stream.broadcast_ui_event(
+                            events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
+                            response_payload(
+                                stream=True,
+                                content_request_id=request_id,
+                                queued=False,
+                            ),
+                            scope="chat",
+                            session_id=thread_id,
+                            request_id=request_id,
+                        )
+                        admission_corrected = True
+                    continue
+                if item_type == "stream_resync_required":
+                    if response_stream_state is not None:
+                        _append_response_stream_frame(
+                            response_stream_state,
+                            events_contracts.ChatContentEvent.RESYNC_REQUIRED,
+                            response_payload(
+                                reason=item.get("reason", "cursor_expired"),
+                                request_id=request_id,
+                            ),
+                        )
+                    terminal_received = True
+                    if deferred:
+                        emit_deferred_lifecycle(
+                            events_contracts.UiEvent.CHAT_RESPONSE_FAILED,
+                            item={"error": "Response stream replay requires resynchronization"},
+                        )
+                    mark_response_stream_terminal()
+                    return
+                if not deferred and request_id not in _response_activities:
+                    _register_response_activity(request_id, thread_id)
+                if item_type == "response_terminal":
+                    terminal_received = True
+                    status = str(item.get("status", "failed"))
+                    if deferred:
+                        lifecycle_event = {
+                            "completed": events_contracts.UiEvent.CHAT_RESPONSE_COMPLETED,
+                            "cancelled": events_contracts.UiEvent.CHAT_RESPONSE_CANCELLED,
+                        }.get(status, events_contracts.UiEvent.CHAT_RESPONSE_FAILED)
+                        emit_deferred_lifecycle(lifecycle_event, item=item)
+                        mark_response_stream_terminal()
+                        return
+                    if status == "cancelled":
+                        emit_cancelled()
+                        return
+                    if status == "failed":
+                        raise RuntimeError(str(item.get("error") or "Response generation failed"))
+                    if status == "incomplete":
+                        raise RuntimeError("Response generation was incomplete")
+                    continue
                 if item_type == "stream_chunk":
                     chunk = str(item.get("content", ""))
-                    if not chunk:
-                        continue
-                    if response_stream_state is not None:
+                    if chunk and response_stream_state is not None:
                         _append_response_stream_frame(
                             response_stream_state,
                             events_contracts.ChatContentEvent.DELTA,
@@ -774,8 +1101,6 @@ async def _run_response_event_stream(
                         )
                 elif item_type == "stream_event":
                     _track_response_delegation_event(request_id, item)
-                    # Structured events may carry rich image blocks. Keep them
-                    # intact rather than reducing them to response text.
                     payload: dict[str, Any] = response_payload(
                         event_type=item.get("event_type", "unknown"),
                         content=item.get("content", ""),
@@ -791,8 +1116,7 @@ async def _run_response_event_stream(
                             events_contracts.ChatContentEvent.EVENT,
                             payload,
                         )
-            if cancel_event.is_set():
-                logger.info("Response stream cancelled for %s", request_id)
+            if cancel_event.is_set() and not deferred:
                 emit_cancelled()
                 return
         else:
@@ -802,10 +1126,26 @@ async def _run_response_event_stream(
                 metadata=metadata,
                 include_reasoning=include_reasoning,
             )
+            deferred = response_details.deferred
+            if deferred:
+                terminal_received = True
+                if response_details.deferred_started:
+                    emit_deferred_lifecycle(events_contracts.UiEvent.CHAT_RESPONSE_STARTED)
+                lifecycle_event = {
+                    "completed": events_contracts.UiEvent.CHAT_RESPONSE_COMPLETED,
+                    "cancelled": events_contracts.UiEvent.CHAT_RESPONSE_CANCELLED,
+                }.get(
+                    response_details.terminal_status, events_contracts.UiEvent.CHAT_RESPONSE_FAILED
+                )
+                emit_deferred_lifecycle(
+                    lifecycle_event,
+                    item={"error": response_details.terminal_error},
+                )
+                mark_response_stream_terminal()
+                return
             if cancel_event.is_set():
                 emit_cancelled()
                 return
-
             reasoning_text = (response_details.reasoning or "").strip()
             events_stream.broadcast_ui_event(
                 events_contracts.UiEvent.CHAT_RESPONSE_DELTA,
@@ -819,55 +1159,86 @@ async def _run_response_event_stream(
                 request_id=request_id,
             )
 
+        if deferred:
+            terminal_received = True
+            emit_deferred_lifecycle(
+                events_contracts.UiEvent.CHAT_RESPONSE_FAILED,
+                item={"error": "Queued response stream ended without a terminal event"},
+            )
+            mark_response_stream_terminal()
+            return
+
         _clear_response_activity(request_id)
-        events_stream.broadcast_ui_event(
+        _broadcast_response_terminal(
             events_contracts.UiEvent.CHAT_RESPONSE_COMPLETED,
             response_payload(completed=True),
-            scope="chat",
-            session_id=thread_id,
+            thread_id=thread_id,
             request_id=request_id,
         )
         mark_response_stream_terminal()
     except TimeoutError as error:
         logger.error("Responses API timeout: %s", error, exc_info=True)
-        if cancel_event.is_set():
+        if deferred:
+            terminal_received = True
+            emit_deferred_lifecycle(
+                events_contracts.UiEvent.CHAT_RESPONSE_FAILED,
+                item={"error": "Response generation timed out"},
+            )
+            mark_response_stream_terminal()
+        elif cancel_event.is_set():
             emit_cancelled()
         else:
             _clear_response_activity(request_id)
-            events_stream.broadcast_ui_event(
+            _broadcast_response_terminal(
                 events_contracts.UiEvent.CHAT_RESPONSE_FAILED,
                 response_payload(error="Response generation timed out"),
-                scope="chat",
-                session_id=thread_id,
+                thread_id=thread_id,
                 request_id=request_id,
             )
             mark_response_stream_terminal()
     except Exception as error:
         logger.error("Response generation error: %s", error, exc_info=True)
-        if cancel_event.is_set():
+        deferred = deferred or bool(getattr(error, "deferred", False))
+        if deferred:
+            terminal_received = True
+            emit_deferred_lifecycle(
+                events_contracts.UiEvent.CHAT_RESPONSE_FAILED,
+                item={"error": str(error)},
+            )
+            mark_response_stream_terminal()
+        elif cancel_event.is_set():
             emit_cancelled()
         else:
             _clear_response_activity(request_id)
-            events_stream.broadcast_ui_event(
+            _broadcast_response_terminal(
                 events_contracts.UiEvent.CHAT_RESPONSE_FAILED,
                 response_payload(error=str(error)),
-                scope="chat",
-                session_id=thread_id,
+                thread_id=thread_id,
                 request_id=request_id,
             )
             mark_response_stream_terminal()
     finally:
-        _clear_response_activity(request_id)
-        if _active_response_streams.get(request_id) is cancel_event:
+        if not deferred or terminal_received:
+            _clear_response_activity(request_id)
+        if (not deferred or terminal_received) and _active_response_streams.get(
+            request_id
+        ) is cancel_event:
             _active_response_streams.pop(request_id, None)
         if _response_request_ids.get(response_id) == request_id:
             _response_request_ids.pop(response_id, None)
 
 
 async def _stream_text_chunks(events: AsyncIterator[dict[str, Any]]) -> AsyncIterator[str]:
-    """Yield only plain text chunks from a structured stream iterator."""
+    """Yield plain text while rejecting terminal failure and replay loss."""
     async for item in events:
-        if item.get("type") != "stream_chunk":
+        item_type = str(item.get("type", ""))
+        if item_type == "stream_resync_required":
+            raise RuntimeError("Response stream replay requires resynchronization")
+        if item_type == "response_terminal" and item.get("status") in {"failed", "incomplete"}:
+            raise RuntimeError(
+                str(item.get("error") or f"Response generation was {item.get('status')}")
+            )
+        if item_type != "stream_chunk":
             continue
         chunk_text = str(item.get("content", ""))
         if chunk_text:
