@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Link } from 'react-router-dom';
 import {
@@ -15,6 +15,8 @@ import { CapabilityChip, CardFact, MetricCard } from '../../components/DetailCar
 import InlineFailure from '../../components/InlineFailure';
 import NumberStepper from '../../components/NumberStepper';
 import { useConfig } from '../../context/ConfigContext';
+import { useNotifications } from '../../context/NotificationContext';
+import { reportFailure } from '../../lib/failures';
 import { formatCompactRelativeAge } from '../../lib/displayTime';
 import useEntityDraft from '../../hooks/useEntityDraft';
 import { useListSelection } from '../../hooks/useListSelection';
@@ -217,6 +219,25 @@ function ChannelDetails({ channel, sessions, channelsUrl, connected, credentialS
   const toggleRequest = toggleRequestId ? channelState.requests[toggleRequestId] || null : null;
   const reconnectRequest = useMemo(() => requestFor(channelState, channel.id, reconnectChannel.typePrefix), [channelState, channel.id]);
   const testRequest = useMemo(() => requestFor(channelState, channel.id, testChannel.typePrefix), [channelState, channel.id]);
+  const { show } = useNotifications();
+  // The test result arrives later on `channel.tested`; toast it once for the
+  // request this view started (a remount never replays an old result).
+  const pendingTestRequestId = useRef(null);
+  useEffect(() => {
+    const requestId = pendingTestRequestId.current;
+    if (!requestId) return;
+    if (test?.requestId === requestId) {
+      pendingTestRequestId.current = null;
+      if (test.ok) show('success', 'Test message sent', `${channel.name} delivered the test message.`);
+      else reportFailure(show, 'Send test message', test.error || 'The channel did not deliver the test message.');
+      return;
+    }
+    const request = channelState.requests[requestId];
+    if (request?.error) {
+      pendingTestRequestId.current = null;
+      reportFailure(show, 'Send test message', request.error);
+    }
+  }, [channel.name, channelState.requests, show, test]);
   const { clear, beginSave, error: saveError, failSave, saving, trackSave } = controls;
 
   const startEdit = () => setDraft(settingsToDraft(channel.settings, channel.fields));
@@ -274,7 +295,9 @@ function ChannelDetails({ channel, sessions, channelsUrl, connected, credentialS
     setCredentialDrafts({});
   };
   const reconnect = () => { void dispatch(reconnectChannel({ channelsUrl, channelId: channel.id })); };
-  const sendTest = () => { void dispatch(testChannel({ channelsUrl, channelId: channel.id })); };
+  const sendTest = () => {
+    pendingTestRequestId.current = dispatch(testChannel({ channelsUrl, channelId: channel.id })).requestId;
+  };
   const status = statusPresentation(channel.status);
   const channelSessions = sessions.filter((session) => session.source === channel.session_source);
   const standardFields = channel.fields?.filter((field) => !field.advanced) || [];
@@ -302,9 +325,6 @@ function ChannelDetails({ channel, sessions, channelsUrl, connected, credentialS
         ]}
       />
       <div className="detail-pane__body">
-        {test?.ok ? <p className={styles.testSuccess} role="status">Test message sent successfully.</p> : null}
-        {test && !test.ok ? <InlineFailure failure={test.error || 'Test message failed.'} operation="Test channel" /> : null}
-        {testRequest?.error ? <InlineFailure failure={testRequest.error} operation="Test channel" /> : null}
         {reconnectRequest?.error ? <InlineFailure failure={reconnectRequest.error} operation="Reconnect channel" /> : null}
         {toggleRequest?.error ? <InlineFailure failure={toggleRequest.error} operation="Update channel" /> : null}
         <div className="agents-metrics">
