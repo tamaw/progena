@@ -50,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Interrupted runs after a runtime restart**: chats, scheduled runs and routine runs cut off by a runtime restart now say so instead of looking idle or still running. Detection is read-only: the backend reads the LangGraph checkpoint directly, compares its `runtime_instance` owner to the live health identity, and excludes steps waiting on a person or failed turns. A backend-only restart never counts.
 
 ### Fixed
+- **ChatGPT provider recovery**: unauthorized sync and async retries replace explicit bearer headers, and temporarily unavailable refresh grants no longer discard still-valid bearers.
+- **Model profile provider patches**: provider-only edits now reject a concurrent inherited-deployment change instead of committing a provider/model pair that was never catalog-validated.
 - **Docker setup guide**: the prerequisites now create the external `progena-postgres-data` volume that Compose requires, so a fresh install following the guide starts.
 - **Code node cancellation cleanup**: cancelling a filesystem-enabled routine Code node (run cancel or node timeout) now bounds the guest's `catch`/`finally` cleanup to the 1-second guest limit. Previously quickjs-rs cleared the deadline before draining cleanup, so an endless cleanup block left an orphaned worker thread spinning at full CPU after the run had already reported cancellation.
 - **Canvases page loads again**: the frontend's API endpoint map lost its `canvases` entry when `channels` was added (#464), so the list request went to the SPA route `/canvases` and failed with "unexpected response (200)". The entry is restored.

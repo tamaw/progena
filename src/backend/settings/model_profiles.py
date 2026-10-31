@@ -230,6 +230,7 @@ def create_model_profile_router(
                 raise HTTPException(status_code=422, detail=f"{field} must be a non-empty string")
             patch_body[field] = value.strip()
         validated_stored_provider_id: str | None = None
+        validated_stored_deployment: str | None = None
 
         repository: ProviderRepository | None = None
         if get_provider_repository is not None:
@@ -241,13 +242,13 @@ def create_model_profile_router(
                 ) from exc
 
         def patch(profile: dict[str, Any]) -> dict[str, Any] | None:
-            if (
-                validated_stored_provider_id is not None
-                and profile["provider_id"] != validated_stored_provider_id
+            if validated_stored_provider_id is not None and (
+                profile["provider_id"] != validated_stored_provider_id
+                or profile["deployment"] != validated_stored_deployment
             ):
                 raise HTTPException(
                     status_code=409,
-                    detail="Profile provider changed during validation; retry the request",
+                    detail="Profile provider or deployment changed during validation; retry the request",
                 )
             if "provider_id" in patch_body:
                 profile["provider_id"] = patch_body["provider_id"]
@@ -340,8 +341,9 @@ def create_model_profile_router(
             )
             if stored_profile is not None:
                 validated_stored_provider_id = stored_profile["provider_id"]
+                validated_stored_deployment = stored_profile["deployment"]
                 provider_id = patch_body.get("provider_id", validated_stored_provider_id)
-                deployment = patch_body.get("deployment", stored_profile["deployment"])
+                deployment = patch_body.get("deployment", validated_stored_deployment)
                 provider = next(
                     (
                         item

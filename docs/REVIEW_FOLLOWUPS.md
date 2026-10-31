@@ -38,7 +38,7 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 - **Problem:** `with_options(api_key=new_token)` preserves the explicit `Authorization` default header installed during production model construction. That stale header overrides the replacement API key.
 - **Observed:** With OpenAI SDK 3.37.0 and an offline HTTP transport, the client held the replacement key but the actual request still sent the original synthetic bearer.
 - **Required outcome:** Synchronous and asynchronous retry requests send the refreshed bearer, with no stale explicit authorization header.
-- **Status:** Open.
+- **Status:** Fixed — refreshed sync/async clients replace the explicit bearer header; `test_chatgpt_langchain_stream_retries_with_refreshed_explicit_bearer`.
 
 ### 5. P2 — Attach usage attribution once per streamed response
 
@@ -46,7 +46,7 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 - **Problem:** Both the first stream chunk and finalized reasoning receive attribution. LangChain concatenates ordinary string metadata while aggregating chunks.
 - **Observed:** An offline Responses stream aggregated through `model.astream()` produced `profile_name="reviewreview"`, `provider="chatgptchatgpt"`, a duplicated deployment, and concatenated timestamps.
 - **Required outcome:** Completed streamed messages retain one correct profile/provider/deployment/timestamp attribution, including encrypted-reasoning completion.
-- **Status:** Open.
+- **Status:** Already fixed on main — offline `model.astream()` aggregation with encrypted reasoning retains one attribution.
 
 ### 6. P2 — Validate the provider/model pair actually committed by a profile PATCH
 
@@ -54,7 +54,7 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 - **Problem:** A provider-only PATCH validates the inherited deployment before acquiring the mutation lock, but its locked guard checks only whether the stored provider changed. A concurrent deployment-only edit can survive under the new provider without validation.
 - **Observed:** A controlled interleaving acknowledged and persisted provider Q/model B even though Q's supplied catalogue contained only A.
 - **Required outcome:** The committed provider/deployment pair is the validated pair; inherited-field changes cause safe revalidation or conflict rather than an invalid successful acknowledgement.
-- **Status:** Open.
+- **Status:** Fixed — the locked mutation rejects a changed inherited deployment; `test_chatgpt_catalog_rejects_provider_only_patch_when_deployment_changes_during_validation`.
 
 ### 7. P2 — Retain a valid bearer while refresh is temporarily unavailable
 
@@ -62,7 +62,7 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 - **Problem:** Within the two-minute refresh leeway, a future `refresh_available_at` unconditionally rejects ordinary token lookup even if the bearer remains unexpired.
 - **Observed:** A credential valid for another 90 seconds was rejected because refresh was unavailable for 30 seconds.
 - **Required outcome:** Ordinary lookups may use the current unexpired bearer until refresh becomes permissible; an actually rejected or expired bearer must still fail safely.
-- **Status:** Open.
+- **Status:** Fixed — an ordinary lookup retains an unexpired bearer while refresh is unavailable; `test_access_token_uses_unexpired_bearer_when_refresh_is_temporarily_unavailable`.
 
 ## Workflow payload contracts
 
