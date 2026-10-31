@@ -29,6 +29,11 @@ async def chat_node(
     additional_kwargs: dict[str, Any] = {"created_at": time.time()}
     if isinstance(input_metadata, dict) and isinstance(input_metadata.get("attachments"), list):
         additional_kwargs["attachments"] = input_metadata["attachments"]
+    if isinstance(input_metadata, dict) and input_metadata.get("source") == "schedule":
+        additional_kwargs["scheduled"] = {
+            "schedule_id": input_metadata.get("schedule_id"),
+            "run_id": input_metadata.get("schedule_run_id"),
+        }
     # DeepAgent returns the updated conversation state for this turn. Snapshot
     # the selected DB provider before graph execution so a Settings save cannot
     # mix models or credentials into a running heartbeat turn.

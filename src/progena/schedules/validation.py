@@ -60,6 +60,9 @@ def validate_schedule_document(content: str) -> JsonDoc:
         user_request = item.get("user_request")
         if user_request is not None and not isinstance(user_request, str):
             raise ValueError(f"entry '{entry_id}' has a non-string user_request")
+        conversation_id = item.get("conversation_id")
+        if conversation_id is not None and not isinstance(conversation_id, str):
+            raise ValueError(f"entry '{entry_id}' has a non-string conversation_id")
         paused = item.get("paused", False)
         if not isinstance(paused, bool):
             raise ValueError(f"entry '{entry_id}' has a non-bool paused")

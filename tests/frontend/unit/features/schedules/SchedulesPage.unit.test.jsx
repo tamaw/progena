@@ -11,6 +11,11 @@ import { applyUiEvent } from '@frontend/store/uiEvents';
 import editorDraftsReducer from '@frontend/store/editorDraftsSlice';
 import SchedulesPage from '@frontend/features/schedules/SchedulesPage';
 
+const { createSchedule, updateWidget } = vi.hoisted(() => ({
+  createSchedule: vi.fn(() => Promise.resolve()),
+  updateWidget: vi.fn(() => Promise.resolve()),
+}));
+
 // Stable like the real providers: page effects depend on these callbacks.
 vi.mock('@frontend/context/ConfigContext', () => {
   const config = { getApiUrl: (key) => `/api/${key}` };
@@ -21,11 +26,11 @@ vi.mock('@frontend/context/NotificationContext', () => {
   return { useNotifications: () => notifications };
 });
 vi.mock('@frontend/features/schedules/useSchedulesApi', () => {
-  const api = { retriggerSchedule: () => Promise.resolve() };
+  const api = { createSchedule, retriggerSchedule: () => Promise.resolve() };
   return { useSchedulesApi: () => api };
 });
 vi.mock('@frontend/features/schedules/useWidgetsApi', () => {
-  const api = { updateWidget: () => Promise.resolve(), deleteWidget: () => Promise.resolve() };
+  const api = { updateWidget, deleteWidget: () => Promise.resolve() };
   return { useWidgetsApi: () => api };
 });
 
@@ -43,6 +48,7 @@ beforeEach(() => {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
+  vi.clearAllMocks();
 });
 
 afterEach(async () => {
@@ -50,6 +56,26 @@ afterEach(async () => {
   host.remove();
   vi.unstubAllGlobals();
 });
+
+function setControlValue(control, value) {
+  const prototype = control instanceof HTMLTextAreaElement
+    ? HTMLTextAreaElement.prototype
+    : control instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(prototype, 'value').set.call(control, value);
+  control.dispatchEvent(new Event(control instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }));
+}
+
+function renderSchedules(store, entry = '/schedules') {
+  return root.render(
+    <Provider store={store}>
+      <MemoryRouter initialEntries={[entry]}>
+        <Routes>
+          <Route path="/schedules/:scheduleId?/:titleSlug?" element={<SchedulesPage />} />
+        </Routes>
+      </MemoryRouter>
+    </Provider>,
+  );
+}
 
 it.each([
   ['Europe/London', 'America/New_York', 'Europe/London'],
@@ -139,14 +165,20 @@ it('retains independent unsaved intent drafts for schedules A and B across selec
 
 it('keeps a deep link that a cached list lacks until this visit’s refresh settles', async () => {
   let refreshRequestId = null;
-  vi.stubGlobal('fetch', vi.fn(async (_url, { headers = {} } = {}) => {
-    refreshRequestId = headers['X-Operation-Id'];
+  vi.stubGlobal('fetch', vi.fn(async (url, { headers = {} } = {}) => {
+    if (url === '/api/schedules') {
+      refreshRequestId = headers['X-Operation-Id'];
+    }
     return new Response(JSON.stringify({ request_id: refreshRequestId, event_types: ['schedule.snapshot'] }), { status: 202 });
   }));
   const store = configureStore({
     reducer: { realtime: realtimeReducer, uiData: uiDataReducer, editorDrafts: editorDraftsReducer },
   });
   store.dispatch(realtimeConnected());
+  store.dispatch(applyUiEvent({
+    type: 'chat.sessions.snapshot',
+    payload: { sessions: [] },
+  }));
   // Hydrated by an earlier visit, before schedule "b" was created elsewhere.
   store.dispatch(applyUiEvent({
     type: 'schedule.snapshot',
@@ -177,4 +209,78 @@ it('keeps a deep link that a cached list lacks until this visit’s refresh sett
   })));
   expect(location()).toBe('/schedules/b/beta');
   expect(host.querySelector('.schedules-summary').textContent).toContain('beta intent');
+});
+
+it('creates standalone schedules with an explicit null destination', async () => {
+  const store = configureStore({
+    reducer: { realtime: realtimeReducer, uiData: uiDataReducer, editorDrafts: editorDraftsReducer },
+  });
+  await act(async () => renderSchedules(store));
+  await act(async () => {
+    Array.from(host.querySelectorAll('button'))
+      .find((button) => button.textContent.trim() === '+ New')
+      .click();
+  });
+  const dialog = document.body.querySelector('[role="dialog"]');
+  await act(async () => {
+    setControlValue(dialog.querySelector('[aria-label="Schedule name"]'), 'Daily report');
+    setControlValue(dialog.querySelector('[aria-label="Schedule instruction"]'), 'Summarize activity');
+    setControlValue(dialog.querySelector('[aria-label="Schedule expression"]'), '0 9 * * *');
+  });
+  await act(async () => {
+    dialog.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
+
+  expect(createSchedule).toHaveBeenCalledWith({
+    name: 'Daily report',
+    instruction: 'Summarize activity',
+    expression: '0 9 * * *',
+    schedule_type: 'cron',
+    conversation_id: null,
+  }, expect.objectContaining({ requestId: expect.any(String) }));
+});
+
+it('retargets a schedule only when the destination changes', async () => {
+  const store = configureStore({
+    reducer: { realtime: realtimeReducer, uiData: uiDataReducer, editorDrafts: editorDraftsReducer },
+  });
+  store.dispatch(applyUiEvent({
+    type: 'schedule.snapshot',
+    payload: {
+      items: [{
+        id: 'schedule-a',
+        name: 'Daily report',
+        message: 'Summarize activity',
+        cron: '0 9 * * *',
+        conversation_id: 'chat-a',
+      }],
+    },
+  }));
+  store.dispatch(applyUiEvent({
+    type: 'chat.sessions.snapshot',
+    payload: { sessions: [{ thread_id: 'chat-a', title: 'Operations' }] },
+  }));
+  await act(async () => renderSchedules(store, '/schedules/schedule-a'));
+  const destinationSection = Array.from(host.querySelectorAll('.agents-section'))
+    .find((section) => section.querySelector('h2')?.textContent === 'Destination');
+  await act(async () => {
+    Array.from(destinationSection.querySelectorAll('button'))
+      .find((button) => button.textContent.trim() === 'Edit')
+      .click();
+  });
+  const select = destinationSection.querySelector('[aria-label="Schedule destination"]');
+  await act(async () => {
+    setControlValue(select, '');
+  });
+  await act(async () => {
+    Array.from(destinationSection.querySelectorAll('button'))
+      .find((button) => button.textContent.trim() === 'Save')
+      .click();
+  });
+
+  expect(updateWidget).toHaveBeenCalledWith(
+    'schedule:schedule-a',
+    { conversation_id: null },
+    expect.objectContaining({ requestId: expect.any(String) }),
+  );
 });

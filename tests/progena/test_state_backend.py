@@ -28,6 +28,7 @@ from src.progena.registry.validation import validate_registry_document
 from src.progena.routines.store import default_routine_graph
 from src.progena.schedules.models import ScheduleEntry
 from src.progena.schedules.validation import validate_schedule_document
+from src.progena.sessions.context import reset_current_thread_id, set_current_thread_id
 from src.progena.tasks.documents import (
     card_to_markdown,
     markdown_to_card,
@@ -1101,6 +1102,103 @@ async def test_schedule_awrite_removes_entry():
     result = await backend.awrite("/schedule.json", "{}")
     assert result.error is None
     assert sm.entries == {}
+
+
+# ---- schedule destination chat ------------------------------------------------
+
+
+async def _awrite_in_thread(backend: StateDocumentBackend, thread_id: str | None, body: str):
+    token = set_current_thread_id(thread_id)
+    try:
+        return await backend.awrite("/schedule.json", body)
+    finally:
+        reset_current_thread_id(token)
+
+
+def _chat_schedule_backend(entries=None, chats=("conv_a",)):
+    backend, sm = _schedule_backend(entries)
+
+    async def get_session(thread_id: str):
+        return {"thread_id": thread_id} if thread_id in chats else None
+
+    sm.get_session = get_session
+    return backend, sm
+
+
+async def test_schedule_created_in_chat_delivers_to_that_chat():
+    backend, sm = _chat_schedule_backend()
+    body = json.dumps({"sched_1": {"message": "check", "cron_expression": "*/5 * * * *"}})
+    result = await _awrite_in_thread(backend, "conv_a", body)
+    assert result.error is None
+    assert sm.entries["sched_1"].conversation_id == "conv_a"
+
+
+async def test_schedule_created_outside_a_chat_is_standalone():
+    backend, sm = _chat_schedule_backend()
+    body = json.dumps({"sched_1": {"message": "check", "cron_expression": "*/5 * * * *"}})
+    # Schedule-run threads have no session document, so they never become a destination.
+    result = await _awrite_in_thread(backend, "sched_x_1234abcd", body)
+    assert result.error is None
+    assert sm.entries["sched_1"].conversation_id is None
+
+
+async def test_schedule_explicit_null_stays_standalone_inside_a_chat():
+    backend, sm = _chat_schedule_backend()
+    body = json.dumps(
+        {"sched_1": {"message": "check", "cron_expression": "*/5 * * * *", "conversation_id": None}}
+    )
+    result = await _awrite_in_thread(backend, "conv_a", body)
+    assert result.error is None
+    assert sm.entries["sched_1"].conversation_id is None
+
+
+async def test_schedule_agent_cannot_assign_another_chat():
+    backend, sm = _chat_schedule_backend(chats=("conv_a", "conv_b"))
+    body = json.dumps(
+        {
+            "sched_1": {
+                "message": "check",
+                "cron_expression": "*/5 * * * *",
+                "conversation_id": "conv_b",
+            }
+        }
+    )
+    result = await _awrite_in_thread(backend, "conv_a", body)
+    assert result.error and "assigned by the runtime" in result.error
+    assert sm.entries == {}
+
+
+async def test_schedule_edit_keeps_destination_and_cannot_retarget():
+    backend, sm = _chat_schedule_backend(
+        [
+            ScheduleEntry(
+                id="sched_1",
+                message="check",
+                cron_expression="*/5 * * * *",
+                conversation_id="conv_a",
+            )
+        ],
+        chats=("conv_a", "conv_b"),
+    )
+    # Editing from a different chat keeps the original destination.
+    body = json.dumps({"sched_1": {"message": "check again", "cron_expression": "*/5 * * * *"}})
+    result = await _awrite_in_thread(backend, "conv_b", body)
+    assert result.error is None
+    assert sm.entries["sched_1"].conversation_id == "conv_a"
+    assert sm.entries["sched_1"].message == "check again"
+
+    retarget = json.dumps(
+        {
+            "sched_1": {
+                "message": "check",
+                "cron_expression": "*/5 * * * *",
+                "conversation_id": "conv_b",
+            }
+        }
+    )
+    result = await _awrite_in_thread(backend, "conv_b", retarget)
+    assert result.error and "cannot be changed" in result.error
+    assert sm.entries["sched_1"].conversation_id == "conv_a"
 
 
 # ---- registry (single whole-document file) -----------------------------------

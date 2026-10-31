@@ -357,6 +357,21 @@ falls back to the first event or cron trigger for existing workflows.
 - Scheduled entries are persisted with runtime state.
 - Due work is re-enqueued through the same input path as user messages.
 - Runtime state is updated after scheduled work is processed.
+- A schedule has a destination: `conversation_id` names a chat, `null` is an explicit
+  standalone schedule whose runs each use their own checkpoint thread. A schedule an
+  agent creates inside a chat inherits that chat from trusted runtime context (a thread
+  with a `session:` document); the agent cannot assign or change another destination.
+  The Schedules page selects it explicitly.
+- A chat schedule runs as an ordinary queued turn in its conversation, serialized with
+  browser turns on that thread by the runtime's per-conversation turn lock. The injected
+  input carries `additional_kwargs.scheduled` (`schedule_id`, `run_id`) in the
+  checkpoint, so history restores the Scheduled marker; the result is never appended to
+  whichever chat happens to be open. `scheduled_response` events carry the destination
+  `thread_id`/`conversation_id`.
+- Archiving a chat pauses its schedules (unarchiving does not resume them); deleting a
+  chat deletes them. A run already queued when its chat is archived or deleted is
+  skipped, and a due schedule whose chat is archived or deleted is paused instead of
+  firing. A turn already executing is not cancelled.
 
 - Stored timestamps, APIs, logs, agent shells, and containers use UTC; the browser renders instants in its own timezone.
 - User preferences provide the wall-clock timezone for “tomorrow”, conversational time, and unstamped schedules. It defaults to `UTC`.

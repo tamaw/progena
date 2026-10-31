@@ -246,7 +246,7 @@ function MessageView({
       </div>
       <div className="entry__main msg__entry-main">
         <div className="msg__head entry__head">
-          <span className="msg__role">Message</span>
+          <span className="msg__role">{isScheduled ? 'Scheduled task' : 'Message'}</span>
           {isScheduled && (
             <span className="scheduled-badge muted">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

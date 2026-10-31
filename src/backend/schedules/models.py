@@ -33,6 +33,7 @@ class ScheduleItemInfo(BaseModel):
     scheduled_at: str | None = None
     schedule_type: str | None = None
     timezone: str | None = None
+    conversation_id: str | None = None
     runs: list[ScheduleRunInfo] = []
 
 
@@ -69,6 +70,8 @@ class WidgetPatchRequest(BaseModel):
     expression: str | None = None
     timezone: str | None = None
     event_type: str | None = None
+    # Present (even as null) retargets the schedule; absent leaves it alone.
+    conversation_id: str | None = None
 
 
 class ScheduleCreateRequest(BaseModel):
@@ -80,6 +83,8 @@ class ScheduleCreateRequest(BaseModel):
     expression: str
     timezone: str | None = None
     enabled: bool = True
+    # Destination chat; ``None`` creates an explicit standalone schedule.
+    conversation_id: str | None = None
 
 
 class ScheduleTriggerRequest(BaseModel):
