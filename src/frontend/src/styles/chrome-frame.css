@@ -4834,7 +4834,13 @@ body,
   grid-column: 1 / span 2;
 }
 
+/* Long names shrink and ellipsize instead of pushing the row wider (the shared
+   .sess-row__agent never shrinks). */
 .agents-agent-row__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-weight: 700;
   color: var(--color-text-primary);
 }

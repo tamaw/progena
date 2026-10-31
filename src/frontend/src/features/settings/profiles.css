@@ -2,49 +2,6 @@
    Profiles page styles
    ============================================================================ */
 
-/* List pane rows */
-.profiles-pane-row {
-  text-align: left;
-}
-
-.profiles-pane-row__name {
-  font-weight: 500;
-  color: var(--color-text-primary);
-}
-
-.profiles-pane-row .sess-row__title {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 2px;
-}
-
-/* Badges */
-.profiles-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 6px;
-  border-radius: var(--border-radius-sm);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  line-height: 1.4;
-}
-
-.profiles-badge--provider {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-}
-
-.profiles-badge--deployment {
-  background: var(--color-bg-hover);
-  color: var(--color-text-secondary);
-}
-
-.profiles-badge--customized {
-  background: color-mix(in srgb, var(--color-accent-secondary) 12%, transparent);
-  color: var(--color-accent-secondary);
-}
-
 /* Detail pane */
 .profiles-detail .detail-pane__body {
   padding: var(--spacing-lg);
@@ -152,10 +109,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  overflow-wrap: anywhere;
-}
-
-.profiles-pane-row__name {
   overflow-wrap: anywhere;
 }
 

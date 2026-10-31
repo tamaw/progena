@@ -22,6 +22,7 @@ import useEntityDraft from '../../hooks/useEntityDraft';
 import useMissingEntityRoute from '../../hooks/useMissingEntityRoute';
 import { useConfig } from '../../context/ConfigContext';
 import { deleteModelProfile, fetchModelProfiles, patchModelProfile, selectModelProfiles, selectModelProfilesState } from './state/modelProfiles';
+import { formatContextWindow, isCustomized, profileRowDetail } from './profilesPageModel';
 import {
   fetchProviders,
   selectChatgptModels,
@@ -57,9 +58,6 @@ const EMPTY_PROFILE_EDIT = Object.freeze({ draft: null, baseline: null, validati
 const PROFILE_SNAPSHOT_EVENTS = Object.freeze([UI_EVENT.PROFILES_SNAPSHOT]);
 
 const emptyPricing = () => Object.fromEntries(PRICING_FIELDS.map((field) => [field, '']));
-const isCustomized = (profile) => Boolean(profile.pricing)
-  || ['provider_id', 'reasoning_enabled', 'reasoning_effort', 'reasoning_summary']
-    .some((field) => profile[field] != null);
 
 function toDraft(profile) {
   return {
@@ -223,9 +221,9 @@ function ProfileDetails({ profile, catalogue, providers, goModels, url, connecte
   return (
     <>
       <DetailHeader title={profile.name} meta={[
-        <span key="provider" className="profiles-badge profiles-badge--provider">{providerLabel(profile, providers)}</span>,
-        <span key="deployment" className="profiles-badge profiles-badge--deployment">{profile.deployment}</span>,
-        isCustomized(profile) ? <span key="custom" className="profiles-badge profiles-badge--customized">Customized</span> : null,
+        <span key="provider" className="muted">{providerLabel(profile, providers)}</span>,
+        <span key="deployment" className="sess-detail__model">{profile.deployment}</span>,
+        isCustomized(profile) ? <span key="custom" className="muted">Customized</span> : null,
       ]} actions={(
         <DetailHeaderActions menuLabel="Profile actions">
           <DetailHeaderAction
@@ -397,6 +395,17 @@ export default function ProfilesPage() {
     (filter === 'All' || isCustomized(profile) === (filter === 'Customized'))
     && `${profile.name} ${providerLabel(profile, providers)} ${profile.deployment}`.toLowerCase().includes(query.trim().toLowerCase())
   )).sort((a, b) => (sort === 'Provider' ? providerLabel(a, providers).localeCompare(providerLabel(b, providers)) : 0) || a.name.localeCompare(b.name)), [profiles, providers, filter, query, sort]);
+  // Provider sort groups under provider headings, like Models; Name is flat.
+  const providerGroups = useMemo(() => {
+    if (sort !== 'Provider') return null;
+    const groups = new Map();
+    for (const profile of visible) {
+      const label = providerLabel(profile, providers);
+      if (!groups.has(label)) groups.set(label, []);
+      groups.get(label).push(profile);
+    }
+    return [...groups].map(([label, items]) => ({ key: label, title: label, items }));
+  }, [providers, sort, visible]);
   const selected = profiles.find((profile) => profile.name === profileName)
     || (!profileName ? visible[0] || profiles[0] : null);
   useEntityUrlSync('/profiles', selected?.name, selected?.name);
@@ -439,15 +448,22 @@ export default function ProfilesPage() {
         {!profiles.length && !catalogue.error ? <PaneEmptyState>{loadingMessage}</PaneEmptyState>
           : !profiles.length ? null
             : !visible.length ? <PaneEmptyState>No model profiles match this view.</PaneEmptyState>
-            : <PaneListRows items={visible} getItemKey={(profile) => profile.name} renderItem={(profile) => (
-              <button type="button" className={`sess-row profiles-pane-row ${selected?.name === profile.name ? 'is-selected' : ''}`}
-                aria-current={selected?.name === profile.name ? 'true' : undefined}
-                onClick={() => navigate(buildEntityPath('/profiles', profile.name, profile.name), { replace: true })}
-                aria-label={`${profile.name}, ${providerLabel(profile, providers)}, ${profile.deployment}`}>
-                <span className="sess-row__top"><span className="profiles-pane-row__name">{profile.name}</span>{isCustomized(profile) ? <span className="profiles-badge profiles-badge--customized">Customized</span> : null}</span>
-                <span className="sess-row__title"><span className="profiles-badge profiles-badge--provider">{providerLabel(profile, providers)}</span><span className="profiles-badge profiles-badge--deployment">{profile.deployment}</span></span>
-              </button>
-            )} />}
+            : <PaneListRows
+              {...(providerGroups ? { groups: providerGroups } : { items: visible })}
+              getItemKey={(profile) => profile.name}
+              renderItem={(profile) => (
+                <button type="button" className={`sess-row agents-agent-row ${selected?.name === profile.name ? 'is-selected' : ''}`}
+                  aria-current={selected?.name === profile.name ? 'true' : undefined}
+                  onClick={() => navigate(buildEntityPath('/profiles', profile.name, profile.name), { replace: true })}
+                  aria-label={`${profile.name}, ${providerLabel(profile, providers)}, ${profile.deployment}`}>
+                  <span className="sess-row__top">
+                    <span className="sess-row__agent agents-agent-row__name" title={profile.name}>{profile.name}</span>
+                    <span className="sess-row__project">{providerLabel(profile, providers)}</span>
+                  </span>
+                  <span className="sess-row__age">{formatContextWindow(profile.context_window)}</span>
+                  <span className="sess-row__title">{profileRowDetail(profile)}</span>
+                </button>
+              )} />}
         <PaneListFooter>
           <span><span className="num">{catalogue.loaded ? profiles.length : '—'}</span> profiles</span>
           <span><span className="num">{catalogue.loaded ? profiles.filter(isCustomized).length : '—'}</span> customized</span>
