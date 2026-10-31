@@ -6,7 +6,7 @@
   "properties": {
     "profile": {
       "type": "string",
-      "description": "Name of an embeddings deployment profile in /config/profile.json (e.g. 'embeddings'). Empty disables indexing.",
+      "description": "Name of an embeddings deployment profile in /config/profiles.json (e.g. 'embeddings'). Empty disables indexing.",
       "default": ""
     },
     "dimensions": {

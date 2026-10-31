@@ -398,8 +398,8 @@
     color: var(--color-text-muted);
 }
 
-/* Quiet default ("read", "not installed", "available"): a hollow ring, so
-   filled colour is left for states that need the user. */
+/* Healthy and at rest ("available", "indexed", "completed"): a hollow ring, so
+   filled colour is left for states with something going on. */
 .detail-status--idle {
     color: var(--color-text-muted);
 }

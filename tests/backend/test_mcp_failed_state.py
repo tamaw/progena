@@ -62,6 +62,41 @@ def test_healthy_server_is_not_marked_error():
     assert widget["status_message"] is None
 
 
+def test_enabled_server_without_discovery_outcome_is_discovering(monkeypatch):
+    import src.backend.monitoring.state as state_module
+
+    monkeypatch.setattr(state_module, "_live_progena_reachable", lambda: True)
+    reader, store = _reader(
+        servers={
+            "new": {"url": "https://mcp.example/v1", "transport": "http"},
+            "off": {"url": "https://mcp.example/v2", "transport": "http", "enabled": False},
+        },
+        mcp_tools={"tools": [], "servers": {}},
+    )
+
+    assert _mcp_widget(reader, "new")["status"] == "discovering"
+    assert _mcp_widget(reader, "off")["status"] == "disabled"
+
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "mcp_tools",
+        {"tools": [], "servers": {"new": {"status": "connected", "tool_count": 0}}},
+    )
+    assert _mcp_widget(reader, "new")["status"] == "running"
+
+
+def test_undiscovered_server_is_not_discovering_while_runtime_is_down(monkeypatch):
+    import src.backend.monitoring.state as state_module
+
+    monkeypatch.setattr(state_module, "_live_progena_reachable", lambda: False)
+    reader, _store = _reader(
+        servers={"new": {"url": "https://mcp.example/v1", "transport": "http"}},
+        mcp_tools={"tools": [], "servers": {}},
+    )
+
+    assert _mcp_widget(reader, "new")["status"] == "stopped"
+
+
 def test_fingerprint_changes_when_discovered_tools_change():
     reader, store = _reader(
         servers={"jina": {"url": "https://mcp.jina.ai/v1", "transport": "http"}},

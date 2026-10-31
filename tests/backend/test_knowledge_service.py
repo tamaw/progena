@@ -33,7 +33,7 @@ def test_snapshot_merges_index_fields_without_database() -> None:
     svc.save_bases([{"id": "k1", "name": "Alpha", "sources": []}])
     snapshot = svc.snapshot_bases()
     assert snapshot[0]["page_count"] == 0
-    assert snapshot[0]["index_status"] == "indexing"
+    assert snapshot[0]["index_status"] == "unknown"
     assert snapshot[0]["index_pages"] == 0
     assert snapshot[0]["indexed_pages"] == 0
     assert snapshot[0]["index_error"] == ""

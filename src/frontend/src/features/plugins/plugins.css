@@ -73,36 +73,14 @@
   font-weight: 650;
 }
 
-/* Solid green = "something new for you" (an update is available), matching
-   Inbox's unread dot (chat-panel.css). Hollow ring is reserved for "not
-   installed" only; an installed, up-to-date plugin gets a solid muted dot
-   instead -- still always-present like every other row, just neutral. */
+/* Row dot size only; the colour comes from the shared sess-row__dot--<tone>
+   picked by pluginStatus(). */
 .plugins-status-dot {
   flex: 0 0 auto;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   box-sizing: border-box;
-}
-
-.plugins-status-dot--ring {
-  border: 1.5px solid var(--color-text-muted);
-}
-
-.plugins-status-dot--installed {
-  background: var(--color-text-muted);
-}
-
-.plugins-status-dot--pending {
-  background: var(--color-warning);
-}
-
-.plugins-status-dot--update {
-  background: var(--color-success);
-}
-
-.plugins-status-dot--error {
-  background: var(--color-error);
 }
 
 .plugins-page {
