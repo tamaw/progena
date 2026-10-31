@@ -52,7 +52,7 @@ def snapshot_bases() -> list[dict[str, Any]]:
                 **base,
                 "path": f"/knowledge/{base_id}/",
                 "page_count": page_counts.get(base_id, 0),
-                "index_status": record.get("status") or "indexing",
+                "index_status": record.get("status") or "unknown",
                 "index_pages": record.get("pages") or 0,
                 "indexed_pages": record.get("indexed_pages") or 0,
                 "index_error": record.get("error") or "",

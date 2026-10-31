@@ -34,7 +34,6 @@ from src.backend.integrations.runtime import SSEProgenaClient
 from src.backend.integrations.runtime_history import RuntimeConversationReader
 from src.progena.config import RuntimeConfig
 from src.progena.persistence.store import LangGraphRuntimeStore
-from src.progena.runtime.chat_queue import ChatQueueStore
 from src.progena.runtime.http.server import ProgenaHTTPServer
 from src.progena.runtime.queues import RuntimeQueues
 
@@ -112,7 +111,12 @@ def _graph() -> Any:
     return builder.compile(checkpointer=InMemorySaver())
 
 
+@dataclass
 class FakeStateManager:
+    _runtime_store: LangGraphRuntimeStore = field(
+        default_factory=lambda: LangGraphRuntimeStore(InMemoryStore())
+    )
+
     async def get_current_state(self) -> dict[str, Any]:
         return {"thread_id": "thread-test", "cycle_count": 0}
 
@@ -142,9 +146,10 @@ async def _start_runtime_server(
     *, bridge_factory: Any = None, enable_chat_queue: bool = False
 ) -> _RuntimeServer:
     loop_runner = FakeLoopRunner()
+    state_manager = FakeStateManager()
     if enable_chat_queue:
-        loop_runner.graph.chat_queue = ChatQueueStore(LangGraphRuntimeStore(InMemoryStore()))
-    server = ProgenaHTTPServer(state_manager=FakeStateManager(), loop_runner=loop_runner, port=0)
+        loop_runner.heartbeat_context = SimpleNamespace(state_manager=state_manager)
+    server = ProgenaHTTPServer(state_manager=state_manager, loop_runner=loop_runner, port=0)
     # Test seam: inject a scripted bridge instead of the real DeepAgentSSEStream.
     assert server._chat_service is not None
     if bridge_factory is not None:
@@ -226,10 +231,13 @@ async def test_stream_events_translate_back_to_internal_chunks_and_events() -> N
         await client.stop()
         await runtime.server.stop()
 
+    assert events[0] == {"type": "response_started", "request_id": "req-2"}
+    assert events[-1]["type"] == "response_terminal"
+    assert events[-1]["status"] == "completed"
+    events = events[1:-1]
     assert [(e["type"], e.get("event_type"), e["content"], e.get("is_final")) for e in events] == [
         ("stream_event", "tool_start", "", None),
         ("stream_chunk", None, "ok", False),
-        ("stream_chunk", None, "", True),
     ]
     assert all(event["request_id"] == "req-2" for event in events)
     assert events[0]["metadata"] == {"tool": "x"}

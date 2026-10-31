@@ -208,7 +208,13 @@ def test_runtime_deferred_queue_events_translate_to_correlated_lifecycle():
     metadata = {
         "conversation_id": "thread-queue",
         "request_id": "queued-request-1",
+        "content_request_id": "queued-request-1",
         "message_id": "queue-message-7",
+        "queued_message": {
+            "id": "queue-message-7",
+            "text": "Queued prompt\n\n<!--progena:attachment-context-->\nAttachment context",
+            "attachments": ["attachment-9"],
+        },
         "response": {"status": "completed", "output": "Deferred answer"},
     }
 
@@ -221,6 +227,12 @@ def test_runtime_deferred_queue_events_translate_to_correlated_lifecycle():
     runtime_client._forward_event(
         {"event_type": "chat_queue_execution_completed", "metadata": metadata}
     )
+    runtime_client._forward_event(
+        {"event_type": "chat_queue_execution_failed", "metadata": metadata}
+    )
+    runtime_client._forward_event(
+        {"event_type": "chat_queue_execution_cancelled", "metadata": metadata}
+    )
 
     assert observed == [
         (
@@ -230,7 +242,13 @@ def test_runtime_deferred_queue_events_translate_to_correlated_lifecycle():
                 "thread_id": "thread-queue",
                 "message_id": "queue-message-7",
                 "request_id": "queued-request-1",
+                "content_request_id": "queued-request-1",
                 "queue_execution": True,
+                "queued_message": {
+                    "id": "queue-message-7",
+                    "text": "Queued prompt",
+                    "attachments": ["attachment-9"],
+                },
             },
         ),
         (
@@ -239,51 +257,171 @@ def test_runtime_deferred_queue_events_translate_to_correlated_lifecycle():
                 "id": "queued-request-1",
                 "thread_id": "thread-queue",
                 "message_id": "queue-message-7",
-                "response": metadata["response"],
                 "request_id": "queued-request-1",
+                "content_request_id": "queued-request-1",
                 "queue_execution": True,
+                "response": metadata["response"],
                 "completed": True,
+            },
+        ),
+        (
+            "chat.response.failed",
+            {
+                "id": "queued-request-1",
+                "thread_id": "thread-queue",
+                "message_id": "queue-message-7",
+                "request_id": "queued-request-1",
+                "content_request_id": "queued-request-1",
+                "queue_execution": True,
+                "response": metadata["response"],
+                "error": "Queued response failed",
+            },
+        ),
+        (
+            "chat.response.cancelled",
+            {
+                "id": "queued-request-1",
+                "thread_id": "thread-queue",
+                "message_id": "queue-message-7",
+                "request_id": "queued-request-1",
+                "content_request_id": "queued-request-1",
+                "queue_execution": True,
+                "response": metadata["response"],
+                "cancelled": True,
             },
         ),
     ]
 
 
 @pytest.mark.asyncio
-async def test_queued_initial_response_never_emits_terminal_completion():
+async def test_queued_admission_relays_deferred_content_without_local_terminal():
+    request_id = "queued-request-1"
+
     class RuntimeClient:
         async def send_message_stream_events(self, *args, **kwargs):
             del args, kwargs
-            yield {"type": "queued", "request_id": "queued-request-1"}
+            yield {"type": "queued", "request_id": request_id}
+            yield {"type": "stream_chunk", "content": "Deferred "}
+            yield {
+                "type": "stream_event",
+                "event_type": "tool_start",
+                "content": "lookup",
+                "metadata": {"tool_call_id": "call-1"},
+            }
+            yield {"type": "stream_chunk", "content": "answer"}
+            yield {"type": "response_terminal", "status": "completed", "request_id": request_id}
 
+    state = chat_responses._ensure_response_stream(
+        request_id, "response-queue-1", "thread-queue", "progena-v1"
+    )
+    published: list[str] = []
     original_client = lifecycle_state.client
-    subscriber: asyncio.Queue = asyncio.Queue()
-    events_stream._ui_stream_subscribers[subscriber] = None
     lifecycle_state.client = RuntimeClient()
+    original_broadcast = events_stream.broadcast_ui_event
+    events_stream.broadcast_ui_event = lambda event_type, *_args, **_kwargs: published.append(
+        event_type
+    )
     try:
         await chat_responses._run_response_event_stream(
             message="Queued prompt",
             model="progena-v1",
-            request_id="queued-request-1",
+            request_id=request_id,
             response_id="response-queue-1",
             thread_id="thread-queue",
             stream=True,
         )
-        events = [subscriber.get_nowait()["envelope"] for _ in range(subscriber.qsize())]
     finally:
         lifecycle_state.client = original_client
-        events_stream._ui_stream_subscribers.pop(subscriber, None)
+        events_stream.broadcast_ui_event = original_broadcast
+        chat_responses._response_streams.pop(request_id, None)
 
-    assert events == []
+    assert [frame.event_type for frame in state.frames] == [
+        "chat.response.delta",
+        "chat.response.event",
+        "chat.response.delta",
+    ]
+    assert [frame.payload.get("delta", frame.payload.get("content")) for frame in state.frames] == [
+        "Deferred ",
+        "lookup",
+        "answer",
+    ]
+    assert state.terminal_reached is True
+    assert published == []
 
 
 @pytest.mark.asyncio
-async def test_runtime_client_marks_queued_response_without_terminal_chunk():
-    def handler(_request: httpx.Request) -> httpx.Response:
+async def test_queued_cancellation_closes_content_without_duplicate_terminal_lifecycle():
+    request_id = "queued-cancel-1"
+    queued = asyncio.Event()
+    release_terminal = asyncio.Event()
+
+    class RuntimeClient:
+        async def send_message_stream_events(self, *args, **kwargs):
+            del args, kwargs
+            yield {"type": "queued", "request_id": request_id}
+            queued.set()
+            await release_terminal.wait()
+            yield {"type": "response_terminal", "status": "incomplete", "request_id": request_id}
+
+    state = chat_responses._ensure_response_stream(
+        request_id, "response-cancel-1", "thread-queue", "progena-v1"
+    )
+    published: list[str] = []
+    original_client = lifecycle_state.client
+    original_broadcast = events_stream.broadcast_ui_event
+    lifecycle_state.client = RuntimeClient()
+    events_stream.broadcast_ui_event = lambda event_type, *_args, **_kwargs: published.append(
+        event_type
+    )
+    try:
+        runner = asyncio.create_task(
+            chat_responses._run_response_event_stream(
+                message="Queued prompt",
+                model="progena-v1",
+                request_id=request_id,
+                response_id="response-cancel-1",
+                thread_id="thread-queue",
+                stream=True,
+            )
+        )
+        await queued.wait()
+        chat_responses._active_response_streams[request_id].set()
+        release_terminal.set()
+        await runner
+    finally:
+        lifecycle_state.client = original_client
+        events_stream.broadcast_ui_event = original_broadcast
+        chat_responses._response_streams.pop(request_id, None)
+        chat_responses._active_response_streams.pop(request_id, None)
+
+    assert state.terminal_reached is True
+    assert published == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_client_follows_queued_response_stream_after_admission():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                content=(
+                    b"event: response.completed\n"
+                    b'data: {"type":"response.completed","response":{"status":"queued"}}\n\n'
+                ),
+            )
         return httpx.Response(
             200,
             content=(
+                b"event: response.in_progress\n"
+                b'data: {"type":"response.in_progress"}\n\n'
+                b"event: response.output_text.delta\n"
+                b'data: {"type":"response.output_text.delta","delta":"Deferred",'
+                b'"runtime_stream_seq":4}\n\n'
                 b"event: response.completed\n"
-                b'data: {"type":"response.completed","response":{"status":"queued"}}\n\n'
+                b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
             ),
         )
 
@@ -302,7 +440,85 @@ async def test_runtime_client_marks_queued_response_without_terminal_chunk():
     finally:
         await runtime_client.stop()
 
-    assert events == [{"type": "queued", "request_id": "queued-request-1"}]
+    assert [request.method for request in requests] == ["POST", "GET"]
+    assert requests[1].url.path == "/v1/responses/queued-request-1/stream"
+    assert events == [
+        {
+            "type": "response_started",
+            "request_id": "queued-request-1",
+            "queue_execution": True,
+        },
+        {
+            "type": "stream_chunk",
+            "content": "Deferred",
+            "is_final": False,
+            "request_id": "queued-request-1",
+            "runtime_emitted_at_ms": None,
+            "runtime_stream_seq": 4,
+            "queue_execution": True,
+        },
+        {
+            "type": "response_terminal",
+            "status": "completed",
+            "response": {"status": "completed"},
+            "request_id": "queued-request-1",
+            "queue_execution": True,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_start_recovers_deferred_content_relay_after_gateway_restart():
+    request_id = "recovered-request-1"
+    content_request_id = "runtime-response-1"
+    follow_calls: list[str] = []
+
+    class RuntimeClient:
+        async def follow_response_stream_events(self, response_id: str):
+            assert response_id == content_request_id
+            follow_calls.append(response_id)
+            yield {"type": "stream_chunk", "content": "Recovered"}
+            yield {"type": "response_terminal", "status": "completed"}
+
+    original_client = lifecycle_state.client
+    lifecycle_state.client = RuntimeClient()
+    try:
+        chat_responses.handle_runtime_queue_lifecycle(
+            "chat.response.started",
+            {
+                "id": request_id,
+                "thread_id": "thread-queue",
+                "request_id": request_id,
+                "content_request_id": content_request_id,
+                "message_id": "queue-message-7",
+                "queue_execution": True,
+                "queued_message": {"id": "queue-message-7", "text": "Recovered", "attachments": []},
+            },
+        )
+        chat_responses.handle_runtime_queue_lifecycle(
+            "chat.response.started",
+            {
+                "id": request_id,
+                "thread_id": "thread-queue",
+                "request_id": request_id,
+                "content_request_id": content_request_id,
+                "message_id": "queue-message-7",
+                "queue_execution": True,
+                "queued_message": {"id": "queue-message-7", "text": "Recovered", "attachments": []},
+            },
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        state = chat_responses._response_streams[request_id]
+    finally:
+        lifecycle_state.client = original_client
+        chat_responses._response_streams.pop(request_id, None)
+        chat_responses._response_activities.pop(request_id, None)
+        chat_responses._active_response_streams.pop(request_id, None)
+
+    assert [frame.payload["delta"] for frame in state.frames] == ["Recovered"]
+    assert state.terminal_reached is True
+    assert follow_calls == [content_request_id]
 
 
 @pytest.mark.asyncio

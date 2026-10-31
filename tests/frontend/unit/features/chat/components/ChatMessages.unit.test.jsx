@@ -105,11 +105,15 @@ describe('interrupted chat status', () => {
           />
         </Provider>,
       );
-      return container.textContent;
+      return container;
     };
 
-    expect(render(false)).toContain('The runtime restarted during this turn.');
-    expect(render(true)).not.toContain('The runtime restarted during this turn.');
+    const row = render(false).querySelector('article[aria-label="Interrupted"]');
+    expect(row.classList.contains('entry--chain-end')).toBe(true);
+    expect(row.querySelector('.entry__gutter .entry__badge')).not.toBeNull();
+    expect(row.querySelector('details').open).toBe(false);
+    expect(row.querySelector('details > summary')).not.toBeNull();
+    expect(render(true).querySelector('article[aria-label="Interrupted"]')).toBeNull();
   });
 });
 

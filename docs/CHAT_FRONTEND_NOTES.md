@@ -61,6 +61,29 @@ lifecycle event, then reconciles the persisted chat detail. A `202`
 acknowledgement remains pending across reconnect until its matching terminal,
 request failure, or explicit cancellation policy.
 
+## Queued messages
+
+The conversation page can compose another message, including attachments, while
+a response runs. `ChatQueue` renders authoritative `chat.queue.updated` snapshots
+with delete, drag/drop or keyboard-button reordering, and **Send now**. Mutations
+send a revision and command ID; failures are reported through existing notifications
+and followed by a fresh snapshot. Reconnect also rehydrates the selected queue.
+There is no optimistic queue ordering or speculative queued transcript row.
+
+Send now cancels the current root turn and starts the selected message separately;
+it is not mid-turn steering. Actual `queue_execution` started claims the stable
+human row once and observes that request's own content stream. Enqueue acceptance
+does not take A's stream or Stop target; once B starts, A's late completion cannot
+clear B. Observed queued streams use the same pending transport, cursor replay,
+terminal draining and Stop machinery as directly submitted responses. Rich tool,
+reasoning and subagent events retain the shared live-turn renderer.
+
+After terminal reconciliation the canonical transcript owns the result, including
+the cancelled turn's interruption marker. Navigation releases the local observer
+without cancelling the durable execution. Queue controls are currently on the
+conversation page; Quick Chat queue controls and inline queued-message editing
+are not part of this feature.
+
 ## Session card layout
 
 Cards have three rows: time/pin (top), title (middle), and counts (bottom).
@@ -126,12 +149,18 @@ from both the message and any denormalized assistant timeline rows; text and
 other transcript data remain available. A canonical history read supplies fresh
 provider counts. This does not authorize storing backend transcripts locally.
 
-All assistant rendering uses the same timeline path. Root work is one outer
-keyboard-operable disclosure using the existing work-summary row styling.
-Completed work starts collapsed; the detailed reasoning sections/tool rows stay
-inside. Delegated-agent cards, the answer and conversation-summary markers remain
-outside this disclosure. Native reasoning headings remain verbatim inside;
-they are not rewritten as evidence that an action succeeded.
+All assistant rendering uses the same timeline path. Root work phases are
+sibling keyboard-operable disclosures, not children of a whole-turn summary.
+The initial generic `Working` phase ends when reasoning arrives; each reasoning
+section's title becomes the next top-level header and owns the tools that follow.
+Unheaded reasoning uses the neutral title `Reasoning`. Completed phases start
+collapsed. One expansion reveals the full available reasoning and named tool
+rows; each tool keeps its own input/output disclosure. A title-only provider
+summary has no additional body to invent. Tool results arriving across a reasoning
+boundary remain with their initiating call, and do not extend the prior phase's
+elapsed time past that boundary. Delegated-agent cards, the answer and conversation
+summary markers retain their existing placement. Native reasoning headings remain
+verbatim; they are not rewritten as evidence that an action succeeded.
 
 Work state comes from actual response/provider/native interrupt evidence:
 completed, failed, cancelled, interrupted, or neutral unknown. A failed tool is
@@ -142,6 +171,15 @@ row even when transport completes normally; canonical reload preserves it.
 Partial answers and visible work keep their failure status without a duplicate
 synthetic row. Background completion may use provider status only from its own
 stream ID, never from the currently selected conversation's live turn.
+
+Subagent cards identify the delegate before its task summary. Running cards keep
+a visible `Working…` status even before their first output or when collapsed;
+completion removes it. The header's full task is available through the shared
+`ChatInfoTooltip`, not a native browser title. Expanding a completed card reveals
+the available result as full sanitized Markdown, without a single-line height
+clamp that can hide headings, lists or code. This does not add durable storage
+for nested streaming deltas; checkpoint history still reconstructs the card
+from the persisted task result.
 
 The conversation header uses backend `session.usage_totals`, not sums over the
 currently loaded message page or streamed reasoning text. These are cumulative
@@ -168,11 +206,12 @@ rewritten. Old summaries without recorded comparable footprints do not acquire
 invented savings figures.
 
 Message token labels omit model names. Token, context and cache metric details
-use `ChatInfoTooltip`, a portal reusing the shared `chat-info-tooltip` styling,
-fixed 8px from the viewport top and horizontally clamped. Details are compact
-label/value rows; observed input reductions and cache estimates remain labelled.
-Hover does not introduce a help cursor. Focus exposes the same information;
-Escape, blur/pointer exit and scrolling dismiss it without moving focus.
+use `ChatInfoTooltip`, a portal reusing the shared `chat-info-tooltip` styling.
+Hovered details follow the pointer; keyboard focus anchors them beside the
+trigger. Bubbles flip and clamp inside the viewport instead of appearing at the
+page top. Details are compact label/value rows; observed input reductions and
+cache estimates remain labelled. Hover keeps the default cursor. Escape,
+blur/pointer exit and scrolling dismiss details without moving focus.
 
 
 
@@ -195,14 +234,15 @@ summaries/work; they stop before another user message. Assistant and pending
 answer dots receive from above and never continue below. Live compaction
 activity precedes the pending answer cursor, so it remains inside the response
 chain rather than following its terminal dot.
-Interruptions share a terminal `Interrupted` disclosure with a warning-colored dot
-and an incoming-only connector. User cancellation shows `Cancelled by you.`;
-Send now shows `Continued with your new message.` before the selected user input.
-Both retain empty turns and partial answers, without synthetic cancellation prose.
-Runtime restart uses the same component with its existing partial-step warning.
-Ordinary queued input does not create a marker. Send now still uses a safe model
-boundary, not graph cancellation; canonical reload preserves the marker reason.
-
+Interruptions share a terminal `Interrupted` disclosure with a warning-colored dot.
+Its connector enters from above and never continues below. User cancellation
+shows `Cancelled by you.` and preserves any partial answer above the marker,
+including an otherwise empty cancelled turn. Persisted interrupted turns keep
+their own marker before subsequent messages, even without an explicit reason.
+Runtime restart shows the existing restart/partial-step warning and remains
+hidden while generation is active. Starting a new response clears the obsolete
+session-level restart flag only for that thread, so it cannot reappear below the
+retry's answer. Cancellation is not appended as synthetic assistant prose.
 
 Original messages remain visible and searchable. Nested summaries stay inside
 their subagent activity. Completed markers must remain visible with debug events

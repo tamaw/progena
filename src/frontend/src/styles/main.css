@@ -29,6 +29,10 @@
        that would otherwise share the same green. */
     --color-accent-secondary: #14b8a6;
 
+    /* Delegated subagents in chat: distinct from tool green, plan blue, A2A
+       teal and Progena's own violet message dot. */
+    --color-subagent: #e879f9;
+
     /* User message colors */
     --color-user-bg: #2f6ff6;
     --color-user-text: #ffffff;
@@ -129,6 +133,7 @@
     --color-warning: #f59e0b;
     --color-error: #e0524a;
     --color-info: #2f6ff6;
+    --color-subagent: #c026d3;
     --color-accent-soft: rgba(47, 111, 246, 0.12);
 
     --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);

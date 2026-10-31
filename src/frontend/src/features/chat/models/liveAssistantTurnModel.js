@@ -1092,8 +1092,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage, int
     turn.content.trim().length > 0
     || hasVisibleTimelineOutput(turn.timelineItems)
   );
-  const preservesEmptyInterruptedTurn = resolvedInterruptionReason === 'user_cancelled'
-    || resolvedInterruptionReason === 'new_message';
+  const preservesEmptyInterruptedTurn = resolvedInterruptionReason === 'user_cancelled';
 
   if (responseStatus === 'cancelled' && !hasVisibleOutput && !preservesEmptyInterruptedTurn) {
     return null;

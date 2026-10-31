@@ -12,7 +12,9 @@ import json
 import logging
 import time
 import uuid
+from collections import deque
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 
 from aiohttp import web
@@ -23,6 +25,7 @@ from langgraph.runtime import Runtime
 from src.progena.documents.values import make_json_safe
 from src.progena.orchestration.nodes.checkpoint import checkpoint_node
 from src.progena.orchestration.state import ProgenaState
+from src.progena.persistence.store import LangGraphRuntimeStore
 from src.progena.runtime.chat_queue import ChatQueueStore, ClaimedQueueMessage, QueueActionError
 from src.progena.runtime.conversation_gate import ConversationTurnGate
 from src.progena.runtime.http.responses import (
@@ -39,6 +42,7 @@ from src.progena.sessions.history import (
     load_conversation,
     load_conversation_messages,
 )
+from src.progena.sessions.messages import extract_response_status
 from src.progena.sessions.models import (
     CONVERSATION_MESSAGES_FIELD,
     CONVERSATION_MESSAGES_INCLUDE,
@@ -63,6 +67,81 @@ _SSE_HEADERS = {
     "Cache-Control": "no-cache",
     "X-Accel-Buffering": "no",
 }
+
+_RESPONSE_STREAM_REPLAY_LIMIT = 512
+_RESPONSE_STREAM_SUBSCRIBER_QUEUE_SIZE = 256
+_RESPONSE_STREAM_RETENTION_SECONDS = 3600
+
+
+@dataclass
+class _ResponseContentStream:
+    """Bounded in-process replay plus live followers for one response."""
+
+    frames: deque[tuple[int, str, dict[str, Any]]] = field(
+        default_factory=lambda: deque(maxlen=_RESPONSE_STREAM_REPLAY_LIMIT)
+    )
+    subscribers: set[asyncio.Queue[tuple[int, str, dict[str, Any]] | None]] = field(
+        default_factory=set
+    )
+    next_cursor: int = 0
+    terminal: bool = False
+    finished_at: float | None = None
+
+    def append(self, event: str, data: dict[str, Any]) -> None:
+        if self.terminal:
+            return
+        cursor = self.next_cursor
+        self.next_cursor += 1
+        frame = (cursor, event, data)
+        self.frames.append(frame)
+        for subscriber in tuple(self.subscribers):
+            try:
+                subscriber.put_nowait(frame)
+            except asyncio.QueueFull:
+                self.subscribers.discard(subscriber)
+
+    def subscribe(
+        self, cursor: int
+    ) -> tuple[
+        list[tuple[int, str, dict[str, Any]]],
+        asyncio.Queue[tuple[int, str, dict[str, Any]] | None],
+    ]:
+        subscriber: asyncio.Queue[tuple[int, str, dict[str, Any]] | None] = asyncio.Queue(
+            maxsize=_RESPONSE_STREAM_SUBSCRIBER_QUEUE_SIZE
+        )
+        self.subscribers.add(subscriber)
+        return [frame for frame in self.frames if frame[0] > cursor], subscriber
+
+    def finish(self) -> None:
+        if self.terminal:
+            return
+        self.terminal = True
+        self.finished_at = time.monotonic()
+        for subscriber in tuple(self.subscribers):
+            try:
+                subscriber.put_nowait(None)
+            except asyncio.QueueFull:
+                self.subscribers.discard(subscriber)
+
+
+class _ResponseContentSink:
+    """``StreamResponse``-shaped sink that records a deferred response's frames."""
+
+    def __init__(self, stream: _ResponseContentStream) -> None:
+        self.stream = stream
+
+    async def write(self, data: bytes) -> None:
+        # Deferred streams have no original HTTP writer. Keepalive comments are
+        # intentionally not replayed; followers produce their own keepalives.
+        del data
+
+
+@dataclass(frozen=True)
+class _ActiveRootExecution:
+    """The exact root turn a Send now command is allowed to interrupt."""
+
+    response_id: str
+    cancel_event: asyncio.Event
 
 
 async def _noop() -> None:
@@ -164,13 +243,22 @@ class RuntimeChatService:
         self._session_renders: dict[str, asyncio.Task[None]] = {}
         self._session_renders_pending: set[str] = set()
         self._cancel_events: dict[str, asyncio.Event] = {}
+        self._active_root_executions: dict[str, _ActiveRootExecution] = {}
+        self._content_streams: dict[str, _ResponseContentStream] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
         self._drain_task: asyncio.Task[None] | None = None
-        queue = getattr(getattr(loop_runner, "graph", None), "chat_queue", None)
-        self._chat_queue = queue if isinstance(queue, ChatQueueStore) else None
+        runtime_store = getattr(
+            getattr(heartbeat_context, "state_manager", None), "_runtime_store", None
+        )
+        self._chat_queue = (
+            ChatQueueStore(runtime_store)
+            if isinstance(runtime_store, LangGraphRuntimeStore)
+            else None
+        )
         if self._chat_queue is not None:
             self._chat_queue.set_event_publisher(self._publish_queue_snapshot)
         self._queue_drain_tasks: dict[str, asyncio.Task[None]] = {}
+        self._queue_drain_wakeups: set[str] = set()
 
     @property
     def conversation_gate(self) -> ConversationTurnGate:
@@ -180,6 +268,7 @@ class RuntimeChatService:
     def routes(self) -> list[web.RouteDef]:
         return [
             web.post("/v1/responses", self.handle_responses),
+            web.get("/v1/responses/{response_id}/stream", self.handle_response_stream),
             web.post("/v1/responses/{response_id}/cancel", self.handle_cancel),
             web.get("/v1/conversations/{conversation_id}/items", self.handle_items),
             web.delete("/v1/conversations/{conversation_id}", self.handle_delete),
@@ -248,7 +337,7 @@ class RuntimeChatService:
         if self._conversation_gate.is_active(thread_id):
             if self._chat_queue is None:
                 return _json_error("Durable chat queue is not available", "queue_unavailable", 503)
-            snapshot, _message_id = await self._chat_queue.enqueue(
+            _snapshot, _message_id = await self._chat_queue.enqueue(
                 thread_id,
                 text=message,
                 attachments=attachments or [],
@@ -258,6 +347,7 @@ class RuntimeChatService:
                 response_id=response_id,
                 model=model,
             )
+            self._ensure_content_stream(response_id)
             self._schedule_queue_drain(thread_id)
             queued_response = build_response_object(
                 response_id, thread_id, model, "queued", [], metadata
@@ -339,22 +429,26 @@ class RuntimeChatService:
                 await self._notify_queued_request(response_id, streaming=True)
 
             async def _turn() -> None:
-                if sequence == 0:
-                    await _lifecycle("response.created", "in_progress")
-                await _lifecycle("response.in_progress", "in_progress")
-                await self._stream_turn(
-                    response,
-                    message,
-                    response_id,
-                    thread_id,
-                    model,
-                    metadata,
-                    cancel_event,
-                    received_at,
-                    start_sequence=sequence,
-                    source=source,
-                    message_id=f"user_{response_id}",
-                )
+                self._activate_root(thread_id, response_id, cancel_event)
+                try:
+                    if sequence == 0:
+                        await _lifecycle("response.created", "in_progress")
+                    await _lifecycle("response.in_progress", "in_progress")
+                    await self._stream_turn(
+                        response,
+                        message,
+                        response_id,
+                        thread_id,
+                        model,
+                        metadata,
+                        cancel_event,
+                        received_at,
+                        start_sequence=sequence,
+                        source=source,
+                        message_id=f"user_{response_id}",
+                    )
+                finally:
+                    self._deactivate_root(thread_id, response_id, cancel_event)
 
             await self._run_serialized(thread_id, _turn, on_queued=_on_queued)
             return response
@@ -373,7 +467,7 @@ class RuntimeChatService:
 
     async def _stream_turn(
         self,
-        response: web.StreamResponse,
+        response: web.StreamResponse | _ResponseContentSink,
         message: str,
         response_id: str,
         thread_id: str,
@@ -384,7 +478,9 @@ class RuntimeChatService:
         start_sequence: int,
         source: str | None = None,
         message_id: str | None = None,
-    ) -> None:
+        *,
+        resume: bool = False,
+    ) -> dict[str, Any]:
         if cancel_event.is_set():
             cancelled_response = build_response_object(
                 response_id, thread_id, model, "cancelled", [], metadata
@@ -399,7 +495,7 @@ class RuntimeChatService:
                         start_sequence,
                     ),
                 )
-            return
+            return cancelled_response
         bridge = self._create_direct_stream_bridge()
         cancelled = False
         bridge_cancelled = False
@@ -412,10 +508,11 @@ class RuntimeChatService:
             before_count = await self._message_count(thread_id)
         except Exception as exc:
             logger.error("State read error for %s: %s", response_id, exc, exc_info=True)
+            failed = _failed_response(response_id, thread_id, model, metadata, "state_error", exc)
             await self._write_failed(
                 response, response_id, thread_id, model, metadata, seq, "state_error", exc
             )
-            return
+            return failed
 
         token = set_current_thread_id(thread_id)
         text_item_opened = False
@@ -423,21 +520,22 @@ class RuntimeChatService:
         item_id = f"msg_{response_id}"
         output_index = 0
         content_index = 0
-        queue_claims: list[dict[str, str]] = []
 
         try:
 
             async def _produce() -> None:
                 try:
-                    async for item in bridge.stream(
-                        message,
-                        thread_id=thread_id,
-                        received_at=received_at,
-                        attachments=_extract_attachments(metadata),
-                        source=source,
-                        message_id=message_id,
-                        metadata=metadata,
-                    ):
+                    stream_kwargs: dict[str, Any] = {
+                        "thread_id": thread_id,
+                        "received_at": received_at,
+                        "attachments": _extract_attachments(metadata),
+                        "source": source,
+                        "message_id": message_id,
+                        "metadata": metadata,
+                    }
+                    if resume:
+                        stream_kwargs["resume"] = True
+                    async for item in bridge.stream(message, **stream_kwargs):
                         await queue.put(("item", item))
                 except asyncio.CancelledError:
                     with contextlib.suppress(asyncio.QueueFull):
@@ -455,17 +553,25 @@ class RuntimeChatService:
                         cancelled = True
                         break
 
-                    try:
-                        kind, payload = await asyncio.wait_for(
-                            queue.get(), timeout=EVENTS_KEEPALIVE_SECONDS
-                        )
-                    except TimeoutError:
+                    read_task = asyncio.create_task(queue.get())
+                    cancel_task = asyncio.create_task(cancel_event.wait())
+                    done, pending = await asyncio.wait(
+                        (read_task, cancel_task),
+                        timeout=EVENTS_KEEPALIVE_SECONDS,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in pending:
+                        task.cancel()
+                    for task in pending:
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
+                    if not done:
                         await response.write(b": keepalive\n\n")
                         continue
-
-                    if cancel_event.is_set():
+                    if cancel_task in done:
                         cancelled = True
                         break
+                    kind, payload = read_task.result()
 
                     if kind == "done":
                         break
@@ -484,125 +590,17 @@ class RuntimeChatService:
                             response_id, thread_id, model, "failed", [], metadata
                         )
                         resp_obj["error"] = {"code": "stream_error", "message": str(exc)}
-                        for claim in queue_claims:
-                            await self._publish_queue_execution_result(
-                                "chat_queue_execution_failed",
-                                thread_id,
-                                claim["request_id"],
-                                claim["message_id"],
-                                resp_obj,
-                            )
                         with contextlib.suppress(ConnectionResetError, ConnectionError):
                             await self._write_frame(
                                 response,
                                 "response.failed",
                                 build_sse_event("response.failed", {"response": resp_obj}, seq),
                             )
-                        return
+                        return resp_obj
 
                     item = payload
                     runtime_emitted_at_ms = int(time.time() * 1000)
                     item_type = str(item.get("type", "stream_chunk"))
-
-                    if item_type == "stream_event" and item.get("event_type") in {
-                        "chat_queue_claimed",
-                        "chat_queue_boundary",
-                    }:
-                        claim_metadata = item.get("metadata")
-                        if (
-                            isinstance(claim_metadata, dict)
-                            and isinstance(claim_metadata.get("request_id"), str)
-                            and isinstance(claim_metadata.get("message_id"), str)
-                        ):
-                            queue_claims.append(
-                                {
-                                    "request_id": claim_metadata["request_id"],
-                                    "message_id": claim_metadata["message_id"],
-                                }
-                            )
-                            await self._publish_queue_execution_started(
-                                thread_id,
-                                claim_metadata["request_id"],
-                                claim_metadata["message_id"],
-                                content_request_id=response_id,
-                            )
-
-                    if (
-                        item_type == "stream_event"
-                        and item.get("event_type") == "chat_queue_boundary"
-                        and text_item_opened
-                    ):
-                        await self._write_frame(
-                            response,
-                            "response.output_text.done",
-                            build_sse_event(
-                                "response.output_text.done",
-                                {
-                                    "item_id": item_id,
-                                    "output_index": output_index,
-                                    "content_index": content_index,
-                                    "text": current_text,
-                                    "logprobs": [],
-                                },
-                                seq,
-                            ),
-                        )
-                        seq += 1
-                        await self._write_frame(
-                            response,
-                            "response.content_part.done",
-                            build_sse_event(
-                                "response.content_part.done",
-                                {
-                                    "item_id": item_id,
-                                    "output_index": output_index,
-                                    "content_index": content_index,
-                                    "part": {
-                                        "type": "output_text",
-                                        "text": current_text,
-                                        "annotations": [],
-                                    },
-                                },
-                                seq,
-                            ),
-                        )
-                        seq += 1
-                        await self._write_frame(
-                            response,
-                            "response.output_item.done",
-                            build_sse_event(
-                                "response.output_item.done",
-                                {
-                                    "output_index": output_index,
-                                    "item": {
-                                        "id": item_id,
-                                        "type": "message",
-                                        "role": "assistant",
-                                        "status": "completed",
-                                        "content": [
-                                            {
-                                                "type": "output_text",
-                                                "text": current_text,
-                                                "annotations": [],
-                                            }
-                                        ],
-                                    },
-                                },
-                                seq,
-                            ),
-                        )
-                        seq += 1
-                        output_index += 1
-                        content_index = 0
-                        boundary_metadata = item.get("metadata")
-                        boundary_id = (
-                            boundary_metadata.get("message_id")
-                            if isinstance(boundary_metadata, dict)
-                            else None
-                        )
-                        item_id = f"msg_{response_id}_{boundary_id}"
-                        current_text = ""
-                        text_item_opened = False
 
                     if item_type == "stream_event":
                         event_payload: dict[str, Any] = {
@@ -698,21 +696,13 @@ class RuntimeChatService:
                     response_id, thread_id, model, "failed", [], metadata
                 )
                 resp_obj["error"] = {"code": "stream_error", "message": str(exc)}
-                for claim in queue_claims:
-                    await self._publish_queue_execution_result(
-                        "chat_queue_execution_failed",
-                        thread_id,
-                        claim["request_id"],
-                        claim["message_id"],
-                        resp_obj,
-                    )
                 with contextlib.suppress(ConnectionResetError, ConnectionError):
                     await self._write_frame(
                         response,
                         "response.failed",
                         build_sse_event("response.failed", {"response": resp_obj}, seq),
                     )
-                return
+                return resp_obj
             finally:
                 producer.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -720,7 +710,7 @@ class RuntimeChatService:
 
             if bridge_cancelled and not cancel_event.is_set():
                 logger.info("Direct DeepAgent bridge cancelled for %s", response_id)
-                return
+                cancelled = True
 
             if cancelled or cancel_event.is_set():
                 logger.info("Direct DeepAgent stream cancelled for %s", response_id)
@@ -730,21 +720,13 @@ class RuntimeChatService:
                 resp_obj = build_response_object(
                     response_id, thread_id, model, "cancelled", output, metadata
                 )
-                for claim in queue_claims:
-                    await self._publish_queue_execution_result(
-                        "chat_queue_execution_failed",
-                        thread_id,
-                        claim["request_id"],
-                        claim["message_id"],
-                        resp_obj,
-                    )
                 with contextlib.suppress(ConnectionResetError, ConnectionError):
                     await self._write_frame(
                         response,
                         "response.incomplete",
                         build_sse_event("response.incomplete", {"response": resp_obj}, seq),
                     )
-                return
+                return resp_obj
 
             # Close open text item
             if text_item_opened:
@@ -817,37 +799,21 @@ class RuntimeChatService:
                 failed = _failed_response(
                     response_id, thread_id, model, metadata, "checkpoint_error", exc
                 )
-                for claim in queue_claims:
-                    await self._publish_queue_execution_result(
-                        "chat_queue_execution_failed",
-                        thread_id,
-                        claim["request_id"],
-                        claim["message_id"],
-                        failed,
-                    )
                 await self._write_failed(
                     response, response_id, thread_id, model, metadata, seq, "checkpoint_error", exc
                 )
-                return
+                return failed
 
             resp_obj = build_response_object(
                 response_id, thread_id, model, "completed", output, metadata
             )
-            for claim in queue_claims:
-                await self._publish_queue_execution_result(
-                    "chat_queue_execution_completed",
-                    thread_id,
-                    claim["request_id"],
-                    claim["message_id"],
-                    resp_obj,
-                    content_request_id=response_id,
-                )
             with contextlib.suppress(ConnectionResetError, ConnectionError):
                 await self._write_frame(
                     response,
                     "response.completed",
                     build_sse_event("response.completed", {"response": resp_obj}, seq),
                 )
+            return resp_obj
         finally:
             reset_current_thread_id(token)
             self._fire_and_forget_session_merge(thread_id)
@@ -864,8 +830,6 @@ class RuntimeChatService:
         received_at: float,
         source: str | None = None,
         message_id: str | None = None,
-        queue_request_id: str | None = None,
-        queue_send_now: bool = False,
     ) -> dict[str, Any]:
         if cancel_event.is_set():
             return build_response_object(response_id, thread_id, model, "cancelled", [], metadata)
@@ -876,120 +840,60 @@ class RuntimeChatService:
             logger.error("State read error for %s: %s", response_id, exc, exc_info=True)
             return _failed_response(response_id, thread_id, model, metadata, "state_error", exc)
 
+        self._activate_root(thread_id, response_id, cancel_event)
         token = set_current_thread_id(thread_id)
         try:
             partial_text = ""
-            queue_claims: list[dict[str, str]] = []
             try:
-                stream_kwargs: dict[str, Any] = {
-                    "thread_id": thread_id,
-                    "received_at": received_at,
-                    "attachments": _extract_attachments(metadata),
-                    "source": source,
-                    "message_id": message_id,
-                    "metadata": metadata,
-                }
-                if queue_request_id is not None:
-                    stream_kwargs["queue_request_id"] = queue_request_id
-                    stream_kwargs["queue_send_now"] = queue_send_now
-                stream = bridge.stream(message, **stream_kwargs)
-                # aclosing: a cancel must stop the graph run before the
-                # cancelled reply is written to the thread.
+                stream = bridge.stream(
+                    message,
+                    thread_id=thread_id,
+                    received_at=received_at,
+                    attachments=_extract_attachments(metadata),
+                    source=source,
+                    message_id=message_id,
+                    metadata=metadata,
+                )
+                # A cancel must close the graph run before its cancelled reply
+                # is written to the thread.
                 async with contextlib.aclosing(stream):
                     async for item in stream:
                         if item.get("type", "stream_chunk") == "stream_chunk":
                             partial_text += str(item.get("content", ""))
-                        if item.get("type") == "stream_event" and item.get("event_type") in {
-                            "chat_queue_claimed",
-                            "chat_queue_boundary",
-                        }:
-                            claim = item.get("metadata")
-                            if (
-                                isinstance(claim, dict)
-                                and isinstance(claim.get("request_id"), str)
-                                and isinstance(claim.get("message_id"), str)
-                            ):
-                                queue_claims.append(
-                                    {
-                                        "request_id": claim["request_id"],
-                                        "message_id": claim["message_id"],
-                                    }
-                                )
-                                await self._publish_queue_execution_started(
-                                    thread_id,
-                                    claim["request_id"],
-                                    claim["message_id"],
-                                    content_request_id=response_id,
-                                )
                         if cancel_event.is_set():
                             break
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 logger.error("Turn error for %s: %s", response_id, exc, exc_info=True)
-                resp_obj = build_response_object(
+                failed = build_response_object(
                     response_id, thread_id, model, "failed", [], metadata
                 )
-                resp_obj["error"] = {"code": "stream_error", "message": str(exc)}
-                for claim in queue_claims:
-                    await self._publish_queue_execution_result(
-                        "chat_queue_execution_failed",
-                        thread_id,
-                        claim["request_id"],
-                        claim["message_id"],
-                        resp_obj,
-                    )
-                return resp_obj
+                failed["error"] = {"code": "stream_error", "message": str(exc)}
+                return failed
 
             if cancel_event.is_set():
                 output = await self._persist_cancelled_turn(
                     thread_id, response_id, partial_text, before_count
                 )
-                cancelled_response = build_response_object(
+                return build_response_object(
                     response_id, thread_id, model, "cancelled", output, metadata
                 )
-                for claim in queue_claims:
-                    await self._publish_queue_execution_result(
-                        "chat_queue_execution_failed",
-                        thread_id,
-                        claim["request_id"],
-                        claim["message_id"],
-                        cancelled_response,
-                    )
-                return cancelled_response
 
             try:
                 await self._complete_direct_graph_cycle(bridge, thread_id)
                 output = await self._turn_output(thread_id, before_count)
             except Exception as exc:
                 logger.error("Checkpoint error for %s: %s", response_id, exc, exc_info=True)
-                failed = _failed_response(
+                return _failed_response(
                     response_id, thread_id, model, metadata, "checkpoint_error", exc
                 )
-                for claim in queue_claims:
-                    await self._publish_queue_execution_result(
-                        "chat_queue_execution_failed",
-                        thread_id,
-                        claim["request_id"],
-                        claim["message_id"],
-                        failed,
-                    )
-                return failed
-            resp_obj = build_response_object(
+            return build_response_object(
                 response_id, thread_id, model, "completed", output, metadata
             )
-            for claim in queue_claims:
-                await self._publish_queue_execution_result(
-                    "chat_queue_execution_completed",
-                    thread_id,
-                    claim["request_id"],
-                    claim["message_id"],
-                    resp_obj,
-                    content_request_id=response_id,
-                )
-            return resp_obj
         finally:
             reset_current_thread_id(token)
+            self._deactivate_root(thread_id, response_id, cancel_event)
             self._fire_and_forget_session_merge(thread_id)
             self._schedule_queue_drain(thread_id)
 
@@ -1078,6 +982,67 @@ class RuntimeChatService:
             if index >= before_count and not isinstance(messages[index], HumanMessage)
         ]
 
+    # -- GET /v1/responses/{response_id}/stream -------------------------
+
+    async def handle_response_stream(
+        self, request: web.Request
+    ) -> web.StreamResponse | web.Response:
+        response_id = request.match_info["response_id"]
+        stream = self._content_streams.get(response_id)
+        if stream is None:
+            return _json_error(f"Response '{response_id}' not found", "not_found", 404)
+        raw_cursor = request.query.get("cursor", request.headers.get("Last-Event-ID", ""))
+        try:
+            cursor = int(raw_cursor) if raw_cursor else -1
+        except ValueError:
+            return _json_error("cursor must be an integer", "bad_request", 400, param="cursor")
+        if cursor < -1:
+            return _json_error("cursor must be at least -1", "bad_request", 400, param="cursor")
+        if stream.frames and cursor < stream.frames[0][0] - 1:
+            return _json_error(
+                "cursor has expired; restart the response stream",
+                "cursor_expired",
+                409,
+                param="cursor",
+            )
+
+        response = web.StreamResponse(
+            status=200,
+            headers={"Content-Type": "text/event-stream", **_SSE_HEADERS},
+        )
+        await response.prepare(request)
+        replay, subscriber = stream.subscribe(cursor)
+        try:
+            for frame_cursor, event, data in replay:
+                await self._write_replay_frame(response, frame_cursor, event, data)
+            while not (stream.terminal and subscriber.empty()):
+                if subscriber not in stream.subscribers:
+                    await self._write_replay_frame(
+                        response,
+                        stream.next_cursor,
+                        "response.failed",
+                        {"error": {"code": "stream_desynchronized"}},
+                    )
+                    break
+                try:
+                    item = await asyncio.wait_for(
+                        subscriber.get(), timeout=EVENTS_KEEPALIVE_SECONDS
+                    )
+                except TimeoutError:
+                    await response.write(b": keepalive\n\n")
+                    continue
+                if item is None:
+                    if stream.terminal and subscriber.empty():
+                        break
+                    continue
+                frame_cursor, event, data = item
+                await self._write_replay_frame(response, frame_cursor, event, data)
+        except (ConnectionResetError, ConnectionError):
+            pass
+        finally:
+            stream.subscribers.discard(subscriber)
+        return response
+
     # -- POST /v1/responses/{response_id}/cancel ------------------------
 
     async def handle_cancel(self, request: web.Request) -> web.Response:
@@ -1109,36 +1074,250 @@ class RuntimeChatService:
         if not isinstance(payload, dict):
             return _json_error("Expected a JSON object body", "bad_request", 400)
         conversation_id = request.match_info["conversation_id"]
+        before = await self._chat_queue.snapshot(conversation_id)
+        deleted = next(
+            (
+                item
+                for item in before.get("messages", [])
+                if isinstance(item, dict)
+                and item.get("id") == payload.get("message_id")
+                and item.get("status") == "queued"
+            ),
+            None,
+        )
+        active = (
+            self._active_root_executions.get(conversation_id)
+            if payload.get("action") == "send_now"
+            else None
+        )
         try:
-            snapshot = await self._chat_queue.action(conversation_id, payload)
+            snapshot, applied = await self._chat_queue.action(
+                conversation_id, payload, include_applied=True
+            )
         except QueueActionError as exc:
             error, _status = error_response(str(exc), exc.code, exc.status)
             if exc.snapshot is not None:
                 error["snapshot"] = exc.snapshot
             return web.json_response(make_json_safe(error), status=exc.status)
+        if payload.get("action") == "send_now" and applied and active is not None:
+            # A direct root has no queue claim, so its cancellation remains
+            # in-memory; there is no pending queue claim to recover after restart.
+            self._cancel_captured_root(conversation_id, active)
+        if payload.get("action") == "delete" and applied and isinstance(deleted, dict):
+            await self._emit_deleted_queue_terminal(
+                ChatQueueStore._claim_from_item(conversation_id, deleted)
+            )
         self._schedule_queue_drain(conversation_id)
         return web.json_response(make_json_safe(snapshot))
 
-    async def _checkpoint_message_ids(self, conversation_id: str) -> set[str]:
+    async def _checkpoint_queue_state(
+        self, conversation_id: str
+    ) -> tuple[set[str], dict[str, str], bool]:
+        """Return committed inputs, proven terminal outcomes, and pending work."""
         graph = getattr(self.loop_runner, "graph", None)
         if graph is None:
-            return set()
+            return set(), {}, False
         state = await graph.aget_state({"configurable": {"thread_id": conversation_id}})
         messages = state.values.get("messages") or []
-        return {
+        committed = {
             message.id
             for message in messages
             if isinstance(message, HumanMessage) and isinstance(message.id, str) and message.id
         }
+        pending = bool(getattr(state, "next", ()))
+        terminal: dict[str, str] = {}
+        if not pending:
+            for index, message in enumerate(messages):
+                if not isinstance(message, HumanMessage) or not isinstance(message.id, str):
+                    continue
+                next_human = next(
+                    (
+                        later_index
+                        for later_index, later in enumerate(messages[index + 1 :], index + 1)
+                        if isinstance(later, HumanMessage)
+                    ),
+                    len(messages),
+                )
+                final = next(
+                    (
+                        later
+                        for later in reversed(messages[index + 1 : next_human])
+                        if isinstance(later, AIMessage) and not getattr(later, "tool_calls", None)
+                    ),
+                    None,
+                )
+                if final is not None:
+                    status = extract_response_status(final)
+                    terminal[message.id] = "completed" if status == "unknown" else status
+        if pending:
+            for index, message in enumerate(messages):
+                if not isinstance(message, HumanMessage) or not isinstance(message.id, str):
+                    continue
+                next_human = next(
+                    (
+                        position
+                        for position, later in enumerate(messages[index + 1 :], index + 1)
+                        if isinstance(later, HumanMessage)
+                    ),
+                    len(messages),
+                )
+                final = next(
+                    (
+                        later
+                        for later in reversed(messages[index + 1 : next_human])
+                        if isinstance(later, AIMessage) and not getattr(later, "tool_calls", None)
+                    ),
+                    None,
+                )
+                if final is not None:
+                    status = extract_response_status(final)
+                    if status in {"cancelled", "failed", "interrupted"}:
+                        terminal[message.id] = status
+        return committed, terminal, pending
 
-    async def _recover_queue(self, conversation_id: str) -> None:
+    async def _checkpoint_message_ids(self, conversation_id: str) -> set[str]:
+        committed, _terminal, _pending = await self._checkpoint_queue_state(conversation_id)
+        return committed
+
+    async def _recover_queue(self, conversation_id: str) -> tuple[set[str], bool]:
+        committed, terminal_outcomes, pending = await self._checkpoint_queue_state(conversation_id)
         if self._chat_queue is not None:
+            cancelled = await self._chat_queue.cancel_requested_claims(conversation_id)
+            cancelled_ids = {claimed.id for claimed in cancelled}
+            for claimed in cancelled:
+                await self._settle_recovered_cancellation(
+                    claimed, already_terminal=claimed.id in terminal_outcomes
+                )
+
+            before = await self._chat_queue.snapshot(conversation_id)
+            settled = [
+                ChatQueueStore._claim_from_item(conversation_id, item)
+                for item in before.get("messages", [])
+                if (
+                    isinstance(item, dict)
+                    and item.get("status") == "sending"
+                    and str(item.get("id")) in terminal_outcomes
+                    and str(item.get("id")) not in cancelled_ids
+                )
+            ]
             await self._chat_queue.recover(
-                conversation_id, await self._checkpoint_message_ids(conversation_id)
+                conversation_id, committed, terminal_message_ids=terminal_outcomes
             )
+            for claimed in settled:
+                await self._emit_recovered_terminal(claimed, terminal_outcomes[claimed.id])
+        return committed, pending
+
+    async def _settle_recovered_cancellation(
+        self, claimed: ClaimedQueueMessage, *, already_terminal: bool
+    ) -> None:
+        """Persist and publish an acknowledged Send now cancellation after restart."""
+
+        if already_terminal:
+            output: list[dict[str, Any]] = []
+        else:
+            before_count = await self._claimed_turn_before_count(claimed)
+            output = await self._persist_cancelled_turn(
+                claimed.conversation_id, claimed.response_id, "", before_count
+            )
+        assert self._chat_queue is not None
+        await self._chat_queue.settle_claim(claimed.conversation_id, claimed.id)
+        await self._emit_recovered_cancellation(claimed, output)
+
+    async def _claimed_turn_before_count(self, claimed: ClaimedQueueMessage) -> int:
+        state = await self.loop_runner.graph.aget_state(
+            {"configurable": {"thread_id": claimed.conversation_id}}
+        )
+        messages = state.values.get("messages") or []
+        return next(
+            (
+                index
+                for index, message in enumerate(messages)
+                if isinstance(message, HumanMessage) and message.id == claimed.id
+            ),
+            len(messages),
+        )
+
+    async def _emit_recovered_cancellation(
+        self, claimed: ClaimedQueueMessage, output: list[dict[str, Any]]
+    ) -> None:
+        stream = self._ensure_content_stream(claimed.response_id)
+        metadata = (
+            {**claimed.metadata, "attachments": claimed.attachments}
+            if claimed.attachments
+            else claimed.metadata
+        )
+        response = build_response_object(
+            claimed.response_id,
+            claimed.conversation_id,
+            claimed.model,
+            "cancelled",
+            output,
+            metadata,
+        )
+        await self._write_frame(
+            _ResponseContentSink(stream),
+            "response.incomplete",
+            build_sse_event("response.incomplete", {"response": response}, 0),
+        )
+        stream.finish()
+        await self._publish_queue_execution("chat_queue_execution_cancelled", claimed, response)
+
+    async def _emit_recovered_terminal(self, claimed: ClaimedQueueMessage, status: str) -> None:
+        stream = self._ensure_content_stream(claimed.response_id)
+        metadata = (
+            {**claimed.metadata, "attachments": claimed.attachments}
+            if claimed.attachments
+            else claimed.metadata
+        )
+        normalized = (
+            "failed" if status == "failed" else "cancelled" if status != "completed" else status
+        )
+        response = build_response_object(
+            claimed.response_id, claimed.conversation_id, claimed.model, normalized, [], metadata
+        )
+        event = (
+            "response.completed"
+            if normalized == "completed"
+            else "response.failed"
+            if normalized == "failed"
+            else "response.incomplete"
+        )
+        await self._write_frame(
+            _ResponseContentSink(stream), event, build_sse_event(event, {"response": response}, 0)
+        )
+        stream.finish()
+        lifecycle = (
+            "chat_queue_execution_completed"
+            if normalized == "completed"
+            else "chat_queue_execution_failed"
+            if normalized == "failed"
+            else "chat_queue_execution_cancelled"
+        )
+        await self._publish_queue_execution(lifecycle, claimed, response)
+
+    async def _emit_deleted_queue_terminal(self, claimed: ClaimedQueueMessage) -> None:
+        stream = self._ensure_content_stream(claimed.response_id)
+        response = build_response_object(
+            claimed.response_id,
+            claimed.conversation_id,
+            claimed.model,
+            "cancelled",
+            [],
+            claimed.metadata,
+        )
+        await self._write_frame(
+            _ResponseContentSink(stream),
+            "response.incomplete",
+            build_sse_event("response.incomplete", {"response": response}, 0),
+        )
+        stream.finish()
+        await self._publish_queue_execution("chat_queue_execution_cancelled", claimed, response)
 
     def _schedule_queue_drain(self, conversation_id: str) -> None:
-        if self._chat_queue is None or conversation_id in self._queue_drain_tasks:
+        if self._chat_queue is None:
+            return
+        if conversation_id in self._queue_drain_tasks:
+            self._queue_drain_wakeups.add(conversation_id)
             return
         task = asyncio.create_task(self._drain_conversation_queue(conversation_id))
         self._queue_drain_tasks[conversation_id] = task
@@ -1159,42 +1338,100 @@ class RuntimeChatService:
             logger.exception("Queued chat drain failed for %s", conversation_id)
         finally:
             self._queue_drain_tasks.pop(conversation_id, None)
+            if conversation_id in self._queue_drain_wakeups:
+                self._queue_drain_wakeups.discard(conversation_id)
+                self._schedule_queue_drain(conversation_id)
 
     async def _run_next_queued_turn(self, conversation_id: str) -> bool:
         if self._chat_queue is None:
             return False
-        await self._recover_queue(conversation_id)
-        claimed = await self._chat_queue.claim_next(conversation_id)
+        committed, pending = await self._recover_queue(conversation_id)
+        claimed = await self._chat_queue.claim_recoverable(conversation_id, committed)
+        resume = claimed is not None and pending
+        if claimed is None:
+            claimed = await self._chat_queue.claim_next(conversation_id)
         if claimed is None:
             return False
+        self._ensure_content_stream(claimed.response_id)
         await self._publish_queue_execution("chat_queue_execution_started", claimed, None)
-        result = await self._run_claimed_turn(claimed)
+        result = await self._run_claimed_turn(claimed, resume=resume)
         await self._ensure_session_merged(conversation_id)
-        if result.get("status") == "failed":
-            await self._chat_queue.discard_claim(conversation_id, claimed.id)
+        status = str(result.get("status") or "failed")
+        await self._chat_queue.settle_claim(conversation_id, claimed.id)
+        if status == "completed":
+            await self._publish_queue_execution("chat_queue_execution_completed", claimed, result)
+        elif status == "cancelled":
+            await self._publish_queue_execution("chat_queue_execution_cancelled", claimed, result)
+        else:
             await self._publish_queue_execution("chat_queue_execution_failed", claimed, result)
-            return True
-        snapshot = await self._chat_queue.recover(
-            conversation_id, await self._checkpoint_message_ids(conversation_id)
-        )
-        delivered = all(item.get("id") != claimed.id for item in snapshot["messages"])
-        await self._publish_queue_execution("chat_queue_execution_completed", claimed, result)
-        return delivered
+        return True
 
-    async def _run_claimed_turn(self, claimed: ClaimedQueueMessage) -> dict[str, Any]:
-        return await self._run_turn(
-            claimed.text,
-            claimed.response_id,
-            claimed.conversation_id,
-            claimed.model,
-            claimed.metadata,
-            asyncio.Event(),
-            claimed.received_at if claimed.received_at is not None else time.time(),
-            source=claimed.source,
-            message_id=claimed.id,
-            queue_request_id=claimed.response_id,
-            queue_send_now=claimed.send_now,
-        )
+    async def _run_claimed_turn(
+        self, claimed: ClaimedQueueMessage, *, resume: bool
+    ) -> dict[str, Any]:
+        stream = self._ensure_content_stream(claimed.response_id)
+        sink = _ResponseContentSink(stream)
+        metadata = claimed.metadata
+        if claimed.attachments:
+            metadata = {**metadata, "attachments": claimed.attachments}
+        cancel_event = asyncio.Event()
+        self._cancel_events[claimed.response_id] = cancel_event
+        self._activate_root(claimed.conversation_id, claimed.response_id, cancel_event)
+        try:
+            await self._write_frame(
+                sink,
+                "response.created",
+                build_sse_event(
+                    "response.created",
+                    {
+                        "response": build_response_object(
+                            claimed.response_id,
+                            claimed.conversation_id,
+                            claimed.model,
+                            "in_progress",
+                            [],
+                            metadata,
+                        )
+                    },
+                    0,
+                ),
+            )
+            await self._write_frame(
+                sink,
+                "response.in_progress",
+                build_sse_event(
+                    "response.in_progress",
+                    {
+                        "response": build_response_object(
+                            claimed.response_id,
+                            claimed.conversation_id,
+                            claimed.model,
+                            "in_progress",
+                            [],
+                            metadata,
+                        )
+                    },
+                    1,
+                ),
+            )
+            return await self._stream_turn(
+                sink,
+                claimed.text,
+                claimed.response_id,
+                claimed.conversation_id,
+                claimed.model,
+                metadata,
+                cancel_event,
+                claimed.received_at if claimed.received_at is not None else time.time(),
+                start_sequence=2,
+                source=claimed.source,
+                message_id=claimed.id,
+                resume=resume,
+            )
+        finally:
+            self._deactivate_root(claimed.conversation_id, claimed.response_id, cancel_event)
+            self._cancel_events.pop(claimed.response_id, None)
+            stream.finish()
 
     async def _publish_queue_snapshot(self, snapshot: dict[str, Any]) -> None:
         queues = getattr(self.loop_runner, "queues", None)
@@ -1213,59 +1450,20 @@ class RuntimeChatService:
         metadata: dict[str, Any] = {
             "conversation_id": claimed.conversation_id,
             "request_id": claimed.response_id,
+            "content_request_id": claimed.response_id,
             "message_id": claimed.id,
         }
+        if event_type == "chat_queue_execution_started":
+            metadata["queued_message"] = {
+                "id": claimed.id,
+                "text": claimed.text,
+                "attachments": make_json_safe(claimed.attachments),
+            }
         if response is not None:
             metadata["response"] = response
         await queues.push_event(event_type, "", metadata)
 
     # -- GET /v1/conversations/{conversation_id}/items -------------------
-
-    async def _publish_queue_execution_started(
-        self,
-        conversation_id: str,
-        request_id: str,
-        message_id: str,
-        *,
-        content_request_id: str | None = None,
-    ) -> None:
-        queues = getattr(self.loop_runner, "queues", None)
-        if queues is not None:
-            await queues.push_event(
-                "chat_queue_execution_started",
-                "",
-                {
-                    "conversation_id": conversation_id,
-                    "request_id": request_id,
-                    "content_request_id": content_request_id or request_id,
-                    "message_id": message_id,
-                },
-            )
-
-    async def _publish_queue_execution_result(
-        self,
-        event_type: str,
-        conversation_id: str,
-        request_id: str,
-        message_id: str,
-        response: dict[str, Any],
-        *,
-        content_request_id: str | None = None,
-    ) -> None:
-        queues = getattr(self.loop_runner, "queues", None)
-        if queues is None:
-            return
-        await queues.push_event(
-            event_type,
-            "",
-            {
-                "conversation_id": conversation_id,
-                "request_id": request_id,
-                "content_request_id": content_request_id or request_id,
-                "message_id": message_id,
-                "response": response,
-            },
-        )
 
     async def handle_items(self, request: web.Request) -> web.Response:
         conversation_id = request.match_info["conversation_id"]
@@ -1479,14 +1677,74 @@ class RuntimeChatService:
             {"request_id": request_id, "streaming": streaming},
         )
 
+    def _ensure_content_stream(self, response_id: str) -> _ResponseContentStream:
+        stream = self._content_streams.get(response_id)
+        if stream is not None:
+            return stream
+        now = time.monotonic()
+        for stream_id, candidate in tuple(self._content_streams.items()):
+            if (
+                candidate.terminal
+                and candidate.finished_at is not None
+                and now - candidate.finished_at >= _RESPONSE_STREAM_RETENTION_SECONDS
+            ):
+                self._content_streams.pop(stream_id, None)
+        stream = _ResponseContentStream()
+        self._content_streams[response_id] = stream
+        while len(self._content_streams) > _RESPONSE_STREAM_REPLAY_LIMIT:
+            oldest_id, oldest = next(iter(self._content_streams.items()))
+            if not oldest.terminal:
+                break
+            self._content_streams.pop(oldest_id)
+        return stream
+
+    def _activate_root(
+        self, conversation_id: str, response_id: str, cancel_event: asyncio.Event
+    ) -> None:
+        self._active_root_executions[conversation_id] = _ActiveRootExecution(
+            response_id=response_id, cancel_event=cancel_event
+        )
+
+    def _deactivate_root(
+        self, conversation_id: str, response_id: str, cancel_event: asyncio.Event
+    ) -> None:
+        active = self._active_root_executions.get(conversation_id)
+        if (
+            active is not None
+            and active.response_id == response_id
+            and active.cancel_event is cancel_event
+        ):
+            self._active_root_executions.pop(conversation_id, None)
+
+    def _cancel_captured_root(self, conversation_id: str, captured: _ActiveRootExecution) -> None:
+        active = self._active_root_executions.get(conversation_id)
+        if active is not None and active is captured:
+            active.cancel_event.set()
+
     @staticmethod
-    async def _write_frame(response: web.StreamResponse, event: str, data: dict[str, Any]) -> None:
+    async def _write_frame(
+        response: web.StreamResponse | _ResponseContentSink,
+        event: str,
+        data: dict[str, Any],
+    ) -> None:
+        if isinstance(response, _ResponseContentSink):
+            response.stream.append(event, data)
+            return
         payload = json.dumps(make_json_safe(data)).encode("utf-8")
         await response.write(f"event: {event}\n".encode() + b"data: " + payload + b"\n\n")
 
+    @staticmethod
+    async def _write_replay_frame(
+        response: web.StreamResponse, cursor: int, event: str, data: dict[str, Any]
+    ) -> None:
+        payload = json.dumps(make_json_safe(data)).encode("utf-8")
+        await response.write(
+            f"id: {cursor}\nevent: {event}\n".encode() + b"data: " + payload + b"\n\n"
+        )
+
     async def _write_failed(
         self,
-        response: web.StreamResponse,
+        response: web.StreamResponse | _ResponseContentSink,
         response_id: str,
         thread_id: str,
         model: str,

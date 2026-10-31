@@ -439,14 +439,14 @@ class TestGetChatDetail:
                     {
                         "id": "a1",
                         "type": "ai",
-                        "content": "Partial answer. [Cancelled]",
+                        "content": "Partial answer.",
                         "response_metadata": {"status": "cancelled"},
                     },
                     {"id": "u2", "type": "human", "content": "try again"},
                     {
                         "id": "a2",
                         "type": "ai",
-                        "content": "[Cancelled]",
+                        "content": "",
                         "response_metadata": {"status": "cancelled"},
                     },
                 ],
@@ -471,124 +471,6 @@ class TestGetChatDetail:
             "cancelled",
             "user_cancelled",
         )
-
-    def test_projects_only_selected_send_now_queue_input_as_a_new_message_boundary(self):
-        messages = _messages_from_checkpoint(
-            CheckpointThreadSnapshot(
-                thread_id="thread_queue_boundary",
-                checkpoint_id="cp-1",
-                checkpoint_ts="2026-01-01T00:00:00Z",
-                messages=[
-                    {"id": "u1", "type": "human", "content": "first"},
-                    {
-                        "id": "a1",
-                        "type": "ai",
-                        "content": "First answer.",
-                        "response_metadata": {"finish_reason": "stop"},
-                    },
-                    {
-                        "id": "u2",
-                        "type": "human",
-                        "content": "selected",
-                        "additional_kwargs": {
-                            "progena_queue_request_id": "queue-request-1",
-                            "progena_queue_send_now": True,
-                        },
-                    },
-                    {
-                        "id": "a2",
-                        "type": "ai",
-                        "content": "Selected answer.",
-                        "response_metadata": {"finish_reason": "stop"},
-                    },
-                    {
-                        "id": "u3",
-                        "type": "human",
-                        "content": "ordinary",
-                        "additional_kwargs": {
-                            "progena_queue_request_id": "queue-request-2",
-                            "progena_queue_send_now": False,
-                        },
-                    },
-                    {
-                        "id": "a3",
-                        "type": "ai",
-                        "content": "Ordinary answer.",
-                        "response_metadata": {"finish_reason": "stop"},
-                    },
-                ],
-            )
-        )
-
-        first, selected, ordinary = messages[1], messages[3], messages[5]
-        assert [message.id for message in messages] == ["u1", "a1", "u2", "a2", "u3", "a3"]
-        assert (first.response_status, first.interruption_reason) == ("completed", "new_message")
-        assert selected.interruption_reason is None
-        assert ordinary.interruption_reason is None
-
-    def test_projects_empty_markers_for_consecutive_send_now_humans_before_any_answer(self):
-        messages = _messages_from_checkpoint(
-            CheckpointThreadSnapshot(
-                thread_id="thread_queue_empty_boundaries",
-                checkpoint_id="cp-1",
-                checkpoint_ts="2026-01-01T00:00:00Z",
-                messages=[
-                    {"id": "user_root", "type": "human", "content": "root"},
-                    {
-                        "id": "user_next",
-                        "type": "human",
-                        "content": "selected",
-                        "additional_kwargs": {
-                            "progena_queue_request_id": "next",
-                            "progena_queue_send_now": True,
-                        },
-                    },
-                    {
-                        "id": "user_final",
-                        "type": "human",
-                        "content": "selected again",
-                        "additional_kwargs": {
-                            "progena_queue_request_id": "final",
-                            "progena_queue_send_now": True,
-                        },
-                    },
-                    {
-                        "id": "user_ordinary",
-                        "type": "human",
-                        "content": "ordinary",
-                        "additional_kwargs": {
-                            "progena_queue_request_id": "ordinary",
-                            "progena_queue_send_now": False,
-                        },
-                    },
-                    {
-                        "id": "a1",
-                        "type": "ai",
-                        "content": "Only this answer ran.",
-                        "response_metadata": {"finish_reason": "stop"},
-                    },
-                ],
-            )
-        )
-
-        assert [message.id for message in messages] == [
-            "user_root",
-            "msg_root",
-            "user_next",
-            "msg_next",
-            "user_final",
-            "user_ordinary",
-            "a1",
-        ]
-        assert [
-            (message.id, message.response_status, message.interruption_reason)
-            for message in messages
-            if message.role == "assistant"
-        ] == [
-            ("msg_root", "unknown", "new_message"),
-            ("msg_next", "unknown", "new_message"),
-            ("a1", "completed", None),
-        ]
 
     def test_uses_existing_work_as_the_terminal_failure_indicator(self):
         [user, failure] = _messages_from_checkpoint(

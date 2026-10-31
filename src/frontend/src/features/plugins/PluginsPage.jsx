@@ -14,8 +14,7 @@ import {
   PLUGIN_SORT_MODES,
   filterPlugins,
   formatPluginVersion,
-  pluginDetailStatus,
-  pluginRowStatus,
+  pluginStatus,
   sortPlugins,
 } from './pluginsPageModel';
 import { fetchMarketplaces, fetchPlugins, fetchMarketplaceCatalog, installPlugin, uninstallPlugin, fetchPluginSkillContent, selectMarketplaces, selectMarketplacesState, selectPlugins, selectPluginsState, selectMarketplaceCatalog, selectMarketplaceCatalogRequest, selectPluginSkillContent, selectPluginSkillContentRequest } from './state';
@@ -49,7 +48,7 @@ function SkillIcon() {
 }
 
 function PluginRow({ plugin, entry, selected, onSelect }) {
-  const status = pluginRowStatus(entry);
+  const status = pluginStatus(entry);
   return (
     <button
       key={plugin.name}
@@ -59,7 +58,7 @@ function PluginRow({ plugin, entry, selected, onSelect }) {
       title={plugin.name}
     >
       <span className="plugins-tree-file pane-row-title">
-        <span className={`plugins-status-dot plugins-status-dot--${status}`} />
+        <span className={`plugins-status-dot sess-row__dot--${status.tone}`} title={status.label} />
         {plugin.displayName || plugin.name}
       </span>
       <span className="plugins-tree-file-path pane-row-caption">{plugin.description || plugin.name}</span>
@@ -445,9 +444,9 @@ export default function PluginsPage() {
               meta={[
                 <DetailStatus
                   key="status"
-                  tone={pluginDetailStatus(installedEntry).tone}
+                  tone={pluginStatus(installedEntry).tone}
                 >
-                  {pluginDetailStatus(installedEntry).label}
+                  {pluginStatus(installedEntry).label}
                 </DetailStatus>,
                 formatPluginVersion(installedEntry?.available_version)
                   ? <span key="available" className="plugins-update-chip">{formatPluginVersion(installedEntry.available_version)}</span>

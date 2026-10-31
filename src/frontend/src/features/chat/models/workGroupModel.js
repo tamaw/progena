@@ -8,13 +8,13 @@
  *     which stay visible as their own lines with a short summary of their
  *     latest activity,
  *   - everything else (tool calls, reasoning, plan updates, graph steps):
- *     the turn's "work", split into groups. Every reasoning summary (a
- *     `**Heading**` section) opens a new group headed by that summary, and
- *     the work that follows lands in it. Work before any summary forms a
- *     headless group (a typed "-ing" word while live / "Worked for …").
+ *     the turn's "work", split into groups. Every reasoning section opens a
+ *     new group headed by its `**Heading**` text, or by neutral "Reasoning"
+ *     when it has no heading. Work before the first reasoning section forms
+ *     the generic group ("Working" while live / "Worked for …" once done).
  *
- * While the agent is working, the latest group shows all its rows; once the
- * answer starts streaming every group collapses unless explicitly opened.
+ * While the agent is working, the latest group is expanded. Once answer text
+ * starts, every group collapses unless explicitly opened.
  */
 
 import { isA2AToolName } from './a2aTools';
@@ -168,7 +168,7 @@ export function buildWorkSteps(workItems) {
       steps.push({
         id: `step-${item.id}`,
         kind: 'plan',
-        title: 'Plan',
+        title: 'Todo',
         detail: typeof current?.content === 'string' ? current.content : '',
         status: 'success',
         durationMs: null,
@@ -218,8 +218,14 @@ export function todoProgress(todos) {
  * (`todos_update`) carries no call id; it is the output of the latest
  * write_todos call that has none yet, so it becomes that call's `plan`.
  * Other rows pass through unchanged.
+ *
+ * Text the agent wrote just before a call (its `commentary`) is Progena
+ * speaking, so it becomes its own `{ kind: 'tool_narration' }` row ahead of
+ * the call rather than part of the call's entry. Calls in
+ * `hiddenToolCallIds` (a `task` call whose subagent card is shown) render
+ * only that narration; the card stands in for the call itself.
  */
-export function mergeToolCallItems(items) {
+export function mergeToolCallItems(items, { hiddenToolCallIds } = {}) {
   const merged = [];
   const indexByKey = new Map();
   for (const item of Array.isArray(items) ? items : []) {
@@ -242,12 +248,27 @@ export function mergeToolCallItems(items) {
     const existing = indexByKey.get(key);
     if (existing === undefined) {
       indexByKey.set(key, merged.length);
-      merged.push({ kind: 'tool_call', id: `call-${key}`, start: null, end: null, plan: null, [slot]: item });
+      merged.push({ kind: 'tool_call', id: `call-${key}`, key, start: null, end: null, plan: null, [slot]: item });
     } else {
       merged[existing] = { ...merged[existing], [slot]: item };
     }
   }
-  return merged;
+  return merged.flatMap((entry) => {
+    if (entry.kind !== 'tool_call') return [entry];
+    const { key, ...call } = entry;
+    const commentary = entry.start?.event?.metadata?.commentary;
+    const narration = typeof commentary === 'string' && commentary.trim()
+      ? [{ kind: 'tool_narration', id: `narration-${key}`, text: commentary.trim() }]
+      : [];
+    return hiddenToolCallIds?.has(key) ? narration : [...narration, call];
+  });
+}
+
+/** Tool call ids whose `task` lifecycle a visible subagent card represents. */
+export function subagentCardToolCallIds(cardItems) {
+  return new Set((Array.isArray(cardItems) ? cardItems : [])
+    .filter((item) => item?.kind === 'subagent' && typeof item.toolCallId === 'string' && item.toolCallId)
+    .map((item) => item.toolCallId));
 }
 
 function toolCallName(entry) {
@@ -275,10 +296,10 @@ export function formatElapsed(ms) {
 }
 
 /**
- * Elapsed time and tool counts for one group. Elapsed runs from the group's
- * first timestamped item to `endedAt` (the next group's start, the answer's
- * start, or "now" while live), so model time after the last tool counts and
- * live and reloaded turns are measured the same way.
+ * Elapsed time and tool counts for one group. `endedAt` is an authoritative
+ * phase boundary: a tool result can arrive after the next reasoning section,
+ * but it still belongs to the group that started the call and must not extend
+ * that earlier phase's duration.
  */
 export function summarizeWork(workItems, steps, endedAt = null) {
   const toolSteps = steps.filter((step) => step.kind === 'tool');
@@ -286,80 +307,43 @@ export function summarizeWork(workItems, steps, endedAt = null) {
     .map(itemTimestamp)
     .filter((value) => value !== null);
   const end = itemTimestamp({ timestamp: endedAt });
-  if (end !== null) timestamps.push(end);
+  const start = timestamps.length > 0 ? Math.min(...timestamps) : end;
+  const finish = end ?? (timestamps.length > 0 ? Math.max(...timestamps) : null);
   return {
-    elapsedMs: timestamps.length > 1 ? Math.max(...timestamps) - Math.min(...timestamps) : 0,
+    elapsedMs: start !== null && finish !== null ? Math.max(0, finish - start) : 0,
     toolCount: toolSteps.length,
     failedCount: toolSteps.filter((step) => step.status === 'error').length,
     onlyReasoning: toolSteps.length === 0 && steps.length > 0 && steps.every((step) => step.kind === 'reasoning'),
   };
 }
 
-const TURN_RESPONSE_STATES = new Set(['running', 'completed', 'failed', 'cancelled', 'interrupted', 'unknown']);
-
-/** Normalize the persisted event-derived response state without inventing completion. */
-export function normalizeTurnResponseStatus(responseStatus) {
-  return TURN_RESPONSE_STATES.has(responseStatus) ? responseStatus : 'unknown';
-}
-
 /**
- * Summary for the one turn-level work disclosure. A group's tool lifecycle is
- * already self-contained, so flattening preserves the existing merge rules
- * while measuring the entire root response from its first event.
- */
-export function summarizeTurnWork(groups, workItems, endedAt = null) {
-  const items = Array.isArray(workItems) && workItems.length > 0
-    ? workItems
-    : (Array.isArray(groups) ? groups.flatMap((group) => group?.items || []) : []);
-  return summarizeWork(items, buildWorkSteps(items), endedAt);
-}
-
-/**
- * Turn status is explicit and event-derived. A failed tool may be retried in
- * an otherwise completed response, so it remains a count rather than changing
- * the completed response into a failure.
- */
-export function turnWorkHeader({ responseStatus, running, summary }) {
-  const status = normalizeTurnResponseStatus(responseStatus);
-  const elapsed = formatElapsed(summary.elapsedMs);
-  const tools = summary.toolCount > 0 ? `${summary.toolCount} tool${summary.toolCount === 1 ? '' : 's'}` : '';
-  const meta = [running || summary.elapsedMs >= 1000 ? elapsed : '', tools].filter(Boolean).join(' · ');
-  if (running || status === 'running') return { title: 'Working', meta, badge: 'Running' };
-  if (status === 'failed') return { title: 'Work failed', meta, badge: 'Failed' };
-  if (status === 'cancelled') return { title: 'Work cancelled', meta, badge: 'Cancelled' };
-  if (status === 'interrupted') return { title: 'Work interrupted', meta, badge: 'Interrupted' };
-  if (status === 'completed') {
-    return {
-      title: summary.elapsedMs >= 1000 ? `Worked for ${elapsed}` : 'Worked',
-      meta: tools,
-      badge: 'Completed',
-    };
-  }
-  return { title: 'Work', meta, badge: 'Unknown' };
-}
-
-/**
- * Header text for a group: its reasoning summary; null while live without
- * one (the header types a "-ing" word instead); else "Worked for 17s".
- * `meta` carries the counters that are not already in the title (seconds
- * tick live; tool count increments).
+ * Header text for a group. A reasoning title replaces the generic title
+ * verbatim. The initial non-reasoning group remains a stable Working line
+ * while active, then reports elapsed work once an end boundary is known.
  */
 export function workGroupHeader({ heading, active, summary }) {
   const elapsed = formatElapsed(summary.elapsedMs);
   const tools = summary.toolCount > 0 ? `${summary.toolCount} tool${summary.toolCount === 1 ? '' : 's'}` : '';
-  if (heading || active) {
+  if (heading) {
     const showElapsed = active || summary.elapsedMs >= 1000;
     return {
-      title: heading || null,
+      title: heading,
       meta: [showElapsed ? elapsed : '', tools].filter(Boolean).join(' · '),
     };
   }
-  const verb = summary.onlyReasoning ? 'Thought' : 'Worked';
+  if (active) {
+    return {
+      title: 'Working',
+      meta: [elapsed, tools].filter(Boolean).join(' · '),
+    };
+  }
   return {
-    title: summary.elapsedMs >= 1000 ? `${verb} for ${elapsed}` : verb,
+    title: summary.elapsedMs >= 1000 ? `Worked for ${elapsed}` : 'Worked',
     meta: tools,
   };
 }
+
 
 // A summary heading is a bold run on its own line. Providers may stream
 // summary parts back to back without a separator, so a heading may also
@@ -408,15 +392,24 @@ function reasoningSectionItem(item, section, index, sectionCount) {
 }
 
 /**
- * Split work items into groups, one per reasoning summary, each keeping the
- * work that followed it. Returns `{ id, heading, startedAt, items }[]`.
+ * Split work items into groups, one per reasoning section, each keeping the
+ * work that followed it. A lifecycle result stays with the group containing
+ * its `tool_start`, even when a later reasoning section arrives first.
+ * Returns `{ id, heading, startedAt, items }[]`.
  */
 export function buildWorkGroups(workItems) {
   const groups = [];
+  const groupByToolCall = new Map();
   let current = null;
   const open = (heading, item) => {
     current = { id: `group-${item.id}`, heading, startedAt: itemTimestamp(item), items: [] };
     groups.push(current);
+  };
+  const append = (group, item) => {
+    group.items.push(item);
+    const eventType = item?.event?.eventType;
+    const callId = toolCallKey(item);
+    if (eventType === 'tool_start' && callId) groupByToolCall.set(callId, group);
   };
 
   for (const item of Array.isArray(workItems) ? workItems : []) {
@@ -425,14 +418,21 @@ export function buildWorkGroups(workItems) {
       const sections = splitReasoningSections(event.content);
       sections.forEach((section, index) => {
         const sectionItem = reasoningSectionItem(item, section, index, sections.length);
-        // A headless preamble belongs to whatever group is already open.
-        if (section.heading || !current) open(section.heading, sectionItem);
-        current.items.push(sectionItem);
+        open(section.heading || 'Reasoning', sectionItem);
+        append(current, sectionItem);
       });
       continue;
     }
+
+    const eventType = event?.eventType;
+    const callId = toolCallKey(item);
+    const owner = callId && eventType !== 'tool_start' ? groupByToolCall.get(callId) : null;
+    if (owner) {
+      append(owner, item);
+      continue;
+    }
     if (!current) open(null, item);
-    current.items.push(item);
+    append(current, item);
   }
   return groups;
 }

@@ -3,31 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 import pytest
-from langchain.agents import create_agent
-from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langchain_core.tools import tool
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 
-from src.progena.agent.middleware.queue_steering import QueueSteeringMiddleware
 from src.progena.persistence.langgraph import _open_store
 from src.progena.persistence.store import LangGraphRuntimeStore
 from src.progena.runtime.chat_queue import ChatQueueStore, QueueActionError
-from src.progena.runtime.streaming.stream_events import normalize_custom_event
 
 pytestmark = pytest.mark.asyncio
-
-
-class _ToolFakeModel(GenericFakeChatModel):
-    """Generic fake model whose tool binding leaves scripted messages intact."""
-
-    def bind_tools(self, tools: Any, **kwargs: Any) -> _ToolFakeModel:
-        del tools, kwargs
-        return self
 
 
 def _queue() -> ChatQueueStore:
@@ -48,34 +32,7 @@ async def _enqueue(queue: ChatQueueStore, conversation_id: str, response_id: str
     return message_id
 
 
-async def test_queue_control_event_preserves_long_authoritative_metadata() -> None:
-    text = "queued prompt " * 400
-    attachments = [{"id": "attachment-1", "name": "source.pdf"}]
-    event = normalize_custom_event(
-        {
-            "event_type": "chat_queue_boundary",
-            "content": "",
-            "metadata": {
-                "message_id": "user_response",
-                "request_id": "response",
-                "text": text,
-                "attachments": attachments,
-            },
-        }
-    )
-    assert event == {
-        "event_type": "chat_queue_boundary",
-        "content": "",
-        "metadata": {
-            "message_id": "user_response",
-            "request_id": "response",
-            "text": text,
-            "attachments": attachments,
-        },
-    }
-
-
-async def test_claim_recovery_uses_checkpoint_message_ids() -> None:
+async def test_recovery_retains_checkpointed_claim_until_terminal_settlement() -> None:
     queue = _queue()
     message_id = await _enqueue(queue, "c1", "r1")
 
@@ -88,7 +45,12 @@ async def test_claim_recovery_uses_checkpoint_message_ids() -> None:
 
     claimed = await queue.claim_next("c1")
     assert claimed is not None and claimed.id == message_id
-    recovered = await queue.recover("c1", {message_id})
+    pending = await queue.recover("c1", {message_id})
+    assert pending["messages"][0]["status"] == "sending"
+    resumed = await queue.claim_recoverable("c1", {message_id})
+    assert resumed == claimed
+
+    recovered = await queue.recover("c1", {message_id}, terminal_message_ids={message_id})
     assert recovered["messages"] == []
 
 
@@ -109,17 +71,18 @@ async def test_actions_are_idempotent_revisioned_and_do_not_mutate_claims() -> N
     )
     assert [item["id"] for item in result["messages"]] == [first, second]
     assert result["messages"][1]["send_now"] is True
-    assert (
-        await queue.action(
-            "c1",
-            {
-                "action": "send_now",
-                "message_id": second,
-                "revision": initial["revision"],
-                "command_id": "cmd-1",
-            },
-        )
-    ) == result
+    repeated, applied = await queue.action(
+        "c1",
+        {
+            "action": "send_now",
+            "message_id": second,
+            "revision": initial["revision"],
+            "command_id": "cmd-1",
+        },
+        include_applied=True,
+    )
+    assert repeated == result
+    assert applied is False
 
     claimed = await queue.claim_next("c1")
     assert claimed is not None and claimed.send_now is True
@@ -135,6 +98,35 @@ async def test_actions_are_idempotent_revisioned_and_do_not_mutate_claims() -> N
             },
         )
     assert error.value.code == "queue_message_claimed"
+
+
+async def test_send_now_durably_cancels_the_sending_claim_without_resuming_it() -> None:
+    queue = _queue()
+    running = await _enqueue(queue, "c1", "running")
+    selected = await _enqueue(queue, "c1", "selected")
+    claimed = await queue.claim_next("c1")
+    assert claimed is not None and claimed.id == running
+
+    snapshot = await queue.snapshot("c1")
+    _updated, applied = await queue.action(
+        "c1",
+        {
+            "action": "send_now",
+            "message_id": selected,
+            "revision": snapshot["revision"],
+            "command_id": "send-selected-now",
+        },
+        include_applied=True,
+    )
+    assert applied is True
+    assert [claim.id for claim in await queue.cancel_requested_claims("c1")] == [running]
+    assert await queue.claim_recoverable("c1", {running}) is None
+
+    recovered = await queue.recover("c1", {running})
+    assert recovered["messages"][0]["status"] == "sending"
+    await queue.settle_claim("c1", running)
+    next_claim = await queue.claim_next("c1")
+    assert next_claim is not None and next_claim.id == selected and next_claim.send_now
 
 
 async def test_concurrent_enqueues_keep_each_input_once() -> None:
@@ -171,66 +163,16 @@ async def test_native_postgres_first_enqueues_do_not_replace_each_other(postgres
         await pool.close()
 
 
-async def test_fake_model_only_steers_selected_input_after_blocked_tool_results() -> None:
-    queue = _queue()
-    middleware = QueueSteeringMiddleware(queue)
-    tool_started = asyncio.Event()
-    release_tool = asyncio.Event()
-
-    @tool
-    async def wait_for_release() -> str:
-        """Wait until the test releases the tool result."""
-        tool_started.set()
-        await release_tool.wait()
-        return "done"
-
-    model = _ToolFakeModel(
-        messages=iter(
-            [
-                AIMessage(
-                    content="",
-                    tool_calls=[{"name": "wait_for_release", "args": {}, "id": "call-1"}],
-                ),
-                AIMessage(content="steered reply"),
-            ]
+async def test_native_postgres_concurrent_claims_reserve_one_message(postgres_url: str) -> None:
+    native_store, pool = await _open_store(postgres_url)
+    queue = ChatQueueStore(LangGraphRuntimeStore(native_store))
+    try:
+        message_id = await _enqueue(queue, "claim-race", "one")
+        first, second = await asyncio.gather(
+            queue.claim_next("claim-race"), queue.claim_next("claim-race")
         )
-    )
-    graph = create_agent(
-        model=model,
-        tools=[wait_for_release],
-        middleware=[middleware],
-        checkpointer=InMemorySaver(),
-    )
-    config = {"configurable": {"thread_id": "c1"}}
-    invoke = asyncio.create_task(
-        graph.ainvoke({"messages": [HumanMessage(id="msg-initial", content="initial")]}, config)
-    )
-    await tool_started.wait()
-    normal_id = await _enqueue(queue, "c1", "r-normal")
-    queued_id = await _enqueue(queue, "c1", "r-steer")
-    snapshot = await queue.snapshot("c1")
-    await queue.action(
-        "c1",
-        {
-            "action": "send_now",
-            "message_id": queued_id,
-            "revision": snapshot["revision"],
-            "command_id": "send-now",
-        },
-    )
-    release_tool.set()
-    result = await invoke
-
-    messages = result["messages"]
-    tool_index = next(
-        index for index, message in enumerate(messages) if isinstance(message, ToolMessage)
-    )
-    queued_index = next(index for index, message in enumerate(messages) if message.id == queued_id)
-    assert queued_index == tool_index + 1
-    assert isinstance(messages[queued_index], HumanMessage)
-    assert messages[queued_index].additional_kwargs["attachments"] == [{"id": "att-r-steer"}]
-    assert messages[queued_index].additional_kwargs["progena_queue_send_now"] is True
-
-    await queue.recover("c1", {message.id for message in messages if isinstance(message.id, str)})
-    remaining = await queue.snapshot("c1")
-    assert [item["id"] for item in remaining["messages"]] == [normal_id]
+        claims = [claim for claim in (first, second) if claim is not None]
+        assert [claim.id for claim in claims] == [message_id]
+        assert (await queue.snapshot("claim-race"))["messages"][0]["status"] == "sending"
+    finally:
+        await pool.close()

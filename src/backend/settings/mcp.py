@@ -33,9 +33,9 @@ def _write_mcp_config(state_reader: monitoring_state.StateReader, data: dict[str
 def _mcp_widget_items() -> list[schedules_models.WidgetResponse]:
     """The MCP-type widgets, used by the /mcp route and the mcp.snapshot event.
 
-    List payload strips per-tool schemas and log history (``data.tools``,
-    ``.logs``) — the list/filter/sort UI never reads them; only the selected
-    server's detail view does, fetched on demand via ``GET /mcp/content``.
+    List payload strips per-tool schemas (``data.tools``) — the list/filter/sort
+    UI never reads them; only the selected server's detail view does, fetched on
+    demand via ``GET /mcp/content``.
     """
     state_reader = monitoring_state.get_state_reader()
     items = []
@@ -43,15 +43,13 @@ def _mcp_widget_items() -> list[schedules_models.WidgetResponse]:
         if widget.get("type") != "mcp":
             continue
         response = schedules_service._widget_to_response(widget)
-        lean_data = {
-            key: value for key, value in response.data.items() if key not in ("tools", "logs")
-        }
-        items.append(response.model_copy(update={"data": lean_data, "logs": []}))
+        lean_data = {key: value for key, value in response.data.items() if key != "tools"}
+        items.append(response.model_copy(update={"data": lean_data}))
     return items
 
 
 def _broadcast_mcp_server_detail(widget_id: str, *, request_id: str | None = None) -> bool:
-    """Re-publish one MCP server's full detail (tools + logs) on the UI stream.
+    """Re-publish one MCP server's full detail (including tools) on the UI stream.
 
     Returns ``False`` (no broadcast) when ``widget_id`` no longer names a live
     MCP widget, so callers can 404 or silently skip as appropriate.
@@ -104,8 +102,8 @@ async def get_mcp_server_detail(
     """Acknowledge a request for one MCP server's full detail and publish it.
 
     Mirrors ``GET /workflows/content``/``GET /instructions/content``: the list
-    (``mcp.snapshot``) omits per-tool schemas and log history; the selected
-    server's full body (tools + logs) is fetched on demand here.
+    (``mcp.snapshot``) omits per-tool schemas; the selected server's full body
+    (including tools) is fetched on demand here.
     """
     request_id = http_requests.request_correlation_id(request, x_request_id)
     if not _broadcast_mcp_server_detail(id, request_id=request_id):

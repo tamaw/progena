@@ -8,12 +8,20 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const mocks = vi.hoisted(() => ({
   listener: null,
   requestAcknowledged: vi.fn(),
+  reportFailure: vi.fn(),
+  show: vi.fn(),
   nextId: 0,
   getApiUrl: (path) => path,
 }));
 
 vi.mock('@frontend/context/ConfigContext', () => ({
   useConfig: () => ({ getApiUrl: mocks.getApiUrl }),
+}));
+vi.mock('@frontend/context/NotificationContext', () => ({
+  useNotifications: () => ({ show: mocks.show }),
+}));
+vi.mock('@frontend/lib/failures', () => ({
+  reportFailure: mocks.reportFailure,
 }));
 vi.mock('@frontend/realtime/realtimeEvents', () => ({
   subscribeUiEvent: (listener) => {
@@ -52,6 +60,8 @@ beforeEach(async () => {
   mocks.listener = null;
   mocks.nextId = 0;
   mocks.requestAcknowledged.mockReset();
+  mocks.reportFailure.mockReset();
+  mocks.show.mockReset();
   mocks.requestAcknowledged.mockResolvedValue({ request_id: 'ack', event_types: [UI_EVENT.CHAT_QUEUE_UPDATED] });
   host = document.createElement('div');
   document.body.append(host);
@@ -93,6 +103,30 @@ describe('useChatQueue', () => {
         expect.objectContaining({ id: 'queued-1', status: 'queued' }),
         expect.objectContaining({ id: 'sending-1', status: 'sending' }),
       ]),
+    });
+  });
+
+  it('clears the rendered queue when claimed work settles in a newer canonical snapshot', async () => {
+    await publish({
+      conversation_id: 'thread-1',
+      revision: 1,
+      messages: [{ id: 'queued-1', text: 'Wait', attachments: [], status: 'queued' }],
+    });
+    await publish({
+      conversation_id: 'thread-1',
+      revision: 2,
+      messages: [{ id: 'queued-1', text: 'Wait', attachments: [], status: 'sending' }],
+    });
+    await publish({
+      conversation_id: 'thread-1',
+      revision: 3,
+      messages: [],
+    });
+
+    expect(queueRef.current.snapshot).toEqual({
+      conversationId: 'thread-1',
+      revision: 3,
+      messages: [],
     });
   });
 

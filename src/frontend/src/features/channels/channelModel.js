@@ -1,17 +1,19 @@
 /** Credential sources stored in channel documents (wire values). */
 export const CREDENTIAL_SOURCE = Object.freeze({ ENVIRONMENT: 'environment', DATABASE: 'database' });
 
+// Backend ChannelState values (src/backend/channels/base.py) -> shared status
+// tone, used by both the list dot and the header status.
 const STATUS_DETAILS = {
-  connected: { label: 'Connected', tone: 'ok', dotClass: 'running' },
-  connecting: { label: 'Connecting', tone: 'warning', dotClass: 'running' },
-  disconnected: { label: 'Disconnected', tone: 'muted', dotClass: 'stopped' },
-  error: { label: 'Error', tone: 'error', dotClass: 'failed' },
-  disabled: { label: 'Disabled', tone: 'muted', dotClass: 'stopped' },
-  unconfigured: { label: 'Needs configuration', tone: 'warning', dotClass: 'stopped' },
-  unsupported: { label: 'Unsupported', tone: 'warning', dotClass: 'stopped' },
+  connected: { label: 'Connected', tone: 'idle' },
+  connecting: { label: 'Connecting', tone: 'ok' },
+  disconnected: { label: 'Disconnected', tone: 'warning' },
+  error: { label: 'Error', tone: 'error' },
+  disabled: { label: 'Disabled', tone: 'muted' },
+  unconfigured: { label: 'Needs configuration', tone: 'warning' },
+  unsupported: { label: 'Unsupported', tone: 'warning' },
 };
 
-const DEFAULT_STATUS = { label: 'Unknown', tone: 'muted', dotClass: 'stopped' };
+const DEFAULT_STATUS = { label: 'Unknown', tone: 'warning' };
 
 export function statusPresentation(status) {
   return STATUS_DETAILS[status] || DEFAULT_STATUS;

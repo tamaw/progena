@@ -3,7 +3,7 @@ import styles from './InterruptedMarker.module.css';
 const INTERRUPTION_BODIES = {
   runtime_restart: 'The runtime restarted during this turn. The last step may have partly run. Type continue to carry on.',
   user_cancelled: 'Cancelled by you.',
-  new_message: 'Continued with your new message.',
+  stopped_early: 'This turn stopped before it finished. The last step may have partly run.',
 };
 
 export default function InterruptedMarker({ reason = 'runtime_restart' }) {

@@ -8,7 +8,6 @@ from .async_subagent_tracking import AsyncSubagentTrackingMiddleware
 from .context_compaction import ContextCompactionMiddleware
 from .dynamic_mcp import DynamicMCPToolMiddleware
 from .live_instruction import LiveInstructionMiddleware
-from .queue_steering import QueueSteeringMiddleware
 from .schema_compaction import SchemaCompactionMiddleware
 from .secret_redaction import SecretRedactionMiddleware
 from .summarization import ProgenaSummarizationMiddleware, install_progena_summarizer_profile
@@ -26,7 +25,6 @@ __all__ = [
     "emit_stream_event",
     "LiveInstructionMiddleware",
     "SchemaCompactionMiddleware",
-    "QueueSteeringMiddleware",
     "SecretRedactionMiddleware",
     "ProgenaSummarizationMiddleware",
     "install_progena_summarizer_profile",

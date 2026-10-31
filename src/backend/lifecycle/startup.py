@@ -13,6 +13,7 @@ import src.backend.alerts.relay as alerts_relay
 import src.backend.alerts.routes as alerts_routes
 import src.backend.attachments.store as attachments_store
 import src.backend.channels.manager as channels_manager
+import src.backend.chat.responses as chat_responses
 import src.backend.events.contracts as events_contracts
 import src.backend.events.documents as events_documents
 import src.backend.events.routes as events_routes
@@ -178,6 +179,7 @@ async def lifespan(app: FastAPI):
             or None
         )
         request_id = data.get("request_id")
+        chat_responses.handle_runtime_queue_lifecycle(event_type, data)
         events_stream.broadcast_ui_event(
             event_type,
             data,
@@ -201,10 +203,18 @@ async def lifespan(app: FastAPI):
         lifecycle_state.config, event_callback=combined_event_callback
     )
 
+    # Rehydrate relays only after the runtime client is connected. Runtime
+    # broadcasts are live-only, while its durable queue retains claimed work.
+    async def start_runtime_and_recover_queue(
+        client: integrations_runtime.SSEProgenaClient,
+    ) -> None:
+        await integrations_runtime.start_sse_client_with_retry(client)
+        await chat_responses.recover_runtime_queued_executions()
+
     # Register client shutdown callback
     if lifecycle_state.client:
         sse_event_forwarding_task = asyncio.create_task(
-            integrations_runtime.start_sse_client_with_retry(lifecycle_state.client)
+            start_runtime_and_recover_queue(lifecycle_state.client)
         )
 
         async def stop_sse_event_forwarding_task() -> None:

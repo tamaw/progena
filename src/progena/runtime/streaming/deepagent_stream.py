@@ -184,8 +184,7 @@ class DeepAgentSSEStream:
         source: str | None = None,
         message_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-        queue_request_id: str | None = None,
-        queue_send_now: bool = False,
+        resume: bool = False,
     ) -> AsyncGenerator[dict[str, Any]]:
         """Yield SSE stream items from ``graph.astream``."""
 
@@ -196,32 +195,30 @@ class DeepAgentSSEStream:
         self._output_tokens_by_message_id.clear()
         self._emitted_context_usage_by_message_id.clear()
         self._turn_interrupted = False
-
-        additional_kwargs: dict[str, Any] = {
-            "created_at": received_at if received_at is not None else time.time()
-        }
-        if attachments:
-            additional_kwargs["attachments"] = attachments
-        if metadata:
-            additional_kwargs["metadata"] = metadata
-        if source is not None:
-            additional_kwargs["source"] = source
-        if queue_request_id is not None:
-            additional_kwargs["progena_queue_request_id"] = queue_request_id
-            additional_kwargs["progena_queue_send_now"] = queue_send_now
-        message_kwargs: dict[str, Any] = {
-            "content": message,
-            "additional_kwargs": additional_kwargs,
-        }
-        if message_id is not None:
-            message_kwargs["id"] = message_id
-        human_message = HumanMessage(**message_kwargs)
-        graph_input: dict[str, Any] = {"messages": [human_message]}
         self._summary_thread_id = thread_id
         summary_observer = SummarizationCallbackObserver(self._summary_scope_for_callback)
         self._trace_begin(thread_id=thread_id)
-        self.state["current_input"] = message
-        self.state["cycle_count"] = int(self.state.get("cycle_count") or 0) + 1
+
+        graph_input: dict[str, Any] | None = None
+        if not resume:
+            additional_kwargs: dict[str, Any] = {
+                "created_at": received_at if received_at is not None else time.time()
+            }
+            if attachments:
+                additional_kwargs["attachments"] = attachments
+            if metadata:
+                additional_kwargs["metadata"] = metadata
+            if source is not None:
+                additional_kwargs["source"] = source
+            message_kwargs: dict[str, Any] = {
+                "content": message,
+                "additional_kwargs": additional_kwargs,
+            }
+            if message_id is not None:
+                message_kwargs["id"] = message_id
+            graph_input = {"messages": [HumanMessage(**message_kwargs)]}
+            self.state["current_input"] = message
+            self.state["cycle_count"] = int(self.state.get("cycle_count") or 0) + 1
         configurable: dict[str, Any] = {"thread_id": thread_id}
         if source is not None:
             configurable["progena_source"] = source
@@ -404,13 +401,6 @@ class DeepAgentSSEStream:
         envelope = normalize_custom_event(event)
         if envelope is None:
             return []
-        if envelope["event_type"] == "chat_queue_boundary":
-            # A selected queued prompt starts a second root answer within the
-            # same graph invocation. Its final state must not be compared to
-            # the prior answer's streamed prefix.
-            self._response_was_streamed = False
-            self._streamed_response_content = ""
-            self.last_response = None
         item: dict[str, Any] = {
             "type": "stream_event",
             "event_type": envelope["event_type"],

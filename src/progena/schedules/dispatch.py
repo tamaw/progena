@@ -20,6 +20,20 @@ logger = logging.getLogger(__name__)
 SCHEDULED_INPUT_PREFIX = "[Scheduled Task]\n"
 
 
+async def conversation_block_reason(state_manager: Any, conversation_id: str) -> str | None:
+    """Why a schedule may not run in ``conversation_id`` right now, or ``None``.
+
+    A deleted chat is never recreated and an archived chat is not woken: both
+    stop scheduled turns. The chat's ``session:`` document is the source of truth.
+    """
+    session = await state_manager.get_session(conversation_id)
+    if session is None:
+        return "conversation was deleted"
+    if session.get("archived"):
+        return "conversation is archived"
+    return None
+
+
 def _schedule_entries_to_dicts(entries: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         entry.model_dump() if hasattr(entry, "model_dump") else entry for entry in entries.values()
@@ -54,6 +68,22 @@ async def enqueue_due_schedule_entries(
         if not message:
             continue
         user_request = str(entry.get("user_request") or "").strip()
+        conversation_id = str(entry.get("conversation_id") or "").strip() or None
+        if conversation_id:
+            block_reason = await conversation_block_reason(state_manager, conversation_id)
+            if block_reason:
+                await state_manager.update_schedule_entry(
+                    schedule_id,
+                    {"paused": True, "enabled": False, "updated_at": now.isoformat()},
+                )
+                await state_manager.log_schedule_event(
+                    {
+                        "message": f"Schedule {schedule_id} paused: {block_reason}",
+                        "schedule_id": schedule_id,
+                        "event": "schedule_blocked",
+                    }
+                )
+                continue
 
         if user_request:
             full_message = f"<original_message>{user_request}</original_message>\n\n{message}"
@@ -61,7 +91,7 @@ async def enqueue_due_schedule_entries(
             full_message = message
 
         run_id = generate_schedule_run_id()
-        thread_id = generate_schedule_thread_id(schedule_id)
+        thread_id = conversation_id or generate_schedule_thread_id(schedule_id)
         queued = await queues.enqueue_input(
             f"{SCHEDULED_INPUT_PREFIX}{full_message}",
             timeout=0.5,
@@ -69,6 +99,8 @@ async def enqueue_due_schedule_entries(
                 "thread_id": thread_id,
                 "schedule_id": schedule_id,
                 "schedule_run_id": run_id,
+                "conversation_id": conversation_id,
+                "source": "schedule",
             },
         )
         if not queued:
@@ -79,6 +111,7 @@ async def enqueue_due_schedule_entries(
                 run_id=run_id,
                 schedule_id=schedule_id,
                 thread_id=thread_id,
+                conversation_id=conversation_id,
                 message=message,
                 user_request=user_request or None,
                 status=ScheduleRunStatus.QUEUED,
@@ -155,6 +188,12 @@ async def emit_scheduled_completion(
     scheduled_schedule_id = str(state.get("scheduled_schedule_id") or "").strip() or None
     scheduled_run_id = str(state.get("scheduled_run_id") or "").strip() or None
     scheduled_message = str(state.get("scheduled_message") or "").strip() or None
+    input_metadata = state.get("current_input_metadata")
+    conversation_id = (
+        str(input_metadata.get("conversation_id") or "").strip() or None
+        if isinstance(input_metadata, dict)
+        else None
+    )
     if not is_scheduled_input:
         return {
             "is_scheduled_input": False,
@@ -197,6 +236,9 @@ async def emit_scheduled_completion(
             "schedule_run_id": scheduled_run_id,
             "schedule_message": scheduled_message,
             "status": result_status,
+            # Scopes the event to the destination chat; standalone runs stay unscoped.
+            "thread_id": conversation_id,
+            "conversation_id": conversation_id,
         },
     )
     await queues.push_event(

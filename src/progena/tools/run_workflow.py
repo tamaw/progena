@@ -14,6 +14,7 @@ from src.progena.runs.paths import run_file_path
 from src.progena.sessions.context import get_current_thread_id
 from src.progena.workflows.constants import MAX_WORKFLOW_INVOKE_DEPTH
 from src.progena.workflows.documents import new_workflow_run_id
+from src.progena.workflows.schema_values import apply_schema_defaults
 
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
@@ -59,13 +60,15 @@ class RunWorkflowTool(BaseSystemTool):
         return RunWorkflowArgs
 
     @staticmethod
-    def _manual_payload_error(definition: Any, payload: dict[str, Any]) -> str | None:
-        """Validate input immediately when the persisted graph has a manual trigger."""
+    def _resolve_manual_payload(
+        definition: Any, payload: dict[str, Any]
+    ) -> tuple[dict[str, Any], str | None]:
+        """Apply manual-trigger defaults and validate input before enqueuing."""
 
         graph = definition.get("graph") if isinstance(definition, dict) else None
         nodes = graph.get("nodes") if isinstance(graph, dict) else None
         if not isinstance(nodes, dict):
-            return None
+            return payload, None
         manual = next(
             (
                 node
@@ -75,13 +78,14 @@ class RunWorkflowTool(BaseSystemTool):
             None,
         )
         if not isinstance(manual, dict):
-            return None
+            return payload, None
         schema = manual.get("output_schema")
         if not isinstance(schema, dict):
-            return "manual trigger is missing its payload schema"
-        if error := validate_against_schema(payload, schema):
-            return f"manual trigger payload failed schema validation: {error}"
-        return None
+            return payload, "manual trigger is missing its payload schema"
+        resolved_payload = apply_schema_defaults(payload, schema)
+        if error := validate_against_schema(resolved_payload, schema):
+            return resolved_payload, f"manual trigger payload failed schema validation: {error}"
+        return resolved_payload, None
 
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state_manager is None:
@@ -101,7 +105,8 @@ class RunWorkflowTool(BaseSystemTool):
             )
         if not definition.get("enabled", True) or definition.get("paused", False):
             return ToolResult.fail(f"Workflow '{workflow_id}' is disabled or paused.")
-        if error := self._manual_payload_error(definition, input_payload):
+        input_payload, error = self._resolve_manual_payload(definition, input_payload)
+        if error:
             return ToolResult.fail(f"Workflow '{workflow_id}' {error}.")
 
         ancestry = await self._resolve_ancestry(context)

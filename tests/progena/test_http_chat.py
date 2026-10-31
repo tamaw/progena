@@ -14,7 +14,7 @@ import pytest
 from aiohttp import web
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -67,6 +67,9 @@ class ScriptedBridge:
         self.state = state
         self._script = script
         self.thread_id: str | None = None
+        self.resume = False
+        self.message_id: str | None = None
+        self.attachments: list[dict[str, Any]] | None = None
 
     async def stream(
         self,
@@ -78,8 +81,12 @@ class ScriptedBridge:
         source: str | None = None,
         message_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        resume: bool = False,
     ):
         self.thread_id = thread_id
+        self.resume = resume
+        self.message_id = message_id
+        self.attachments = attachments
         items = self._script(message) if callable(self._script) else self._script
         for item in items:
             if isinstance(item, _Wait):
@@ -106,6 +113,7 @@ class FakeStateManager:
     def __init__(self) -> None:
         self.saved_checkpoints: list[dict[str, Any]] = []
         self._current_state: dict[str, Any] = {}
+        self._runtime_store = LangGraphRuntimeStore(InMemoryStore())
 
     async def get_current_state(self, thread_id: str | None = None) -> dict[str, Any]:
         return dict(self._current_state)
@@ -245,6 +253,39 @@ async def _post_responses(
     return frames
 
 
+async def _follow_response_stream(
+    client: httpx.AsyncClient, base_url: str, response_id: str, *, cursor: int | None = None
+) -> list[tuple[str, dict[str, Any]]]:
+    url = f"{base_url}/v1/responses/{response_id}/stream"
+    if cursor is not None:
+        url = f"{url}?cursor={cursor}"
+    frames: list[tuple[str, dict[str, Any]]] = []
+    async with client.stream("GET", url) as response:
+        assert response.status_code == 200
+        event_name: str | None = None
+        async for line in response.aiter_lines():
+            if line == "" or line.startswith(":") or line.startswith("id: "):
+                continue
+            if line.startswith("event: "):
+                event_name = line[len("event: ") :]
+                continue
+            if line.startswith("data: "):
+                assert event_name is not None
+                data = json.loads(line[len("data: ") :])
+                frames.append((event_name, data))
+                if event_name in ("response.completed", "response.failed", "response.incomplete"):
+                    break
+    return frames
+
+
+async def _next_runtime_event(queues: RuntimeQueues, event_type: str) -> dict[str, Any]:
+    while True:
+        event = await queues.get_event(timeout=1.0)
+        assert event is not None
+        if event["event_type"] == event_type:
+            return event
+
+
 def _client() -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=None))
 
@@ -329,7 +370,6 @@ async def test_responses_503_when_graph_missing_astream() -> None:
 
 async def test_responses_serializes_requests_and_emits_queued() -> None:
     loop_runner = FakeLoopRunner()
-    loop_runner.graph.chat_queue = ChatQueueStore(LangGraphRuntimeStore(InMemoryStore()))
     gate = asyncio.Event()
     script = {
         "first": [_Wait(gate), {"type": "stream_chunk", "content": "first-done", "is_final": True}],
@@ -339,6 +379,8 @@ async def test_responses_serializes_requests_and_emits_queued() -> None:
         loop_runner, bridge_factory=make_bridge_factory(lambda msg: script[msg])
     )
     task_a = task_b = None
+    queued_content: list[tuple[str, dict[str, Any]]] = []
+    replayed: list[tuple[str, dict[str, Any]]] = []
     try:
         async with _client() as client:
             task_a = asyncio.create_task(
@@ -358,6 +400,8 @@ async def test_responses_serializes_requests_and_emits_queued() -> None:
             gate.set()
             frames_a = await asyncio.wait_for(task_a, timeout=5.0)
             frames_b = await asyncio.wait_for(task_b, timeout=5.0)
+            queued_content = await _follow_response_stream(client, server.base_url, "resp-b")
+            replayed = await _follow_response_stream(client, server.base_url, "resp-b", cursor=0)
     finally:
         gate.set()
         for task in (task_a, task_b):
@@ -370,6 +414,322 @@ async def test_responses_serializes_requests_and_emits_queued() -> None:
     assert frames_b[1][0] == "response.queued"
     assert frames_b[2][0] == "response.completed"
     assert frames_b[-1][0] == "response.completed"
+    assert any(
+        event == "response.output_text.delta" and payload["delta"] == "second-done"
+        for event, payload in queued_content
+    )
+    assert queued_content[-1][0] == "response.completed"
+    assert replayed[0][0] == "response.in_progress"
+
+
+async def test_deferred_response_stop_cancels_its_active_execution() -> None:
+    loop_runner = FakeLoopRunner()
+    release_first = asyncio.Event()
+    release_second = asyncio.Event()
+    script = {
+        "first": [
+            _Wait(release_first),
+            {"type": "stream_chunk", "content": "first", "is_final": True},
+        ],
+        "second": [
+            _Wait(release_second),
+            {"type": "stream_chunk", "content": "second", "is_final": True},
+        ],
+    }
+    server = await _start_chat_server(
+        loop_runner, bridge_factory=make_bridge_factory(lambda message: script[message])
+    )
+    first_task = second_task = None
+    try:
+        async with _client() as client:
+            first_task = asyncio.create_task(
+                _post_responses(client, server.base_url, "first", "response-a")
+            )
+            await asyncio.sleep(0.05)
+            second_task = asyncio.create_task(
+                _post_responses(client, server.base_url, "second", "response-b")
+            )
+            await _next_runtime_event(loop_runner.queues, "chat_queue_updated")
+            release_first.set()
+            await asyncio.wait_for(first_task, timeout=5.0)
+            await asyncio.wait_for(second_task, timeout=5.0)
+            started = await _next_runtime_event(loop_runner.queues, "chat_queue_execution_started")
+            assert started["metadata"]["request_id"] == "response-b"
+
+            stopped = await client.post(f"{server.base_url}/v1/responses/response-b/cancel")
+            assert stopped.status_code == 200
+            release_second.set()
+            frames = await _follow_response_stream(client, server.base_url, "response-b")
+            assert frames[-1][0] == "response.incomplete"
+            terminal = await _next_runtime_event(
+                loop_runner.queues, "chat_queue_execution_cancelled"
+            )
+            assert terminal["metadata"]["request_id"] == "response-b"
+    finally:
+        release_first.set()
+        release_second.set()
+        for task in (first_task, second_task):
+            if task is not None and not task.done():
+                task.cancel()
+        await _stop_chat_server(server)
+
+
+async def test_send_now_cancels_captured_root_and_repeated_command_keeps_new_turn() -> None:
+    loop_runner = FakeLoopRunner()
+    release_first = asyncio.Event()
+    release_selected = asyncio.Event()
+    script = {
+        "first": [
+            _Wait(release_first),
+            {"type": "stream_chunk", "content": "first", "is_final": True},
+        ],
+        "normal": [{"type": "stream_chunk", "content": "normal", "is_final": True}],
+        "selected": [
+            _Wait(release_selected),
+            {"type": "stream_chunk", "content": "selected", "is_final": True},
+        ],
+    }
+    server = await _start_chat_server(
+        loop_runner, bridge_factory=make_bridge_factory(lambda message: script[message])
+    )
+    first_task = normal_task = selected_task = None
+    try:
+        async with _client() as client:
+            first_task = asyncio.create_task(
+                _post_responses(client, server.base_url, "first", "response-a")
+            )
+            await asyncio.sleep(0.05)
+            normal_task = asyncio.create_task(
+                _post_responses(client, server.base_url, "normal", "response-b")
+            )
+            selected_task = asyncio.create_task(
+                _post_responses(client, server.base_url, "selected", "response-c")
+            )
+            await _next_runtime_event(loop_runner.queues, "chat_queue_updated")
+            await _next_runtime_event(loop_runner.queues, "chat_queue_updated")
+            queue = await client.get(
+                f"{server.base_url}/v1/conversations/{TEST_CONVERSATION}/queue"
+            )
+            snapshot = queue.json()
+            selected_id = next(
+                item["id"] for item in snapshot["messages"] if item["request_id"] == "response-c"
+            )
+            command = {
+                "action": "send_now",
+                "message_id": selected_id,
+                "revision": snapshot["revision"],
+                "command_id": "select-c",
+            }
+            selected = await client.post(
+                f"{server.base_url}/v1/conversations/{TEST_CONVERSATION}/queue/actions",
+                json=command,
+            )
+            assert selected.status_code == 200
+            assert (await asyncio.wait_for(first_task, timeout=5.0))[-1][0] == "response.incomplete"
+            await asyncio.wait_for(normal_task, timeout=5.0)
+            await asyncio.wait_for(selected_task, timeout=5.0)
+            started = await _next_runtime_event(loop_runner.queues, "chat_queue_execution_started")
+            assert started["metadata"]["request_id"] == "response-c"
+
+            repeated = await client.post(
+                f"{server.base_url}/v1/conversations/{TEST_CONVERSATION}/queue/actions",
+                json=command,
+            )
+            assert repeated.status_code == 200
+            release_selected.set()
+            selected_frames = await _follow_response_stream(client, server.base_url, "response-c")
+            assert selected_frames[-1][0] == "response.completed"
+            next_started = await _next_runtime_event(
+                loop_runner.queues, "chat_queue_execution_started"
+            )
+            assert next_started["metadata"]["request_id"] == "response-b"
+    finally:
+        release_first.set()
+        release_selected.set()
+        for task in (first_task, normal_task, selected_task):
+            if task is not None and not task.done():
+                task.cancel()
+        await _stop_chat_server(server)
+
+
+async def test_startup_recovers_claims_before_human_and_resumes_native_pending_graph() -> None:
+    class RecoveryGraph:
+        def __init__(self, messages: list[Any], next_nodes: tuple[str, ...]) -> None:
+            self.messages = messages
+            self.next_nodes = next_nodes
+
+        async def aget_state(self, config: dict[str, Any]) -> Any:
+            del config
+            return SimpleNamespace(values={"messages": self.messages}, next=self.next_nodes)
+
+    async def run_case(
+        messages: list[Any], next_nodes: tuple[str, ...], expected_resume: bool | None
+    ) -> None:
+        loop_runner = FakeLoopRunner()
+        queue = ChatQueueStore(loop_runner.heartbeat_context.state_manager._runtime_store)
+        _snapshot, message_id = await queue.enqueue(
+            "restart-thread",
+            text="durable input",
+            attachments=[{"url": "https://example.test/file"}],
+            metadata={},
+            source="test",
+            received_at=1.0,
+            response_id="restart-response",
+            model="test",
+        )
+        claimed = await queue.claim_next("restart-thread")
+        assert claimed is not None and claimed.id == message_id
+        loop_runner.graph = RecoveryGraph(messages, next_nodes)
+        bridges: list[ScriptedBridge] = []
+
+        def factory(graph: Any, *, config: Any, state: dict[str, Any]) -> ScriptedBridge:
+            bridge = ScriptedBridge(
+                graph,
+                config=config,
+                state=state,
+                script=[{"type": "stream_chunk", "content": "done", "is_final": True}],
+            )
+            bridges.append(bridge)
+            return bridge
+
+        service = RuntimeChatService(loop_runner, bridge_factory=factory)
+        events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        service._subscribers.add(events)
+
+        async def next_event(event_type: str) -> dict[str, Any]:
+            while True:
+                event = await asyncio.wait_for(events.get(), timeout=1.0)
+                if event["event_type"] == event_type:
+                    return event
+
+        await service.start()
+        try:
+            if expected_resume is None:
+                await asyncio.sleep(0)
+                assert bridges == []
+            else:
+                started = await next_event("chat_queue_execution_started")
+                assert started["metadata"]["message_id"] == message_id
+                await next_event("chat_queue_execution_completed")
+                assert len(bridges) == 1
+                assert bridges[0].resume is expected_resume
+                assert bridges[0].attachments == [{"url": "https://example.test/file"}]
+                assert bridges[0].message_id == message_id
+            assert (await queue.snapshot("restart-thread"))["messages"] == []
+        finally:
+            service._subscribers.discard(events)
+            await service.stop()
+
+    await run_case([], (), False)
+    await run_case(
+        [HumanMessage(id="user_restart-response", content="durable input")],
+        ("model",),
+        True,
+    )
+    await run_case(
+        [
+            HumanMessage(id="user_restart-response", content="durable input"),
+            AIMessage(id="assistant_restart", content="done"),
+        ],
+        (),
+        None,
+    )
+
+
+async def test_restart_settles_send_now_cancelled_claim_before_running_selected_turn() -> None:
+    class RestartGraph:
+        def __init__(self) -> None:
+            self.messages: list[Any] = [HumanMessage(id="user_running", content="running")]
+            self.next_nodes = ("model",)
+            self.cancelled_updates = 0
+
+        async def aget_state(self, config: dict[str, Any]) -> Any:
+            del config
+            return SimpleNamespace(values={"messages": self.messages}, next=self.next_nodes)
+
+        async def aupdate_state(
+            self, config: dict[str, Any], updates: dict[str, Any], *, as_node: str
+        ) -> None:
+            del config, as_node
+            self.messages.extend(updates["messages"])
+            self.next_nodes = ()
+            self.cancelled_updates += 1
+
+    loop_runner = FakeLoopRunner()
+    queue = ChatQueueStore(loop_runner.heartbeat_context.state_manager._runtime_store)
+    _snapshot, running_id = await queue.enqueue(
+        "restart-send-now",
+        text="running",
+        attachments=[],
+        metadata={},
+        source="test",
+        received_at=1.0,
+        response_id="running",
+        model="test",
+    )
+    _snapshot, selected_id = await queue.enqueue(
+        "restart-send-now",
+        text="selected",
+        attachments=[],
+        metadata={},
+        source="test",
+        received_at=2.0,
+        response_id="selected",
+        model="test",
+    )
+    claimed = await queue.claim_next("restart-send-now")
+    assert claimed is not None and claimed.id == running_id
+    snapshot = await queue.snapshot("restart-send-now")
+    _updated, applied = await queue.action(
+        "restart-send-now",
+        {
+            "action": "send_now",
+            "message_id": selected_id,
+            "revision": snapshot["revision"],
+            "command_id": "send-selected-now",
+        },
+        include_applied=True,
+    )
+    assert applied is True
+
+    graph = RestartGraph()
+    loop_runner.graph = graph
+    bridges: list[ScriptedBridge] = []
+
+    def factory(graph: Any, *, config: Any, state: dict[str, Any]) -> ScriptedBridge:
+        bridge = ScriptedBridge(
+            graph,
+            config=config,
+            state=state,
+            script=[{"type": "stream_chunk", "content": "selected", "is_final": True}],
+        )
+        bridges.append(bridge)
+        return bridge
+
+    service = RuntimeChatService(loop_runner, bridge_factory=factory)
+    events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    service._subscribers.add(events)
+
+    async def next_event(event_type: str) -> dict[str, Any]:
+        while True:
+            event = await asyncio.wait_for(events.get(), timeout=1.0)
+            if event["event_type"] == event_type:
+                return event
+
+    await service.start()
+    try:
+        cancelled = await next_event("chat_queue_execution_cancelled")
+        assert cancelled["metadata"]["request_id"] == "running"
+        assert cancelled["metadata"]["response"]["status"] == "cancelled"
+        started = await next_event("chat_queue_execution_started")
+        assert started["metadata"]["request_id"] == "selected"
+        await next_event("chat_queue_execution_completed")
+        assert graph.cancelled_updates == 1
+        assert [bridge.message_id for bridge in bridges] == [selected_id]
+        assert (await queue.snapshot("restart-send-now"))["messages"] == []
+    finally:
+        service._subscribers.discard(events)
+        await service.stop()
 
 
 async def test_responses_cancel_mid_stream_skips_checkpoint() -> None:
@@ -597,38 +957,6 @@ async def test_responses_bridge_error_emits_failed_and_releases_lock() -> None:
 
             frames_ok = await _post_responses(client, server.base_url, "ok", "resp-ok")
             assert frames_ok[-1][0] == "response.completed"
-    finally:
-        await _stop_chat_server(server)
-
-
-async def test_claimed_stream_checkpoint_failure_emits_queue_terminal(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    loop_runner = FakeLoopRunner()
-    script = [
-        {
-            "type": "stream_event",
-            "event_type": "chat_queue_claimed",
-            "content": "",
-            "metadata": {"request_id": "queued-response", "message_id": "user_queued-response"},
-        },
-        {"type": "stream_chunk", "content": "answer", "is_final": True},
-    ]
-    server = await _start_chat_server(loop_runner, bridge_factory=make_bridge_factory(script))
-
-    async def fail_checkpoint(*args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("checkpoint unavailable")
-
-    monkeypatch.setattr(server.service, "_complete_direct_graph_cycle", fail_checkpoint)
-    try:
-        async with _client() as client:
-            frames = await _post_responses(client, server.base_url, "root", "resp-root")
-        assert frames[-1][0] == "response.failed"
-        await loop_runner.queues.get_event(timeout=1.0)
-        terminal = await loop_runner.queues.get_event(timeout=1.0)
-        assert terminal is not None
-        assert terminal["event_type"] == "chat_queue_execution_failed"
-        assert terminal["metadata"]["request_id"] == "queued-response"
     finally:
         await _stop_chat_server(server)
 
@@ -1140,173 +1468,3 @@ async def test_http_turn_and_heartbeat_turn_share_compiled_graph_checkpoint_gate
     finally:
         release_http.set()
         await _stop_chat_server(server)
-
-
-async def test_chat_node_settles_only_its_new_native_queue_claim(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    queue = ChatQueueStore(LangGraphRuntimeStore(InMemoryStore()))
-    _snapshot, queued_id = await queue.enqueue(
-        "heartbeat-queue",
-        text="selected",
-        attachments=[],
-        metadata={},
-        source=None,
-        received_at=1.0,
-        response_id="queued-request",
-        model="test",
-    )
-    await queue.action(
-        "heartbeat-queue",
-        {
-            "action": "send_now",
-            "message_id": queued_id,
-            "revision": 1,
-            "command_id": "select",
-        },
-    )
-    claimed = await queue.claim_next("heartbeat-queue", immediate_only=True)
-    assert claimed is not None
-
-    class ClaimGraph:
-        def __init__(self) -> None:
-            self.chat_queue = queue
-            self.messages: list[BaseMessage] = []
-
-        async def aget_state(self, config: dict[str, Any]) -> Any:
-            del config
-            return SimpleNamespace(values={"messages": self.messages})
-
-        async def ainvoke(self, state: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-            del config
-            self.messages = [
-                *state["messages"],
-                HumanMessage(
-                    id=claimed.id,
-                    content=claimed.text,
-                    additional_kwargs={"progena_queue_request_id": claimed.response_id},
-                ),
-                AIMessage(content="done"),
-            ]
-            return {"messages": self.messages}
-
-    graph = ClaimGraph()
-    loop_runner = FakeLoopRunner()
-    loop_runner.heartbeat_context.agent_graph = graph
-    loop_runner.heartbeat_context.llm_client = None
-    loop_runner.heartbeat_context.queues = loop_runner.queues
-    runtime = Runtime(context=loop_runner.heartbeat_context)
-
-    async def create_turn(*args: Any, **kwargs: Any) -> Any:
-        del args, kwargs
-        return SimpleNamespace()
-
-    monkeypatch.setattr(provider_runtime.ProviderTurn, "create", create_turn)
-    original_discard = queue.discard_claim
-    settlement_started = asyncio.Event()
-    release_settlement = asyncio.Event()
-
-    async def blocked_discard(conversation_id: str, message_id: str) -> dict[str, Any]:
-        settlement_started.set()
-        await release_settlement.wait()
-        return await original_discard(conversation_id, message_id)
-
-    monkeypatch.setattr(queue, "discard_claim", blocked_discard)
-    active = asyncio.create_task(
-        chat_node({"current_input": "heartbeat", "thread_id": "heartbeat-queue"}, runtime)
-    )
-    await settlement_started.wait()
-    waiter_entered = asyncio.Event()
-
-    async def waiter() -> None:
-        waiter_entered.set()
-
-    waiting = asyncio.create_task(runtime.context.conversation_gate.run("heartbeat-queue", waiter))
-    await asyncio.sleep(0)
-    assert not waiter_entered.is_set()
-    release_settlement.set()
-    await asyncio.gather(active, waiting)
-    completed = await loop_runner.queues.get_event(timeout=1.0)
-    assert completed is not None
-    assert completed["event_type"] == "chat_queue_execution_completed"
-    assert completed["metadata"]["request_id"] == "queued-request"
-    assert (await queue.snapshot("heartbeat-queue"))["messages"] == []
-
-    await chat_node({"current_input": "second", "thread_id": "heartbeat-queue"}, runtime)
-    assert await loop_runner.queues.get_event(timeout=0.01) is None
-
-
-async def test_chat_node_failed_claim_settles_only_that_claim(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    queue = ChatQueueStore(LangGraphRuntimeStore(InMemoryStore()))
-    _snapshot, claimed_id = await queue.enqueue(
-        "failed-heartbeat",
-        text="claimed",
-        attachments=[],
-        metadata={},
-        source=None,
-        received_at=1.0,
-        response_id="failed-request",
-        model="test",
-    )
-    _snapshot, retained_id = await queue.enqueue(
-        "failed-heartbeat",
-        text="retained",
-        attachments=[],
-        metadata={},
-        source=None,
-        received_at=2.0,
-        response_id="retained-request",
-        model="test",
-    )
-    claimed = await queue.claim_next("failed-heartbeat")
-    assert claimed is not None and claimed.id == claimed_id
-
-    class FailingGraph:
-        chat_queue = queue
-
-        def __init__(self) -> None:
-            self.reads = 0
-
-        async def aget_state(self, config: dict[str, Any]) -> Any:
-            del config
-            self.reads += 1
-            messages = (
-                []
-                if self.reads == 1
-                else [
-                    HumanMessage(
-                        id=claimed.id,
-                        content=claimed.text,
-                        additional_kwargs={"progena_queue_request_id": claimed.response_id},
-                    )
-                ]
-            )
-            return SimpleNamespace(values={"messages": messages})
-
-        async def ainvoke(self, state: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-            del state, config
-            raise RuntimeError("model failed after checkpoint")
-
-    loop_runner = FakeLoopRunner()
-    loop_runner.heartbeat_context.agent_graph = FailingGraph()
-    loop_runner.heartbeat_context.llm_client = None
-    loop_runner.heartbeat_context.queues = loop_runner.queues
-
-    async def create_turn(*args: Any, **kwargs: Any) -> Any:
-        del args, kwargs
-        return SimpleNamespace()
-
-    monkeypatch.setattr(provider_runtime.ProviderTurn, "create", create_turn)
-    with pytest.raises(RuntimeError, match="model failed"):
-        await chat_node(
-            {"current_input": "heartbeat", "thread_id": "failed-heartbeat"},
-            Runtime(context=loop_runner.heartbeat_context),
-        )
-    failed = await loop_runner.queues.get_event(timeout=1.0)
-    assert failed is not None
-    assert failed["event_type"] == "chat_queue_execution_failed"
-    assert [item["id"] for item in (await queue.snapshot("failed-heartbeat"))["messages"]] == [
-        retained_id
-    ]

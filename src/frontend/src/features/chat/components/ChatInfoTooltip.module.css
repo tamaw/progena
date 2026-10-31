@@ -1,5 +1,5 @@
 .control {
-  cursor: inherit;
+  cursor: default;
 }
 
 .control:focus-visible {
@@ -10,11 +10,13 @@
 
 .tooltip:global(.chat-info-tooltip) {
   position: fixed;
-  top: 8px;
+  top: 0;
   bottom: auto;
-  left: 8px;
+  left: 0;
   right: auto;
   max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   opacity: 1;
   transform: none;
   font-size: 11px;

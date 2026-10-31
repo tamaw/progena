@@ -7,6 +7,23 @@ from collections.abc import Mapping
 from typing import Any
 
 
+def apply_schema_defaults(value: Mapping[str, Any], schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy a JSON object payload and fill declared property defaults recursively."""
+
+    result = copy.deepcopy(dict(value))
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return result
+    for name, property_schema in properties.items():
+        if not isinstance(property_schema, Mapping):
+            continue
+        if name not in result and "default" in property_schema:
+            result[name] = copy.deepcopy(property_schema["default"])
+        elif isinstance(result.get(name), Mapping):
+            result[name] = apply_schema_defaults(result[name], property_schema)
+    return result
+
+
 def schema_at_path(ports: Mapping[str, Any], path: str) -> dict[str, Any] | None:
     """Resolve a dotted path against port schemas' nested ``properties``.
 

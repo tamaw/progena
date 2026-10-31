@@ -1448,6 +1448,16 @@ class StateReader:
             if tool.enabled and isinstance(outcome, dict) and outcome.get("status") == "error":
                 status = "error"
                 status_message = str(outcome.get("error") or "Discovery failed")
+            elif (
+                tool.enabled
+                and outcome is None
+                and tool.transport == "http"
+                and health.is_running()
+            ):
+                # The runtime replaces the outcome map on every discovery, so a
+                # live runtime with no entry has not discovered this server's
+                # tools yet (newly added or re-enabled).
+                status = "discovering"
             summary = status_message or tool.description or f"MCP {tool.name}"
             widgets.append(
                 {
@@ -1509,6 +1519,7 @@ class StateReader:
                     "last_run_at": schedule_item.raw.get("last_run"),
                     "last_run_status": schedule_item.raw.get("last_run_status", "idle"),
                     "timezone": schedule_item.raw.get("timezone", "UTC"),
+                    "conversation_id": schedule_item.raw.get("conversation_id") or None,
                     "updated_at": schedule_item.raw.get("updated_at")
                     or schedule_item.raw.get("created_at"),
                 }

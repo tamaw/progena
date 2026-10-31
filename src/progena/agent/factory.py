@@ -38,7 +38,6 @@ from src.progena.agent.middleware import (
     DynamicMCPToolMiddleware,
     LiveInstructionMiddleware,
     ProgenaSummarizationMiddleware,
-    QueueSteeringMiddleware,
     SchemaCompactionMiddleware,
     SecretRedactionMiddleware,
     ToolErrorMiddleware,
@@ -78,7 +77,6 @@ from src.progena.routines.subagent import (
     resolve_routine_document,
     resume_routine_thread,
 )
-from src.progena.runtime.chat_queue import ChatQueueStore
 from src.progena.threads import parse_routine_thread_id, routine_default_session_id
 
 logger = logging.getLogger(__name__)
@@ -340,10 +338,6 @@ async def create_progena_agent(
         live_state_provider=live_state_provider,
         late_bindings=late_bindings,
     )
-    runtime_store = getattr(state_manager, "_runtime_store", None)
-    if runtime_store is None:
-        raise ValueError("create_progena_agent requires StateManager runtime persistence")
-    chat_queue = ChatQueueStore(runtime_store)
 
     custom_middleware = [
         # The backend applies MOUNT_ACCESS to `delete`: single files on
@@ -613,11 +607,6 @@ async def create_progena_agent(
         )
     )
 
-    custom_middleware.append(live_async)
-    # Claims pending chat input only after every compaction/rewrite and at a
-    # native assistant boundary that has no unresolved tool calls.
-    custom_middleware.append(QueueSteeringMiddleware(chat_queue))
-
     # Innermost of ours: sees the final message list just before the model,
     # after summarization and every other request rewrite.
     custom_middleware.append(ToolResultPairingMiddleware())
@@ -657,7 +646,6 @@ async def create_progena_agent(
 
     agent.object_agent_registry = live_objects  # type: ignore[attr-defined]
     agent.routine_subagent_registry = live_routines  # type: ignore[attr-defined]
-    agent.chat_queue = chat_queue  # type: ignore[attr-defined]
 
     async def _thread_state(thread_id: str) -> Any:
         return await agent.aget_state({"configurable": {"thread_id": thread_id}})

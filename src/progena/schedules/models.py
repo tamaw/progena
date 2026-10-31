@@ -45,6 +45,9 @@ class ScheduleEntry(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
     user_request: str | None = None
     paused: bool = False
+    # Destination chat. ``None`` is an explicit standalone schedule whose runs
+    # each get their own checkpoint thread.
+    conversation_id: str | None = None
 
 
 class ScheduleRunStatus(StrEnum):
@@ -64,6 +67,7 @@ class ScheduleRunRecord(BaseModel):
     run_id: str
     schedule_id: str
     thread_id: str
+    conversation_id: str | None = None
     message: str
     user_request: str | None = None
     status: ScheduleRunStatus = ScheduleRunStatus.QUEUED

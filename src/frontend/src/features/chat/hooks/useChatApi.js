@@ -47,7 +47,6 @@ function deriveConnectionState(pendingStreams, emptyState = 'disconnected') {
   return 'connecting';
 }
 
-const FRONTEND_RESPONSE_OPTIONS_KEY = '__frontendResponse';
 const RESPONSE_TERMINAL_DRAIN_MS = 50;
 const RESPONSE_HEARTBEAT_STALE_MS = 45000;
 const RESPONSE_WATCHDOG_POLL_MS = 15000;
@@ -91,24 +90,6 @@ function hasSeenResponseFrameId(pending, frameId) {
   return Boolean(frameId) && pending.receivedFrameIds.includes(frameId);
 }
 
-function splitResponseMetadata(metadata) {
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
-    return { backendMetadata: metadata, allowDesyncedCompletion: false };
-  }
-
-  const frontendOptions = metadata[FRONTEND_RESPONSE_OPTIONS_KEY];
-  const allowDesyncedCompletion = Boolean(frontendOptions?.allowDesyncedCompletion);
-
-  if (!Object.prototype.hasOwnProperty.call(metadata, FRONTEND_RESPONSE_OPTIONS_KEY)) {
-    return { backendMetadata: metadata, allowDesyncedCompletion };
-  }
-
-  const { [FRONTEND_RESPONSE_OPTIONS_KEY]: _frontendOptions, ...backendMetadata } = metadata;
-  return {
-    backendMetadata: Object.keys(backendMetadata).length > 0 ? backendMetadata : null,
-    allowDesyncedCompletion,
-  };
-}
 
 function buildDesyncCompletionError(reason) {
   if (reason === 'cursor_expired') {
@@ -157,7 +138,7 @@ export function useChatApi() {
         : 'Response generation failed';
       pending.onError?.(new Error(message));
       setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
-    } else if (terminalType === UI_EVENT.CHAT_RESPONSE_COMPLETED && pending.desynced && !pending.allowDesyncedCompletion) {
+    } else if (terminalType === UI_EVENT.CHAT_RESPONSE_COMPLETED && pending.desynced) {
       pending.onError?.(buildDesyncCompletionError(pending.desyncReason));
       setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
     } else {
@@ -386,11 +367,11 @@ export function useChatApi() {
   useEffect(() => subscribeUiEvent(consumeStreamEvent), [consumeStreamEvent]);
 
   const sendMessageStream = useCallback(
-    async (message, history = [], onChunk, onComplete, onError, onStreamEvent, metadata = null, foreground = true) => {
+    async (message, history = [], onChunk, onComplete, onError, onStreamEvent, metadata = null) => {
       const requestId = createUuid();
       const input = buildResponsesInput(history, message);
       const url = getApiUrl('responses');
-      const { backendMetadata, allowDesyncedCompletion } = splitResponseMetadata(metadata);
+      const backendMetadata = metadata;
 
       let resolveTerminal;
       const terminal = new Promise((resolve) => {
@@ -417,7 +398,6 @@ export function useChatApi() {
         openedOnce: false,
         desynced: false,
         desyncReason: null,
-        allowDesyncedCompletion,
         terminalEvent: null,
         finalized: false,
         receivedFrameIds: [],
@@ -426,10 +406,8 @@ export function useChatApi() {
       // Register before dispatch: the backend can broadcast `started` before
       // the 202 acknowledgement reaches the browser.
       pendingStreamsRef.current.set(requestId, pending);
-      if (foreground) {
-        activeStreamRequestIdRef.current = requestId;
-        activeAcknowledgementRef.current = { requestId, controller: acknowledgementController };
-      }
+      activeStreamRequestIdRef.current = requestId;
+      activeAcknowledgementRef.current = { requestId, controller: acknowledgementController };
       setConnectionState(deriveConnectionState(pendingStreamsRef.current));
 
       const body = { model: config.chat.defaultModel, input, stream: true };
@@ -444,7 +422,7 @@ export function useChatApi() {
           requestId,
           signal: acknowledgementController.signal,
         });
-        if (foreground && activeAcknowledgementRef.current?.requestId === requestId) {
+        if (activeAcknowledgementRef.current?.requestId === requestId) {
           activeAcknowledgementRef.current = null;
         }
         if (pendingStreamsRef.current.get(requestId) === pending && !pending.cancelRequested && !pending.terminalEvent) {
@@ -453,7 +431,7 @@ export function useChatApi() {
           openResponseStream(requestId, pending, url);
         }
       } catch (error) {
-        if (foreground && activeAcknowledgementRef.current?.requestId === requestId) {
+        if (activeAcknowledgementRef.current?.requestId === requestId) {
           activeAcknowledgementRef.current = null;
         }
         const currentPending = pendingStreamsRef.current.get(requestId);
@@ -477,103 +455,46 @@ export function useChatApi() {
     [config.chat.defaultModel, getApiUrl, openResponseStream],
   );
 
-  // Attach to a response stream this hook instance did not dispatch itself —
-  // e.g. a generation another surface (quick chat, the Chat page, another
-  // browser tab) started into a thread this component is currently viewing.
-  // Unlike sendMessageStream's pending-stream machinery, this never POSTs and
-  // never owns cancel/acknowledgement lifecycle; the caller is expected to
-  // decide when the generation is over (via the thread's Redux
-  // generatingChatIds) and call the returned cleanup function itself. No
-  // `after` cursor is sent, so the backend replays its full retained frame
-  // buffer from the start — this is what makes "join in progress" work.
-  const observeResponseStream = useCallback((requestId, { onChunk, onStreamEvent } = {}) => {
-    const responsesUrl = getApiUrl('responses');
-    let source = null;
-    let reconnectTimer = null;
-    let connectAttempts = 0;
-    let stopped = false;
-    const receivedFrameIds = [];
+  const queueMessage = useCallback(async (message, history = [], metadata = null, requestId = createUuid()) => {
+    const body = { model: config.chat.defaultModel, input: buildResponsesInput(history, message), stream: true };
+    if (metadata && typeof metadata === 'object') body.metadata = metadata;
+    return requestAcknowledged(getApiUrl('responses'), { method: 'POST', body, requestId });
+  }, [config.chat.defaultModel, getApiUrl]);
 
-    const rememberFrameId = (frameId) => {
-      if (!frameId) return;
-      receivedFrameIds.push(frameId);
-      if (receivedFrameIds.length > MAX_RECEIVED_RESPONSE_FRAME_IDS) {
-        receivedFrameIds.shift();
-      }
+  // Follow an already-dispatched response using the same pending transport as
+  // a foreground send. This registers canonical terminal events before opening
+  // SSE, preserving EOF/cursor draining without issuing another POST.
+  const observeResponseStream = useCallback((requestId, {
+    onChunk,
+    onComplete,
+    onError,
+    onStreamEvent,
+  } = {}) => {
+    const existing = pendingStreamsRef.current.get(requestId);
+    if (existing) return () => {};
+    let resolveTerminal;
+    const terminal = new Promise((resolve) => { resolveTerminal = resolve; });
+    const pending = {
+      onChunk, onComplete, onError, onStreamEvent, resolve: resolveTerminal, terminal,
+      cancelRequested: false, acknowledged: true, streamObserved: false, eventSource: null,
+      reconnectTimer: null, watchdogTimer: null, terminalTimer: null, lastEventAt: null,
+      lastEventId: null, connectAttempts: 0, openedOnce: false, desynced: false,
+      desyncReason: null, terminalEvent: null, finalized: false, receivedFrameIds: [],
     };
-    const hasSeenFrameId = (frameId) => Boolean(frameId) && receivedFrameIds.includes(frameId);
-
-    const cleanup = () => {
-      source?.close();
-      source = null;
-      if (reconnectTimer !== null) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-    };
-
-    const connect = () => {
-      if (stopped) return;
-      cleanup();
-
-      const streamUrl = responseStreamUrl(responsesUrl, requestId);
-      const nextSource = new EventSource(streamUrl);
-      source = nextSource;
-
-      const handleContentFrame = (responseType, messageEvent) => {
-        if (source !== nextSource) return;
-        let payload;
-        try {
-          payload = JSON.parse(messageEvent.data);
-        } catch {
-          return;
-        }
-        const frameId = messageEvent.lastEventId;
-        if (hasSeenFrameId(frameId)) return;
-        rememberFrameId(frameId);
-        connectAttempts = 0;
-
-        if (responseType === CHAT_CONTENT_EVENT.DELTA) {
-          const delta = typeof payload.delta === 'string' ? payload.delta : '';
-          if (delta) {
-            onChunk?.(delta);
-          }
-        } else {
-          onStreamEvent?.(payload);
-        }
-      };
-
-      nextSource.addEventListener(CHAT_CONTENT_EVENT.DELTA, (event) => {
-        handleContentFrame(CHAT_CONTENT_EVENT.DELTA, event);
-      });
-      nextSource.addEventListener(CHAT_CONTENT_EVENT.EVENT, (event) => {
-        handleContentFrame(CHAT_CONTENT_EVENT.EVENT, event);
-      });
-      nextSource.onerror = () => {
-        if (source !== nextSource || stopped) return;
-        cleanup();
-        connectAttempts += 1;
-        if (connectAttempts >= RESPONSE_CONNECT_FAILURE_LIMIT) {
-          return;
-        }
-        reconnectTimer = setTimeout(() => {
-          reconnectTimer = null;
-          connect();
-        }, RESPONSE_RECONNECT_DELAY_MS);
-      };
-    };
-
-    connect();
+    pendingStreamsRef.current.set(requestId, pending);
     activeStreamRequestIdRef.current = requestId;
-
+    setConnectionState(deriveConnectionState(pendingStreamsRef.current));
+    openResponseStream(requestId, pending, getApiUrl('responses'));
     return () => {
-      stopped = true;
-      cleanup();
-      if (activeStreamRequestIdRef.current === requestId) {
-        activeStreamRequestIdRef.current = null;
-      }
+      if (pendingStreamsRef.current.get(requestId) !== pending) return;
+      cleanupPendingTransport(pending);
+      pending.finalized = true;
+      pendingStreamsRef.current.delete(requestId);
+      if (activeStreamRequestIdRef.current === requestId) activeStreamRequestIdRef.current = null;
+      setConnectionState(deriveConnectionState(pendingStreamsRef.current));
+      resolveTerminal();
     };
-  }, [getApiUrl]);
+  }, [getApiUrl, openResponseStream]);
 
   const cancelStream = useCallback(async () => {
     const requestId = activeStreamRequestIdRef.current;
@@ -604,5 +525,5 @@ export function useChatApi() {
     await pending?.terminal;
   }, [getApiUrl]);
 
-  return { connectionState, sendMessageStream, cancelStream, observeResponseStream };
+  return { connectionState, sendMessageStream, queueMessage, cancelStream, observeResponseStream };
 }

@@ -27,6 +27,7 @@ from src.progena.a2a.payloads import (
     _MAX_PROGRESS_MESSAGE_TEXT_LENGTH as _REPLAYED_PROGRESS_MESSAGE_TEXT_LIMIT,
 )
 from src.progena.documents.kinds import SESSION_KEY_PREFIX
+from src.progena.schedules.dispatch import SCHEDULED_INPUT_PREFIX
 from src.progena.security.redaction import redact_secrets
 from src.progena.sessions.messages import (
     extract_cache_read_token_count,
@@ -150,7 +151,7 @@ class ConversationUsageTotals(BaseModel):
     reasoning_token_message_count: int = 0
 
 
-InterruptionReason = Literal["user_cancelled", "new_message"]
+InterruptionReason = Literal["user_cancelled"]
 
 
 class ChatMessage(BaseModel):
@@ -175,6 +176,8 @@ class ChatMessage(BaseModel):
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     context_usage: ContextUsage | None = None
+    # Set on the input turn a schedule injected into this chat; survives reload.
+    scheduled: dict[str, str | None] | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
     interruption_reason: InterruptionReason | None = None
 
@@ -520,6 +523,22 @@ def _display_metadata_from_raw(raw: Any) -> dict[str, Any]:
     return extract_display_metadata(raw)
 
 
+def _scheduled_from_raw(raw: Any) -> dict[str, str | None] | None:
+    """Schedule provenance stamped onto a HumanMessage's kwargs, if any."""
+    additional = (
+        raw.get("additional_kwargs")
+        if isinstance(raw, dict)
+        else getattr(raw, "additional_kwargs", None)
+    )
+    scheduled = additional.get("scheduled") if isinstance(additional, dict) else None
+    if not isinstance(scheduled, dict):
+        return None
+    return {
+        "schedule_id": scheduled.get("schedule_id"),
+        "run_id": scheduled.get("run_id"),
+    }
+
+
 def _attachments_from_raw(raw: Any) -> list[dict[str, Any]]:
     """Extract the ``attachments`` list stamped onto a HumanMessage's kwargs."""
     additional = (
@@ -534,68 +553,6 @@ def _attachments_from_raw(raw: Any) -> list[dict[str, Any]]:
         [item for item in attachments if isinstance(item, dict)]
         if isinstance(attachments, list)
         else []
-    )
-
-
-def _queue_request_id(raw: Any) -> str | None:
-    additional = (
-        raw.get("additional_kwargs")
-        if isinstance(raw, dict)
-        else getattr(raw, "additional_kwargs", None)
-    )
-    request_id = (
-        additional.get("progena_queue_request_id") if isinstance(additional, dict) else None
-    )
-    return request_id if isinstance(request_id, str) and request_id else None
-
-
-def _is_send_now_queue_input(raw: Any) -> bool:
-    """Whether a native queued HumanMessage crossed an explicit Send now boundary."""
-    additional = (
-        raw.get("additional_kwargs")
-        if isinstance(raw, dict)
-        else getattr(raw, "additional_kwargs", None)
-    )
-    return (
-        _queue_request_id(raw) is not None
-        and isinstance(additional, dict)
-        and additional.get("progena_queue_send_now") is True
-    )
-
-
-def _interruption_marker_id(message: ChatMessage, raw: Any) -> str:
-    request_id = _queue_request_id(raw)
-    if request_id is not None:
-        return f"msg_{request_id}"
-    if message.id.startswith("user_") and message.id.removeprefix("user_"):
-        return f"msg_{message.id.removeprefix('user_')}"
-    return f"{message.id}_interruption"
-
-
-def _mark_previous_turn_as_continued(
-    messages: list[ChatMessage], previous_user_raw: Any | None
-) -> None:
-    """Project Send now immediately before its selected HumanMessage."""
-    previous_user_index = next(
-        (index for index in range(len(messages) - 1, -1, -1) if messages[index].role == "user"),
-        None,
-    )
-    if previous_user_index is None:
-        return
-    for message in reversed(messages[previous_user_index + 1 :]):
-        if message.role == "assistant":
-            if message.interruption_reason is None:
-                message.interruption_reason = "new_message"
-            return
-    previous_user = messages[previous_user_index]
-    messages.append(
-        ChatMessage(
-            id=_interruption_marker_id(previous_user, previous_user_raw),
-            role="assistant",
-            content="",
-            created_at=previous_user.created_at,
-            interruption_reason="new_message",
-        )
     )
 
 
@@ -634,16 +591,6 @@ def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:
     return result
 
 
-CANCELLED_SUFFIX = " [Cancelled]"
-
-
-def _without_cancelled_sentinel(content: str) -> str:
-    """Drop only the exact suffix emitted by the retired history projection."""
-    if content == CANCELLED_SUFFIX.strip():
-        return ""
-    return content.removesuffix(CANCELLED_SUFFIX)
-
-
 def _chat_message_from_raw(
     raw: Any,
     index: int,
@@ -658,12 +605,14 @@ def _chat_message_from_raw(
     if role == "tool":
         return None
     content = _raw_message_content(raw)
+    scheduled = _scheduled_from_raw(raw)
+    if scheduled and content.startswith(SCHEDULED_INPUT_PREFIX):
+        content = content[len(SCHEDULED_INPUT_PREFIX) :]
     response_status: ResponseStatus = (
         _answer_response_status(raw) if role == "assistant" else "unknown"
     )
     interruption_reason: InterruptionReason | None = None
     if role == "assistant" and response_status == "cancelled":
-        content = _without_cancelled_sentinel(content)
         interruption_reason = "user_cancelled"
     reasoning_text = extract_reasoning_trace(raw) or ""
     if not content and role == "assistant":
@@ -703,6 +652,7 @@ def _chat_message_from_raw(
         display_tool_calls=display_metadata.get("display_tool_calls", []),
         tool_calls=tool_calls or [],
         attachments=_attachments_from_raw(raw),
+        scheduled=scheduled,
         raw=_raw_message_payload(raw),
     )
 
@@ -819,7 +769,6 @@ def _messages_from_checkpoint(
     pending_reasoning_parts: list[ReasoningSegment] = []
     pending_reasoning_timestamp: str | None = None
     pending_context_usage: ContextUsage | None = None
-    previous_user_raw: Any | None = None
 
     for index, raw in enumerate(snapshot.messages):
         role = _raw_message_role(raw)
@@ -841,8 +790,6 @@ def _messages_from_checkpoint(
                 synthetic.context_usage = pending_context_usage
                 messages.append(synthetic)
                 pending_tool_calls = []
-            if _is_send_now_queue_input(raw):
-                _mark_previous_turn_as_continued(messages, previous_user_raw)
             pending_token_count = 0
             pending_terminal_status = None
             pending_reasoning_parts = []
@@ -923,8 +870,6 @@ def _messages_from_checkpoint(
                 pending_context_usage = None
             if role in ("assistant", "user"):
                 pending_tool_calls = []
-            if role == "user":
-                previous_user_raw = raw
             messages.append(message)
 
     if pending_tool_calls or pending_reasoning_parts:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 from langgraph.runtime import Runtime
 
 from src.progena.llm.provider_context import ProviderTurn, activate_provider_turn
@@ -29,6 +29,11 @@ async def chat_node(
     additional_kwargs: dict[str, Any] = {"created_at": time.time()}
     if isinstance(input_metadata, dict) and isinstance(input_metadata.get("attachments"), list):
         additional_kwargs["attachments"] = input_metadata["attachments"]
+    if isinstance(input_metadata, dict) and input_metadata.get("source") == "schedule":
+        additional_kwargs["scheduled"] = {
+            "schedule_id": input_metadata.get("schedule_id"),
+            "run_id": input_metadata.get("schedule_run_id"),
+        }
     # DeepAgent returns the updated conversation state for this turn. Snapshot
     # the selected DB provider before graph execution so a Settings save cannot
     # mix models or credentials into a running heartbeat turn.
@@ -41,25 +46,10 @@ async def chat_node(
             "configurable": {"thread_id": thread_id},
             "metadata": {"runtime_instance": RUNTIME_INSTANCE_ID},
         }
-        before_state = await runtime.context.agent_graph.aget_state(config)
-        before_ids = {
-            message.id
-            for message in before_state.values.get("messages", [])
-            if isinstance(message, BaseMessage) and isinstance(message.id, str)
-        }
-        try:
-            with activate_provider_turn(turn):
-                result = await runtime.context.agent_graph.ainvoke(
-                    {"messages": [human_message]}, config=config
-                )
-        except Exception:
-            current_state = await runtime.context.agent_graph.aget_state(config)
-            await _settle_queue_claims(
-                runtime, thread_id, current_state.values, before_ids, status="failed"
+        with activate_provider_turn(turn):
+            result = await runtime.context.agent_graph.ainvoke(
+                {"messages": [human_message]}, config=config
             )
-            raise
-        if isinstance(result, dict):
-            await _settle_queue_claims(runtime, thread_id, result, before_ids, status="completed")
         return result
 
     gate = getattr(runtime.context, "conversation_gate", None)
@@ -68,46 +58,3 @@ async def chat_node(
         runtime.context.conversation_gate = gate
     result = await gate.run(thread_id, invoke)
     return result if isinstance(result, dict) else {"messages": []}
-
-
-async def _settle_queue_claims(
-    runtime: Runtime[HeartbeatContext],
-    thread_id: str,
-    result: dict[str, Any],
-    before_ids: set[str],
-    *,
-    status: str,
-) -> None:
-    """Settle only native queue claims created by this gated invocation."""
-    queue = getattr(runtime.context.agent_graph, "chat_queue", None)
-    if queue is None:
-        return
-    messages = result.get("messages")
-    if not isinstance(messages, list):
-        return
-    claims = [
-        (message.id, message.additional_kwargs.get("progena_queue_request_id"))
-        for message in messages
-        if isinstance(message, BaseMessage)
-        and isinstance(message.id, str)
-        and message.id not in before_ids
-        and isinstance(message.additional_kwargs.get("progena_queue_request_id"), str)
-    ]
-    for message_id, request_id in claims:
-        await queue.discard_claim(thread_id, message_id)
-        await runtime.context.queues.push_event(
-            f"chat_queue_execution_{status}",
-            "",
-            {
-                "conversation_id": thread_id,
-                "request_id": request_id,
-                "content_request_id": request_id,
-                "message_id": message_id,
-                "response": {
-                    "id": request_id,
-                    "object": "response",
-                    "status": status,
-                    "output": [],
-                },
-            },
-        )

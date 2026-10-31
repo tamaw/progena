@@ -2188,21 +2188,7 @@ describe('finalizeLiveAssistantTurn', () => {
       });
 
       expect(result).toMatchObject({ content: 'Partial', interruptionReason: 'user_cancelled', isStreaming: false });
-    });
 
-    it('retains an empty safe-boundary turn without creating a response placeholder', () => {
-      const result = finalizeLiveAssistantTurn(baseTurn(), {
-        status: 'completed',
-        now: NOW,
-        interruptionReason: 'new_message',
-      });
-
-      expect(result).toMatchObject({
-        content: '',
-        interruptionReason: 'new_message',
-        responseStatus: 'completed',
-        timelineItems: [],
-      });
     });
   });
 

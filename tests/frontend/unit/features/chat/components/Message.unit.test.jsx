@@ -13,10 +13,6 @@ let root;
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
-  vi.stubGlobal('ResizeObserver', class {
-    observe() {}
-    disconnect() {}
-  });
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -75,101 +71,115 @@ async function renderMessage(value, props = {}) {
 }
 
 describe('interruption markers', () => {
-  it('renders the safe-boundary marker after partial content as the terminal row', async () => {
+  it('renders the cancellation marker after partial content', async () => {
     await renderMessage(message([answer('Partial', 1)], {
-      interruptionReason: 'new_message',
+      responseStatus: 'cancelled',
+      interruptionReason: 'user_cancelled',
     }));
 
     expect(host.textContent).toContain('Partial');
-    expect(host.textContent).toContain('Continued with your new message.');
+    expect(host.textContent).toContain('Cancelled by you.');
     expect(host.querySelector('.message-wrapper.assistant')?.classList.contains('entry--chain-item')).toBe(true);
     expect(host.querySelector('article[aria-label="Interrupted"]')?.classList.contains('entry--chain-end')).toBe(true);
   });
-});
 
-function assistantWork() {
-  const section = host.querySelector('section[aria-label="Assistant work"]');
-  expect(section).not.toBeNull();
-  return section;
-}
-
-async function openOuterWork(section) {
-  const toggle = section.querySelector('button[aria-expanded="false"]');
-  expect(toggle).not.toBeNull();
-  await act(async () => toggle.click());
-  expect(toggle.getAttribute('aria-expanded')).toBe('true');
-}
-
-async function openAllInnerGroups(section) {
-  const toggles = [...section.querySelectorAll('.work-group__toggle')];
-  await act(async () => toggles.forEach((toggle) => toggle.click()));
-  return toggles;
-}
-
-describe('assistant turn work disclosure', () => {
-  it('keeps 38 reasoning sections behind one collapsed assistant-work disclosure', async () => {
-    const timelineItems = Array.from({ length: 38 }, (_, index) => ({
-      kind: 'stream_event',
-      id: `reasoning-${index + 1}`,
-      timestamp: (index + 1) * 1_000,
-      event: {
-        id: `reasoning-${index + 1}`,
-        eventType: 'reasoning_delta',
-        timestamp: (index + 1) * 1_000,
-        content: `**Reasoning ${index + 1}**\n\nStep ${index + 1}.`,
-        metadata: {},
-      },
+  it('renders an empty cancelled turn as only its interruption marker', async () => {
+    await renderMessage(message([], {
+      responseStatus: 'cancelled',
+      interruptionReason: 'user_cancelled',
     }));
 
-    await renderMessage(message(timelineItems));
-
-    const section = assistantWork();
-    expect(section.querySelector('button[aria-expanded="false"]')).not.toBeNull();
-    expect(section.querySelectorAll('.work-group__toggle')).toHaveLength(0);
-    expect(section.textContent).not.toContain('Reasoning 38');
+    expect(host.textContent).toContain('Interrupted');
+    expect(host.textContent).toContain('Cancelled by you.');
+    expect(host.querySelector('.message-wrapper.assistant')).toBeNull();
   });
 
-  it('opens every reasoning section and its associated tool exactly once', async () => {
-    const timelineItems = Array.from({ length: 38 }, (_, index) => {
-      const number = index + 1;
-      const timestamp = number * 2_000;
-      return [
-        {
-          kind: 'stream_event',
-          id: `reasoning-${number}`,
-          timestamp,
-          event: {
-            id: `reasoning-${number}`,
-            eventType: 'reasoning_delta',
-            timestamp,
-            content: `**Reasoning ${number}**\n\nStep ${number}.`,
-            metadata: {},
-          },
+  it('keeps a persisted interrupted turn before the next user message and completed answer', async () => {
+    await act(async () => root.render(
+      <>
+        <Message message={message([], { responseStatus: 'interrupted' })} />
+        <Message message={{ id: 'next-user', role: 'user', content: 'Please retry.' }} />
+        <Message message={message([answer('The retry succeeded.', 2)], { id: 'next-answer' })} />
+      </>,
+    ));
+
+    const markers = host.querySelectorAll('article[aria-label="Interrupted"]');
+    expect(markers).toHaveLength(1);
+    expect(markers[0].textContent).toContain('This turn stopped before it finished.');
+    const retry = host.querySelector('.message-wrapper.user');
+    expect(markers[0].compareDocumentPosition(retry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(host.lastElementChild.textContent).toContain('The retry succeeded.');
+  });
+});
+
+
+describe('assistant work groups', () => {
+  it('renders every reasoning phase as a top-level work group without a turn wrapper', async () => {
+    await renderMessage(message([
+      tool('generic-start', 'tool_start', 900),
+      {
+        kind: 'stream_event',
+        id: 'reasoning-one',
+        timestamp: 1_000,
+        event: {
+          id: 'reasoning-one',
+          eventType: 'reasoning_delta',
+          timestamp: 1_000,
+          content: '**Inspect files**\n\nRead configuration first.',
+          metadata: {},
         },
-        tool(`tool-${number}-start`, 'tool_start', timestamp + 100, 'read_file', {
-          tool_call_id: `tool-${number}`,
-          args_preview: { path: `/file-${number}` },
-        }),
-        tool(`tool-${number}-result`, 'tool_result', timestamp + 200, 'read_file', {
-          tool_call_id: `tool-${number}`,
-          result_preview: `Read ${number}`,
-        }),
-      ];
-    }).flat();
+      },
+      tool('read-start', 'tool_start', 1_100, 'read_file', { tool_call_id: 'read' }),
+      {
+        kind: 'stream_event',
+        id: 'reasoning-two',
+        timestamp: 1_300,
+        event: {
+          id: 'reasoning-two',
+          eventType: 'reasoning_delta',
+          timestamp: 1_300,
+          content: '**Search references**\n\nThen find callers.',
+          metadata: {},
+        },
+      },
+      tool('search-start', 'tool_start', 1_400, 'search_web', { tool_call_id: 'search' }),
+    ]));
 
-    await renderMessage(message(timelineItems));
+    const groups = [...host.querySelectorAll('.work-group')];
 
-    const section = assistantWork();
-    await openOuterWork(section);
-    const innerToggles = await openAllInnerGroups(section);
-
-    expect(innerToggles).toHaveLength(38);
-    expect(section.querySelectorAll('.tool-call-entry')).toHaveLength(38);
-    expect(section.textContent.match(/Reasoning 38/g)).toHaveLength(1);
-    expect(section.textContent.match(/path: \/file-38/g)).toHaveLength(1);
+    expect(host.querySelector('section[aria-label="Assistant work"]')).toBeNull();
+    expect(groups).toHaveLength(3);
+    expect(groups.map((group) => group.querySelector('.work-group__title')?.textContent))
+      .toEqual(['Worked', 'Inspect files', 'Search references']);
   });
 
-  it('keeps delegated-agent cards and the answer visible outside closed root work', async () => {
+  it('reveals full reasoning and named tool rows with one group expansion', async () => {
+    await renderMessage(message([
+      {
+        kind: 'stream_event',
+        id: 'reasoning',
+        timestamp: 1_000,
+        event: {
+          id: 'reasoning',
+          eventType: 'reasoning_delta',
+          timestamp: 1_000,
+          content: '**Inspect files**\n\nFirst observation.\n\nSecond observation.',
+          metadata: {},
+        },
+      },
+      tool('read-start', 'tool_start', 1_100, 'read_file', { tool_call_id: 'read' }),
+    ]));
+
+    const group = host.querySelector('.work-group');
+    await act(async () => group.querySelector('.work-group__toggle').click());
+
+    expect(host.textContent).toContain('First observation.');
+    expect(host.textContent).toContain('Second observation.');
+    expect(host.querySelector('.work-group__reasoning-toggle')).toBeNull();
+    expect(host.querySelector('.tool-call-entry__disclosure summary')?.textContent).toContain('Read File');
+  });
+
+  it('keeps delegated-agent cards and the answer as siblings of collapsed root work', async () => {
     await renderMessage(message([
       tool('root-start', 'tool_start', 1_000),
       {
@@ -193,64 +203,22 @@ describe('assistant turn work disclosure', () => {
       answer('Final answer remains readable.', 5_000),
     ]));
 
-    const section = assistantWork();
+    const work = host.querySelector('.work-group');
     const subagent = host.querySelector('.subagent-card');
     const remoteAgent = host.querySelector('.a2a-call-card');
     const finalAnswer = [...host.querySelectorAll('.msg--assistant')]
       .find((element) => element.textContent.includes('Final answer remains readable.'));
 
-    expect(section.querySelector('button[aria-expanded="false"]')).not.toBeNull();
+    expect(work).not.toBeNull();
     expect(subagent).not.toBeNull();
     expect(remoteAgent).not.toBeNull();
     expect(finalAnswer).not.toBeNull();
-    expect(section.contains(subagent)).toBe(false);
-    expect(section.contains(remoteAgent)).toBe(false);
-    expect(section.contains(finalAnswer)).toBe(false);
+    expect(work.contains(subagent)).toBe(false);
+    expect(work.contains(remoteAgent)).toBe(false);
+    expect(work.contains(finalAnswer)).toBe(false);
   });
 
-  it('keeps each reasoning section before the tool work it led to after expansion', async () => {
-    await renderMessage(message([
-      {
-        kind: 'stream_event',
-        id: 'reasoning-first',
-        timestamp: 1_000,
-        event: {
-          id: 'reasoning-first',
-          eventType: 'reasoning_delta',
-          timestamp: 1_000,
-          content: '**Inspect files**\n\nRead configuration first.',
-          metadata: {},
-        },
-      },
-      tool('read-start', 'tool_start', 1_100, 'read_file', { tool_call_id: 'read' }),
-      tool('read-result', 'tool_result', 1_200, 'read_file', { tool_call_id: 'read', result_preview: 'Found config' }),
-      {
-        kind: 'stream_event',
-        id: 'reasoning-second',
-        timestamp: 1_300,
-        event: {
-          id: 'reasoning-second',
-          eventType: 'reasoning_delta',
-          timestamp: 1_300,
-          content: '**Search references**\n\nThen find callers.',
-          metadata: {},
-        },
-      },
-      tool('search-start', 'tool_start', 1_400, 'search_web', { tool_call_id: 'search' }),
-      tool('search-result', 'tool_result', 1_500, 'search_web', { tool_call_id: 'search', result_preview: 'Found callers' }),
-    ]));
-
-    const section = assistantWork();
-    await openOuterWork(section);
-    await openAllInnerGroups(section);
-
-    const chronology = ['Inspect files', 'Read File', 'Search references', 'Search Web']
-      .map((text) => section.textContent.indexOf(text));
-    expect(chronology.every((position) => position >= 0)).toBe(true);
-    expect([...chronology].sort((left, right) => left - right)).toEqual(chronology);
-  });
-
-  it('shows failed-tool evidence without turning a completed turn into a failed turn', async () => {
+  it('keeps failed-tool evidence without calling a completed response failed', async () => {
     await renderMessage(message([
       tool('failed-start', 'tool_start', 1_000, 'read_file', { tool_call_id: 'failed' }),
       tool('failed-result', 'tool_result', 2_000, 'read_file', {
@@ -261,30 +229,36 @@ describe('assistant turn work disclosure', () => {
       answer('Recovered and completed the request.', 3_000),
     ]));
 
-    const section = assistantWork();
-    expect(section.textContent).toContain('Worked for 2s');
-    expect(section.textContent).toContain('1 failed');
-    expect(section.textContent).not.toContain('Work failed');
+    const work = host.querySelector('.work-group');
+    expect(work.textContent).toContain('Worked for 2s');
+    expect(work.textContent).toContain('1 failed');
+    expect(work.textContent).not.toContain('Failed');
 
-    await openOuterWork(section);
-    await openAllInnerGroups(section);
+    await act(async () => work.querySelector('.work-group__toggle').click());
 
-    expect(section.querySelector('.tool-call-entry--error')).not.toBeNull();
-    expect(section.textContent).toContain('Permission denied');
+    expect(host.querySelector('.tool-call-entry--error')).not.toBeNull();
+    expect(host.textContent).toContain('Permission denied');
   });
 });
 
 
 describe('terminal replies without tool work', () => {
   it.each(['failed', 'interrupted'])(
-    'keeps provider %s visible even when there is no work disclosure',
+    'keeps provider %s visible even when there are no work groups',
     async (status) => {
       await renderMessage(message(undefined, {
         content: 'Partial answer',
         responseStatus: status,
       }));
       expect(host.querySelector('section[aria-label="Assistant work"]')).toBeNull();
-      expect(host.querySelector('[role="status"]')?.textContent.toLowerCase()).toBe(status);
+      const statusRow = status === 'interrupted'
+        ? host.querySelector('article[aria-label="Interrupted"]')
+        : host.querySelector('[role="status"]');
+      expect(statusRow?.textContent.toLowerCase()).toContain(status);
+      if (status === 'interrupted') {
+        expect(host.querySelector('.message-wrapper.assistant').compareDocumentPosition(statusRow)
+          & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      }
       expect(host.textContent).toContain('Partial answer');
     },
   );
@@ -314,7 +288,22 @@ describe('terminal replies without tool work', () => {
       responseStatus: 'failed',
     }));
 
-    expect(assistantWork().textContent).toContain('Work failed');
+    expect(host.querySelector('.work-group__badge--error')).not.toBeNull();
     expect(host.querySelector('[role="status"]')).toBeNull();
+  });
+});
+
+describe('scheduled task input', () => {
+  it('renders persisted scheduled user input as a scheduled task', async () => {
+    await renderMessage({
+      id: 'scheduled-user',
+      role: 'user',
+      content: 'Run the report',
+      isScheduled: true,
+    });
+
+    expect(host.textContent).toContain('Scheduled task');
+    expect(host.textContent).toContain('Scheduled');
+    expect(host.querySelector('.message.scheduled')).not.toBeNull();
   });
 });

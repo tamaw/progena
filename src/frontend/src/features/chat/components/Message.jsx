@@ -3,8 +3,8 @@ import { useMermaidRender } from '../../../hooks/useMermaidRender';
 import { collectMessageImages } from '../models/conversationModel';
 import { hasReasoningContent, isReasoningEvent } from '../models/streamEventsModel';
 import TimelineItem from './TimelineItem';
-import TurnWorkGroup from './TurnWorkGroup';
-import { buildWorkGroups, partitionTurnTimeline, timelineItemKey } from '../models/workGroupModel';
+import WorkGroup from './WorkGroup';
+import { buildWorkGroups, partitionTurnTimeline, subagentCardToolCallIds, timelineItemKey } from '../models/workGroupModel';
 import { buildDefaultAssistantTimeline } from '../models/liveAssistantTurnModel';
 import MessageImageStrip from './MessageImageStrip';
 import AttachmentFileIcon from './AttachmentFileIcon';
@@ -13,9 +13,7 @@ import MessageActions from './MessageActions';
 import { appendStreamingCursor } from '../models/messageRenderUtils';
 import { renderSafeMarkdown } from '../../../lib/safeMarkdown';
 import { filterTimelineItems } from '../models/streamFilters';
-import { normalizeCancelledContent } from '../models/cancelledContentModel';
 import InterruptedMarker from './InterruptedMarker';
-
 
 function buildSyntheticReasoningEvent(
   reasoningText,
@@ -121,25 +119,26 @@ function MessageView({
     attachments = [],
     interruptionReason,
   } = message;
+  const workResponseStatus = ['running', 'completed', 'failed', 'cancelled', 'interrupted', 'unknown'].includes(responseStatus)
+    ? responseStatus
+    : 'unknown';
+  // A turn that never finished (the backend reports `interrupted` once a later
+  // message superseded it) keeps its Interrupted row in place in history.
+  const effectiveInterruptionReason = interruptionReason
+    ?? (responseStatus === 'cancelled' ? 'user_cancelled' : undefined)
+    ?? (responseStatus === 'interrupted' ? 'stopped_early' : undefined);
   const regenerateMessage = useMemo(
     () => onRegenerate ? () => onRegenerate(messageId) : undefined,
     [messageId, onRegenerate],
   );
-  const effectiveInterruptionReason = interruptionReason
-    ?? (responseStatus === 'cancelled' ? 'user_cancelled' : undefined);
 
   const isAssistant = role === 'assistant';
-  const assistantTimeline = useMemo(() => {
-    if (!isAssistant) return [];
-    const source = Array.isArray(timelineItems) && timelineItems.length > 0
-      ? timelineItems
-      : buildDefaultAssistantTimeline({ ...message, content: normalizeCancelledContent(content, responseStatus) });
-    return source.map((item) => (
-      item.kind === 'assistant_message'
-        ? { ...item, content: normalizeCancelledContent(item.content, responseStatus) }
-        : item
-    ));
-  }, [content, isAssistant, message, responseStatus, timelineItems]);
+  const assistantTimeline = useMemo(() => (
+    isAssistant
+      ? (Array.isArray(timelineItems) && timelineItems.length > 0
+        ? timelineItems : buildDefaultAssistantTimeline(message))
+      : []
+  ), [isAssistant, message, timelineItems]);
 
   const formattedContent = useMemo(() => {
     if (!content || isAssistant) return '';
@@ -162,8 +161,8 @@ function MessageView({
   );
 
 
-  // Timeline turns render as: one collapsible work group (tools, reasoning,
-  // plan, steps), then delegated-agent cards, then the answer.
+  // Root-agent work phases, delegated-agent cards and answer rows are siblings
+  // in one chain. Each WorkGroup owns only the tools following its reasoning.
   if (isAssistant) {
     const fullTimelineItems = withReasoningFallback(assistantTimeline, {
       reasoningText,
@@ -175,18 +174,23 @@ function MessageView({
     });
     // Visibility is a presentation choice, not a different end to the work.
     // Skip rows emptied by tool commentary, as the visible answer path does.
+    const answerStarted = fullTimelineItems.some((item) =>
+      item.kind === 'assistant_message' && (item.error || (item.content || '').trim())
+    );
     const answerStartedAt = fullTimelineItems.find((item) =>
       item.kind === 'assistant_message' && (item.error || (item.content || '').trim())
     )?.timestamp ?? null;
+    const turnStillRunning = workResponseStatus === 'running' || workResponseStatus === 'unknown';
     const visibleTimelineItems = filterTimelineItems(fullTimelineItems, streamEventFilter);
     const { workItems, cardItems, answerItems: allAnswerItems } = partitionTurnTimeline(visibleTimelineItems);
     // An answer row whose text all turned out to be tool commentary (see
     // claimToolCommentary in liveAssistantTurnModel.js) has nothing to show.
     const answerItems = allAnswerItems.filter((item) => item.error || (item.content || '').trim());
     const workGroups = buildWorkGroups(workItems);
+    const cardToolCallIds = [...subagentCardToolCallIds(cardItems)].join('\n');
     // Work filters can hide every tool/reasoning row. Keep the turn's explicit
     // terminal failure visible without reintroducing any filtered diagnostics.
-    const terminalStatusItems = responseStatus === 'failed' && workGroups.length === 0 && answerItems.length === 0
+    const terminalStatusItems = workResponseStatus === 'failed' && workGroups.length === 0 && answerItems.length === 0
       ? [{
         kind: 'assistant_message',
         id: `${messageId}-failed-status`,
@@ -205,18 +209,24 @@ function MessageView({
       : [];
     return (
       <div className="chat-entry-chain chat-entry-chain--connected">
-        {workGroups.length > 0 && (
-        <TurnWorkGroup
-          groups={workGroups}
-          workItems={workItems}
-          active={workActive}
-          endedAt={answerStartedAt}
-          responseStatus={responseStatus}
-          onRegenerate={regenerateMessage}
-          summaryMarkers={summaryMarkers}
-          summaryActivities={summaryActivities}
-        />
-        )}
+        {workGroups.map((group, index) => {
+          const isLast = index === workGroups.length - 1;
+          return (
+            <WorkGroup
+              key={group.id}
+              heading={group.heading}
+              items={group.items}
+              active={workActive && turnStillRunning && !answerStarted && isLast}
+              endedAt={isLast ? answerStartedAt : workGroups[index + 1].startedAt}
+              terminal={isLast}
+              responseStatus={isLast ? workResponseStatus : undefined}
+              onRegenerate={regenerateMessage}
+              cardToolCallIds={cardToolCallIds}
+              summaryMarkers={summaryMarkers}
+              summaryActivities={summaryActivities}
+            />
+          );
+        })}
         {[...cardItems, ...answerItems, ...terminalStatusItems].map((item, idx, renderedItems) => (
           <TimelineItem
             key={timelineItemKey(item, idx)}
@@ -247,7 +257,7 @@ function MessageView({
       </div>
       <div className="entry__main msg__entry-main">
         <div className="msg__head entry__head">
-          <span className="msg__role">Message</span>
+          <span className="msg__role">{isScheduled ? 'Scheduled task' : 'Message'}</span>
           {isScheduled && (
             <span className="scheduled-badge muted">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

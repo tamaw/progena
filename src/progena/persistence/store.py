@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from contextlib import asynccontextmanager
 from typing import Any, LiteralString, Protocol, TypeVar
 
 from psycopg.sql import SQL, Composable
@@ -49,6 +50,25 @@ class LangGraphRuntimeStore:
         self._store = store
         self._document_locks: dict[str, asyncio.Lock] = {}
         self._native_connection_lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def _native_connection(self) -> AsyncIterator[Any]:
+        """Yield a connection that no other coroutine is using.
+
+        A pool hands out a dedicated connection. A single shared connection is
+        also used by ``AsyncPostgresStore``, which serialises its cursors with
+        ``self._store.lock``; direct queries must hold that same lock or they
+        interleave with store reads and break the connection's protocol state.
+        """
+        conn = getattr(self._store, "conn", None)
+        assert conn is not None
+        if callable(getattr(conn, "connection", None)):
+            async with conn.connection() as connection:
+                yield connection
+            return
+        lock = getattr(self._store, "lock", None) or self._native_connection_lock
+        async with lock:
+            yield conn
 
     async def open(self) -> None:
         """Match the old store lifecycle; native LangGraph store is already open."""
@@ -145,11 +165,8 @@ class LangGraphRuntimeStore:
                 )
                 return result
 
-        if callable(getattr(conn, "connection", None)):
-            async with conn.connection() as connection:
-                return await _mutate(connection)
-        async with self._native_connection_lock:
-            return await _mutate(conn)
+        async with self._native_connection() as connection:
+            return await _mutate(connection)
 
     async def merge_document(self, name: str, fields: dict[str, Any]) -> bool:
         """Atomically merge top-level ``fields`` into one runtime document's payload.
@@ -176,16 +193,9 @@ class LangGraphRuntimeStore:
             WHERE prefix = 'progena.state' AND key = %s
             RETURNING 1
         """
-        # A pool hands out connections; a single AsyncConnection's `connection`
-        # is a non-callable property.
-        if callable(getattr(conn, "connection", None)):
-            async with conn.connection() as connection, connection.cursor() as cur:
-                await cur.execute(sql, params)
-                row = await cur.fetchone()
-        else:
-            async with conn.cursor() as cur:
-                await cur.execute(sql, params)
-                row = await cur.fetchone()
+        async with self._native_connection() as connection, connection.cursor() as cur:
+            await cur.execute(sql, params)
+            row = await cur.fetchone()
         return row is not None
 
     async def append_document_list(self, name: str, field: str, item: Any) -> bool:
@@ -257,16 +267,9 @@ class LangGraphRuntimeStore:
 
     async def _execute_document_mutation(self, sql: str, params: tuple[Any, ...]) -> bool:
         """Run one SQL mutation against the native store connection."""
-        conn = getattr(self._store, "conn", None)
-        assert conn is not None
-        if callable(getattr(conn, "connection", None)):
-            async with conn.connection() as connection, connection.cursor() as cur:
-                await cur.execute(sql, params)
-                row = await cur.fetchone()
-        else:
-            async with conn.cursor() as cur:
-                await cur.execute(sql, params)
-                row = await cur.fetchone()
+        async with self._native_connection() as connection, connection.cursor() as cur:
+            await cur.execute(sql, params)
+            row = await cur.fetchone()
         return row is not None
 
     async def delete_document(self, name: str) -> None:
@@ -406,13 +409,7 @@ class LangGraphRuntimeStore:
 
     async def _fetch_native_rows(self, sql: str | Composable, params: tuple[Any, ...]) -> list[Any]:
         """Execute a read against a direct connection or LangGraph connection pool."""
-        conn = getattr(self._store, "conn", None)
-        assert conn is not None
-        if callable(getattr(conn, "connection", None)):
-            async with conn.connection() as connection, connection.cursor() as cur:
-                await cur.execute(sql, params)
-                return await cur.fetchall()
-        async with conn.cursor() as cur:
+        async with self._native_connection() as connection, connection.cursor() as cur:
             await cur.execute(sql, params)
             return await cur.fetchall()
 

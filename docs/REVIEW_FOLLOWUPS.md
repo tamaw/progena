@@ -10,9 +10,9 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 
 - **Location:** [`control_nodes.py:373–377`](../src/progena/routines/control_nodes.py#L373-L377).
 - **Problem:** Cancellation during a filesystem call cancels QuickJS evaluation, whose cancellation cleanup clears the guest deadline before running JavaScript cleanup handlers. An unbounded cleanup handler can then keep the worker alive while the node waits indefinitely for it.
-- **Observed:** In a bounded child process with `quickjs-rs` 0.2.6, cancellation during a pending host read remained unfinished after 2.5 seconds despite the one-second guest execution limit. The child process was terminated without touching application data.
+- **Observed:** In a bounded child process with `quickjs-rs` 0.2.6, cancellation during a pending host read remained unfinished after 2.5 seconds despite the one-second guest execution limit. The child process was terminated without touching application data. Re-checked on `c5b6ac85`: LangGraph returned the cancellation immediately, but the orphaned worker kept spinning at full CPU in guest cleanup.
 - **Required outcome:** Cancellation cleanup remains subject to an effective guest execution deadline, and cancellation/graph timeout reliably completes.
-- **Status:** Open.
+- **Status:** Fixed — `_CodeExecution` installs an interrupt handler that also enforces a cleanup deadline set on cancellation (`test_code_node_cancellation_bounds_guest_cleanup`).
 
 ### 2. P2 — Drain actual threaded mutations before reporting cancellation complete
 
@@ -38,7 +38,7 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 - **Problem:** `with_options(api_key=new_token)` preserves the explicit `Authorization` default header installed during production model construction. That stale header overrides the replacement API key.
 - **Observed:** With OpenAI SDK 3.37.0 and an offline HTTP transport, the client held the replacement key but the actual request still sent the original synthetic bearer.
 - **Required outcome:** Synchronous and asynchronous retry requests send the refreshed bearer, with no stale explicit authorization header.
-- **Status:** Open.
+- **Status:** Fixed — refreshed sync/async clients replace the explicit bearer header; `test_chatgpt_langchain_stream_retries_with_refreshed_explicit_bearer`.
 
 ### 5. P2 — Attach usage attribution once per streamed response
 
@@ -46,7 +46,7 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 - **Problem:** Both the first stream chunk and finalized reasoning receive attribution. LangChain concatenates ordinary string metadata while aggregating chunks.
 - **Observed:** An offline Responses stream aggregated through `model.astream()` produced `profile_name="reviewreview"`, `provider="chatgptchatgpt"`, a duplicated deployment, and concatenated timestamps.
 - **Required outcome:** Completed streamed messages retain one correct profile/provider/deployment/timestamp attribution, including encrypted-reasoning completion.
-- **Status:** Open.
+- **Status:** Already fixed on main — offline `model.astream()` aggregation with encrypted reasoning retains one attribution.
 
 ### 6. P2 — Validate the provider/model pair actually committed by a profile PATCH
 
@@ -54,7 +54,7 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 - **Problem:** A provider-only PATCH validates the inherited deployment before acquiring the mutation lock, but its locked guard checks only whether the stored provider changed. A concurrent deployment-only edit can survive under the new provider without validation.
 - **Observed:** A controlled interleaving acknowledged and persisted provider Q/model B even though Q's supplied catalogue contained only A.
 - **Required outcome:** The committed provider/deployment pair is the validated pair; inherited-field changes cause safe revalidation or conflict rather than an invalid successful acknowledgement.
-- **Status:** Open.
+- **Status:** Fixed — the locked mutation rejects a changed inherited deployment; `test_chatgpt_catalog_rejects_provider_only_patch_when_deployment_changes_during_validation`.
 
 ### 7. P2 — Retain a valid bearer while refresh is temporarily unavailable
 
@@ -62,7 +62,7 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 - **Problem:** Within the two-minute refresh leeway, a future `refresh_available_at` unconditionally rejects ordinary token lookup even if the bearer remains unexpired.
 - **Observed:** A credential valid for another 90 seconds was rejected because refresh was unavailable for 30 seconds.
 - **Required outcome:** Ordinary lookups may use the current unexpired bearer until refresh becomes permissible; an actually rejected or expired bearer must still fail safely.
-- **Status:** Open.
+- **Status:** Fixed — an ordinary lookup retains an unexpired bearer while refresh is unavailable; `test_access_token_uses_unexpired_bearer_when_refresh_is_temporarily_unavailable`.
 
 ## Workflow payload contracts
 
@@ -72,7 +72,7 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 - **Problem:** The executor validates the augmented transport object against the manual payload schema. `additionalProperties: false` therefore rejects a valid user payload because of the injected `request_id`.
 - **Observed:** Direct execution of the real browser-route coroutine and executor with an in-memory store returned HTTP 409, a misleading paused/disabled error, and created no run for an enabled workflow with valid strict input.
 - **Required outcome:** Strict manual payload schemas work through the browser route while lifecycle events retain request correlation separately.
-- **Status:** Open.
+- **Status:** Fixed — browser route keeps `request_id` in the lifecycle event instead of the manual trigger payload; `test_strict_manual_trigger_payload_keeps_request_correlation_in_lifecycle_event`.
 
 ### 9. P2 — Apply manual defaults before tool-side validation
 
@@ -80,7 +80,7 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 - **Problem:** The tool validates the original payload before applying declared property defaults, unlike backend manual-trigger resolution.
 - **Observed:** For a required integer property `n` defaulting to 3, the backend resolved `{}` to `{"n": 3}` while the tool rejected the same input as missing `n`.
 - **Required outcome:** Backend and tool accept the same defaultable payloads and reject the same genuinely invalid payloads.
-- **Status:** Open.
+- **Status:** Fixed — shared schema default resolution now runs before `run_workflow` validation; `test_execute_applies_manual_defaults_before_validating_and_enqueueing`.
 
 ## Graph editor and Docker setup
 
@@ -106,4 +106,4 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 - **Problem:** The README delegates installation to the Docker guide, whose prerequisites create only the external network and shared volume. Compose also requires externally created `progena-postgres-data`.
 - **Evidence:** Checked the committed guide and Compose declarations. Docker startup was not run during review.
 - **Required outcome:** A fresh installation following the documented procedure creates every required external resource before Compose startup, including `docker volume create progena-postgres-data` or an equivalent managed-volume configuration.
-- **Status:** Open.
+- **Status:** Fixed — `DOCKER.md` prerequisites now create `progena-postgres-data` alongside the network and shared volume.

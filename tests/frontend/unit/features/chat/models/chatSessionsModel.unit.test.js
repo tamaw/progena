@@ -121,7 +121,7 @@ describe('normalizeBackendChatMessage', () => {
     const message = normalizeBackendChatMessage({
       id: 'm-cancelled',
       role: 'assistant',
-      content: 'Partial [Cancelled]',
+      content: 'Partial',
       response_status: 'cancelled',
       interruption_reason: 'user_cancelled',
     }, 0);
@@ -915,5 +915,30 @@ describe('sidebarEmptyMessage', () => {
     expect(sidebarEmptyMessage({ sidebarFilter: 'unread', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No unread chats.');
     expect(sidebarEmptyMessage({ sidebarFilter: 'archived', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No archived chats yet.');
     expect(sidebarEmptyMessage({ sidebarFilter: 'all', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No conversations.');
+  });
+});
+
+describe('scheduled chat messages', () => {
+  it('marks only persisted scheduled user messages as scheduled', () => {
+    expect(normalizeBackendChatMessage({
+      id: 'scheduled-user',
+      role: 'user',
+      content: 'Run the report',
+      scheduled: { schedule_id: 'schedule-1', run_id: 'run-1' },
+    }, 0)).toMatchObject({
+      isScheduled: true,
+      scheduled: { schedule_id: 'schedule-1', run_id: 'run-1' },
+    });
+    expect(normalizeBackendChatMessage({
+      id: 'ordinary-user',
+      role: 'user',
+      content: 'Run the report',
+    }, 1).isScheduled).toBe(false);
+    expect(normalizeBackendChatMessage({
+      id: 'assistant',
+      role: 'assistant',
+      content: 'Done',
+      scheduled: { schedule_id: 'schedule-1', run_id: 'run-1' },
+    }, 2).isScheduled).toBe(false);
   });
 });

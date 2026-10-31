@@ -11,7 +11,7 @@ import { isA2AToolName } from './a2aTools';
 import { extractA2ASummary } from './messageRenderUtils';
 import { deriveChatStatus } from './chatStatus';
 import { normalizeContextUsage } from './contextWindowModel';
-import { normalizeCancelledContent } from './cancelledContentModel';
+import { normalizeInterruptionReason } from './interruptionReasonModel';
 export function compareSessionItems(left, right) {
   const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
   if (pinnedDelta !== 0) {
@@ -266,13 +266,6 @@ function normalizeResponseStatus(value) {
   return typeof value === 'string' && RESPONSE_STATUSES.has(value) ? value : 'unknown';
 }
 
-const INTERRUPTION_REASONS = new Set(['user_cancelled', 'new_message']);
-
-function normalizeInterruptionReason(value) {
-  return typeof value === 'string' && INTERRUPTION_REASONS.has(value) ? value : null;
-}
-
-
 
 
 function normalizeOutputTokenCount(value) {
@@ -290,12 +283,9 @@ export function normalizeBackendChatMessage(message, index) {
   const timestamp = toValidTimestamp(createdAt) ?? Date.now();
   const role = typeof message.role === 'string' ? message.role : 'assistant';
   const responseStatus = normalizeResponseStatus(message.response_status);
-  let content = typeof message.content === 'string'
+  const content = typeof message.content === 'string'
     ? message.content
     : String(message.content ?? '');
-  if (role === 'assistant') {
-    content = normalizeCancelledContent(content, responseStatus);
-  }
   const id = typeof message.id === 'string' ? message.id : `backend_msg_${index}_${timestamp}`;
   const streamEvents = buildToolStreamEvents(
     Array.isArray(message.tool_calls) ? message.tool_calls : [],
@@ -348,6 +338,10 @@ export function normalizeBackendChatMessage(message, index) {
     attachments: Array.isArray(message.attachments) ? message.attachments : [],
     raw,
     contextUsage: normalizeContextUsage(message.context_usage),
+    scheduled: role === 'user' && message.scheduled && typeof message.scheduled === 'object'
+      ? message.scheduled
+      : null,
+    isScheduled: role === 'user' && Boolean(message.scheduled && typeof message.scheduled === 'object'),
   };
 
   // Attach a synthetic fallback timeline for backend-loaded messages.

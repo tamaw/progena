@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, overload
 
 from src.progena.documents.values import make_json_safe
 from src.progena.persistence.store import LangGraphRuntimeStore
@@ -38,7 +38,7 @@ class QueueActionError(ValueError):
 
 @dataclass(frozen=True)
 class ClaimedQueueMessage:
-    """A queue item reserved for insertion into a graph checkpoint."""
+    """A queue item reserved for deferred execution."""
 
     conversation_id: str
     id: str
@@ -163,7 +163,31 @@ class ChatQueueStore:
         await self._emit(snapshot)
         return snapshot, stable_id
 
-    async def action(self, conversation_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    @overload
+    async def action(
+        self,
+        conversation_id: str,
+        payload: dict[str, Any],
+        *,
+        include_applied: Literal[False] = False,
+    ) -> dict[str, Any]: ...
+
+    @overload
+    async def action(
+        self,
+        conversation_id: str,
+        payload: dict[str, Any],
+        *,
+        include_applied: Literal[True],
+    ) -> tuple[dict[str, Any], bool]: ...
+
+    async def action(
+        self,
+        conversation_id: str,
+        payload: dict[str, Any],
+        *,
+        include_applied: bool = False,
+    ) -> dict[str, Any] | tuple[dict[str, Any], bool]:
         """Apply an idempotent user queue action."""
 
         action = payload.get("action")
@@ -179,13 +203,13 @@ class ChatQueueStore:
         if type(revision) is not int or revision < 0:
             raise QueueActionError("bad_request", "revision must be a non-negative integer", 400)
 
-        def mutate(current: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+        def mutate(current: Any) -> tuple[dict[str, Any], tuple[dict[str, Any], bool]]:
             document = dict(current) if isinstance(current, dict) else self._empty(conversation_id)
             document["conversation_id"] = conversation_id
             commands = dict(document.get("commands") or {})
             previous = commands.get(command_id)
             if isinstance(previous, dict):
-                return document, self._snapshot(document)
+                return document, (self._snapshot(document), False)
             snapshot = self._snapshot(document)
             if revision != snapshot["revision"]:
                 raise QueueActionError(
@@ -215,10 +239,19 @@ class ChatQueueStore:
                 if action == "delete":
                     messages = [item for item in messages if item.get("id") != message_id]
                 else:
-                    if target.get("send_now_order") is None:
-                        next_order = int(document.get("next_send_now_order") or 0) + 1
-                        target["send_now_order"] = next_order
-                        document["next_send_now_order"] = next_order
+                    if target.get("send_now_order") is not None:
+                        # A fresh command against an already-prioritized item
+                        # is a true no-op: it must not interrupt a newer root.
+                        return document, (snapshot, False)
+                    next_order = int(document.get("next_send_now_order") or 0) + 1
+                    target["send_now_order"] = next_order
+                    document["next_send_now_order"] = next_order
+                    for item in messages:
+                        if item.get("status") == "sending":
+                            # A queued root has a durable claim. Couple its
+                            # cancellation to this acknowledged priority change
+                            # so recovery cannot resume it ahead of the target.
+                            item["cancel_requested"] = True
             else:
                 order = payload.get("order")
                 if not isinstance(order, list) or not all(
@@ -245,25 +278,40 @@ class ChatQueueStore:
             if len(commands) > _COMMAND_HISTORY_LIMIT:
                 commands = dict(list(commands.items())[-_COMMAND_HISTORY_LIMIT:])
             document["commands"] = commands
-            return document, updated
+            return document, (updated, True)
 
-        snapshot = await self._store.mutate_document(self._key(conversation_id), mutate)
-        await self._emit(snapshot)
-        return snapshot
+        snapshot, applied = await self._store.mutate_document(self._key(conversation_id), mutate)
+        if applied:
+            await self._emit(snapshot)
+        return (snapshot, applied) if include_applied else snapshot
 
-    async def claim_next(
-        self, conversation_id: str, *, immediate_only: bool = False
-    ) -> ClaimedQueueMessage | None:
-        """Atomically reserve the next selected input for a graph boundary."""
+    @staticmethod
+    def _claim_from_item(conversation_id: str, item: dict[str, Any]) -> ClaimedQueueMessage:
+        return ClaimedQueueMessage(
+            conversation_id=conversation_id,
+            id=str(item["id"]),
+            text=str(item.get("text") or ""),
+            attachments=list(item.get("attachments") or []),
+            metadata=dict(item.get("metadata") or {}),
+            source=str(item["source"]) if item.get("source") else None,
+            received_at=(
+                float(item["received_at"])
+                if isinstance(item.get("received_at"), (int, float))
+                else None
+            ),
+            response_id=str(item.get("response_id") or item.get("request_id") or item["id"]),
+            model=str(item.get("model") or "progena-v1"),
+            send_now=item.get("send_now_order") is not None,
+        )
+
+    async def claim_next(self, conversation_id: str) -> ClaimedQueueMessage | None:
+        """Atomically reserve the next input, honoring durable Send now priority."""
         current = await self._store.peek_document(self._key(conversation_id))
         if not isinstance(current, dict):
             return None
         messages = current.get("messages")
         if not isinstance(messages, list) or not any(
-            isinstance(item, dict)
-            and item.get("status") == "queued"
-            and (not immediate_only or item.get("send_now_order") is not None)
-            for item in messages
+            isinstance(item, dict) and item.get("status") == "queued" for item in messages
         ):
             return None
 
@@ -278,8 +326,6 @@ class ChatQueueStore:
             ]
             if immediate:
                 item = min(immediate, key=lambda candidate: int(candidate["send_now_order"]))
-            elif immediate_only:
-                item = None
             else:
                 item = queued[0] if queued else None
             if item is None:
@@ -289,34 +335,71 @@ class ChatQueueStore:
             document["messages"] = messages
             document["conversation_id"] = conversation_id
             document["revision"] = int(document.get("revision") or 0) + 1
-            return document, ClaimedQueueMessage(
-                conversation_id=conversation_id,
-                id=str(item["id"]),
-                text=str(item.get("text") or ""),
-                attachments=list(item.get("attachments") or []),
-                metadata=dict(item.get("metadata") or {}),
-                source=str(item["source"]) if item.get("source") else None,
-                received_at=(
-                    float(item["received_at"])
-                    if isinstance(item.get("received_at"), (int, float))
-                    else None
-                ),
-                response_id=str(item.get("response_id") or item.get("request_id") or item["id"]),
-                model=str(item.get("model") or "progena-v1"),
-                send_now=item.get("send_now_order") is not None,
-            )
+            return document, self._claim_from_item(conversation_id, item)
 
         claimed = await self._store.mutate_document(self._key(conversation_id), mutate)
         if claimed is not None:
             await self._emit(await self.snapshot(conversation_id))
         return claimed
 
-    async def recover(
+    async def claim_recoverable(
         self, conversation_id: str, checkpoint_message_ids: Iterable[str]
-    ) -> dict[str, Any]:
-        """Reconcile incomplete claims with committed checkpoint messages."""
+    ) -> ClaimedQueueMessage | None:
+        """Return a checkpointed, unsettled claim for native graph resumption.
+
+        The claim remains ``sending``. A caller must settle it after the resumed
+        graph reaches a true terminal state; changing it back to ``queued``
+        would append a duplicate human message.
+        """
 
         committed = set(checkpoint_message_ids)
+
+        def mutate(current: Any) -> tuple[dict[str, Any], ClaimedQueueMessage | None]:
+            document = dict(current) if isinstance(current, dict) else self._empty(conversation_id)
+            for item in document.get("messages", []):
+                if (
+                    isinstance(item, dict)
+                    and item.get("status") == "sending"
+                    and not item.get("cancel_requested")
+                    and str(item.get("id")) in committed
+                ):
+                    return document, self._claim_from_item(conversation_id, item)
+            return document, None
+
+        return await self._store.mutate_document(self._key(conversation_id), mutate)
+
+    async def cancel_requested_claims(self, conversation_id: str) -> list[ClaimedQueueMessage]:
+        """Return sending claims durably cancelled by an acknowledged Send now."""
+
+        document = await self._store.peek_document(self._key(conversation_id))
+        if not isinstance(document, dict):
+            return []
+        return [
+            self._claim_from_item(conversation_id, item)
+            for item in document.get("messages", [])
+            if (
+                isinstance(item, dict)
+                and item.get("status") == "sending"
+                and item.get("cancel_requested")
+            )
+        ]
+
+    async def recover(
+        self,
+        conversation_id: str,
+        checkpoint_message_ids: Iterable[str],
+        *,
+        terminal_message_ids: Iterable[str] = (),
+    ) -> dict[str, Any]:
+        """Reconcile claims only when checkpoint state proves their outcome.
+
+        A checkpointed human whose graph still has native work pending, or whose
+        terminal outcome is unknown after a crash, remains owned by the queue.
+        It can then resume without re-appending the human message.
+        """
+
+        committed = set(checkpoint_message_ids)
+        terminal = set(terminal_message_ids)
         current = await self._store.peek_document(self._key(conversation_id))
         if not isinstance(current, dict):
             return self._snapshot(self._empty(conversation_id))
@@ -336,10 +419,18 @@ class ChatQueueStore:
                     continue
                 copy = dict(item)
                 if copy.get("status") == "sending":
-                    changed = True
-                    if str(copy.get("id")) in committed:
+                    message_id = str(copy.get("id"))
+                    if copy.get("cancel_requested"):
+                        # Runtime recovery settles the durable cancellation
+                        # before normal claim reconciliation can resume it.
+                        messages.append(copy)
                         continue
-                    copy["status"] = "queued"
+                    if message_id not in committed:
+                        copy["status"] = "queued"
+                        changed = True
+                    elif message_id in terminal:
+                        changed = True
+                        continue
                 messages.append(copy)
             if changed:
                 document["messages"] = messages
@@ -352,8 +443,8 @@ class ChatQueueStore:
             await self._emit(snapshot)
         return snapshot
 
-    async def discard_claim(self, conversation_id: str, message_id: str) -> dict[str, Any]:
-        """Settle a failed pre-checkpoint claim so later input can proceed."""
+    async def settle_claim(self, conversation_id: str, message_id: str) -> dict[str, Any]:
+        """Remove a claimed message after its turn reaches a terminal state."""
 
         def mutate(current: Any) -> tuple[dict[str, Any], dict[str, Any]]:
             document = dict(current) if isinstance(current, dict) else self._empty(conversation_id)

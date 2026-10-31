@@ -435,20 +435,8 @@
     margin-right: var(--entry-chevron-slot);
 }
 
-.tool-call-entry__narration {
-    margin-bottom: 4px;
-    color: var(--color-text-primary);
-}
-
-/* Plan variant: the current item is the title (shrinks first), then a short
+/* Plan variant: "Todo", the current item (shrinks first), then a short
    inline progress bar and the count. */
-.tool-call-entry__line:has(.tool-call-entry__plan) .tool-call-entry__title {
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
 .tool-call-entry__plan {
     display: inline-flex;
     flex: 0 0 auto;
@@ -802,9 +790,9 @@
    liveAssistantTurnModel.js). Unlike the fully-transparent stream_event
    entries, this gets a subtle status-tinted background since it's a more
    prominent, card-like element (closer to .tool than to a plain entry row).
-   Accent reuses --color-success -- the same green already used for the
-   "Tools"/.tool__status--ok accent elsewhere, so "subagent" reads as a
-   member of the same tool-call family rather than a one-off hue. */
+   Accent is its own --color-subagent (main.css), distinct from tool green,
+   plan blue, A2A teal and Progena's violet, so a delegation reads as a
+   different actor at a glance. */
 /* Header row (badge/tag/role/status) is bare chrome -- no padding or fill of
    its own, exactly like assistant_message/stream_event rows -- so the badge/
    gutter column stays flush with every other entry type and the chain's
@@ -828,13 +816,32 @@
     white-space: normal;
 }
 
+.subagent-card__name {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.subagent-card__header {
+    display: block;
+}
+
+/* The delegated task follows the subagent's name: "repo-manager <task>". */
+.subagent-card__title-summary {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* Compounded with the shared .entry__badge base class (not just the
    modifier class alone) so these deterministically win the cascade --
    chrome-frame.css is imported after chat-panel.css and its .entry__badge
    base rule sets the same color at equal specificity, so a bare
    single-class selector here would silently lose to it by source order. */
 .entry__badge.subagent-card__badge {
-    color: color-mix(in srgb, var(--color-success) 82%, white);
+    color: var(--color-subagent);
 }
 
 .subagent-card__badge--running {
@@ -896,10 +903,9 @@
    live-updated as intermediate status updates stream in. Same card-like
    treatment as .subagent-card (see A2ACallCard.jsx /
    applyA2ACallEvent in liveAssistantTurnModel.js). Accent is
-   --color-accent-secondary (main.css) -- the teal .subagent-card used to
-   own before the green swap above -- still its own hue, distinct from the
-   tool-green family, so the two card families stay visually distinguishable
-   at a glance. */
+   --color-accent-secondary (main.css), its own hue distinct from the
+   tool-green family and the subagent accent, so the card families stay
+   visually distinguishable at a glance. */
 /* See the matching comment on .subagent-card above -- same bare-header
    rationale, applied to the A2A card. */
 .a2a-call-card {
@@ -966,7 +972,6 @@
     font-size: 9px;
 }
 
-.subagent-card__children .message-stream-event-body,
 .a2a-sub-entry__text {
     flex: 1 1 auto;
     min-width: 0;
@@ -979,7 +984,6 @@
 }
 
 .subagent-card__children .message-stream-event-body {
-    height: 1.45em;
     margin-top: 0;
 }
 
@@ -2648,20 +2652,13 @@ pre.mermaid svg {
     color: var(--color-error);
 }
 
-/* Reasoning text under a headed group's header (ReasoningBody in
-   WorkGroup.jsx): clamped, with a right-hand chevron that only appears when
-   the text is actually cut off. Four lines fit 66 of 69 real summaries at
-   the default chat width, so the chevron marks the genuinely long ones. */
+/* A group's reasoning belongs to its expanded header entry and is always
+   complete once that group is open. */
 .work-group__reasoning {
-    --reasoning-lines: 4;
-    display: flex;
-    gap: 8px;
-    align-items: flex-start;
     margin-top: 2px;
 }
 
 .work-group__reasoning-text {
-    flex: 1 1 auto;
     min-width: 0;
     color: var(--color-text-muted);
 }
@@ -2674,35 +2671,9 @@ pre.mermaid svg {
     margin-bottom: 0;
 }
 
-.work-group__reasoning:not(.work-group__reasoning--open) .work-group__reasoning-text {
-    display: -webkit-box;
-    overflow: hidden;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: var(--reasoning-lines);
-}
-
-.work-group__reasoning-toggle {
-    display: flex;
-    flex: 0 0 auto;
-    padding: 6px 0;
-    color: var(--color-text-primary);
-    background: none;
-    border: 0;
-    cursor: pointer;
-}
-
-.work-group__reasoning-toggle:focus {
-    outline: none;
-}
-
-.work-group__reasoning-toggle:focus-visible .tool-event-disclosure__chevron {
-    color: var(--color-accent);
-}
-
-.work-group__reasoning--open .tool-event-disclosure__chevron {
-    transform: rotate(45deg);
-}
-
+/* Compound the work-group selectors with .entry__badge so they win over
+   chrome-frame.css's later base `.entry__badge { color: white }` rule. */
+.entry__badge.work-group__badge,
 .entry__badge.work-group__badge--done {
     color: var(--color-text-muted);
 }

@@ -77,6 +77,25 @@ async def test_execute_rejects_invalid_manual_payload_before_enqueueing():
     state_manager.request_workflow_run.assert_not_awaited()
 
 
+async def test_execute_applies_manual_defaults_before_validating_and_enqueueing():
+    state_manager = AsyncMock()
+    definition = _manual_definition()
+    definition["graph"]["nodes"]["manual"]["output_schema"] = {
+        "type": "object",
+        "required": ["n"],
+        "properties": {"n": {"type": "integer", "default": 3}},
+    }
+    state_manager.get_workflow_definition.return_value = definition
+    state_manager.get_preferences_config.return_value = {}
+
+    with patch("src.progena.tools.run_workflow.get_current_thread_id", return_value=None):
+        result = await RunWorkflowTool().execute(_context(state_manager, {"workflow_id": "manual"}))
+
+    assert result.success
+    state_manager.request_workflow_run.assert_awaited_once()
+    assert state_manager.request_workflow_run.await_args.kwargs["input"] == {"n": 3}
+
+
 async def test_execute_queues_manual_trigger_payload_without_active_ancestry():
     state_manager = AsyncMock()
     state_manager.get_workflow_definition.return_value = _manual_definition()
@@ -88,7 +107,10 @@ async def test_execute_queues_manual_trigger_payload_without_active_ancestry():
     assert result.success
     assert (result.data or {})["queued"] is True
     state_manager.request_workflow_run.assert_awaited_once()
-    assert state_manager.request_workflow_run.await_args.kwargs["input"] == {"run_id": "round-a"}
+    assert state_manager.request_workflow_run.await_args.kwargs["input"] == {
+        "run_id": "round-a",
+        "round_count": 3,
+    }
     assert state_manager.request_workflow_run.await_args.kwargs["ancestry"] == []
     result_data = result.data or {}
     assert re.fullmatch(r"workflow_run_[0-9a-f]{12}", result_data["run_id"])

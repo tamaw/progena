@@ -41,6 +41,16 @@ The id is the object key, not a field inside the value:
   ISO8601) — leave the other `null`.
 - `created_at`, `last_run`, `next_run` are runtime-owned: preserve the existing value
   on an edit, never invent one. `next_run` is computed by the scheduler at read time.
+- `conversation_id` is the chat the task reports into and is **runtime-owned**. A new
+  task created while you are answering in a chat is delivered into that chat
+  automatically, as a turn with the chat's full context — omit the key. Write
+  `"conversation_id": null` on a new task only when the user wants it standalone (it
+  then runs on its own thread and is not shown in any chat). Never set it to an id and
+  never change it on an existing task; the write is rejected. Preserve it verbatim on
+  every edit. To move a task to another chat or to standalone, tell the user to change
+  its destination on the Schedules page.
+- Archiving a chat pauses its tasks and deleting a chat deletes them; do not resume a
+  paused task that belongs to an archived chat.
 
 Rules enforced on every write (a violating edit is rejected and nothing changes):
 top level must be a JSON object; every entry value must be an object with a

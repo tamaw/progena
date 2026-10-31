@@ -10,7 +10,7 @@ from langgraph.runtime import Runtime
 from src.progena.orchestration.nodes.context import HeartbeatContext
 from src.progena.orchestration.state import BackgroundTaskEntry, ProgenaState
 from src.progena.runtime.instance import RUNTIME_INSTANCE_ID
-from src.progena.schedules.dispatch import SCHEDULED_INPUT_PREFIX
+from src.progena.schedules.dispatch import SCHEDULED_INPUT_PREFIX, conversation_block_reason
 from src.progena.utils import utcnow
 
 
@@ -89,6 +89,43 @@ async def cycle_setup_node(
     scheduled_schedule_id = str((input_metadata or {}).get("schedule_id") or "").strip() or None
     scheduled_run_id = str((input_metadata or {}).get("schedule_run_id") or "").strip() or None
     current_thread_id = str(state.get("thread_id") or "").strip()
+    scheduled_conversation_id = (
+        str((input_metadata or {}).get("conversation_id") or "").strip() or None
+    )
+    if scheduled_run_id and scheduled_conversation_id:
+        # The chat may have been archived or deleted while this run was queued.
+        block_reason = await conversation_block_reason(
+            runtime.context.state_manager, scheduled_conversation_id
+        )
+        if block_reason:
+            now = utcnow().isoformat()
+            await runtime.context.state_manager.update_schedule_run(
+                scheduled_run_id,
+                {
+                    "status": "error",
+                    "result_status": "skipped",
+                    "error": block_reason,
+                    "updated_at": now,
+                    "completed_at": now,
+                },
+            )
+            if scheduled_schedule_id:
+                await runtime.context.state_manager.update_schedule_entry(
+                    scheduled_schedule_id,
+                    {"last_run_status": "skipped", "updated_at": now},
+                )
+            return {
+                "queued_input": None,
+                "current_input": None,
+                "current_input_role": None,
+                "current_input_metadata": None,
+                "requested_thread_id": None,
+                "is_isolated_thread": False,
+                "is_scheduled_input": False,
+                "scheduled_schedule_id": None,
+                "scheduled_run_id": None,
+                "scheduled_message": None,
+            }
     is_scheduled_input = user_input.startswith(SCHEDULED_INPUT_PREFIX)
     scheduled_message = (
         user_input[len(SCHEDULED_INPUT_PREFIX) :].strip() if is_scheduled_input else None

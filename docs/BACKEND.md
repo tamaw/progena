@@ -222,7 +222,7 @@ No additional EventSource, polling, database notification channel, or independen
 compaction ledger is used. Summary timestamps describe checkpoint commits, not
 exact generation duration; no token-saving percentage is inferred.
 
-### Pending chat messages and safe-boundary delivery
+### Pending chat messages and cancel-and-send
 
 The runtime owns a durable, revisioned input queue per conversation. The backend
 is a gateway; it never edits graph checkpoints to deliver user instructions.
@@ -245,38 +245,40 @@ commands emit no success event. The client requests a separately correlated
 snapshot to recover. Snapshots must not regress an already-observed revision;
 canonical reconnect requests fresh state rather than relying on bounded replay.
 
-Normal follow-ups wait for the current invocation to finish. **Send now** marks
-the selected input for the next safe root-model boundary, without cancellation.
-The middleware inserts a native, stable-ID `HumanMessage` after outstanding tool
-results, or loops back to the model after an in-flight final answer completes.
-Multiple immediate selections retain server-accepted order; remaining normal
-messages retain their queue order. Delivery does not undo tool side effects or
-inject instructions into independently running delegated agents.
+Normal follow-ups wait for the active invocation to finish. **Send now** persists
+the selected input's priority, requests cancellation of the exact current root
+execution, and starts the selected input as a separate turn only after that
+execution releases `ConversationTurnGate`. Partial output keeps the ordinary
+`user_cancelled` interruption marker. Replaying a command, or selecting an
+already-prioritized item again, cannot cancel a newer execution. Pending inputs
+retain their server-accepted priority/FIFO ordering. Cancellation does not undo
+completed tool side effects or guarantee that independent remote delegates stop.
 
-Claiming and queue mutations are atomic. Checkpointed human-message identities
-resolve interrupted claims on restart: committed inputs are not executed again,
-and uncommitted inputs remain recoverable. Claimed messages cannot be deleted or
-reordered. Queue execution stays inside the existing per-conversation gate.
+Claiming and queue mutations are atomic. Claims remain durable until a terminal
+outcome is established: a checkpointed human message alone is not completion.
+Startup resumes a claimed thread's native pending graph with no duplicate human
+input; completed checkpoint segments are settled without replaying finished work.
+Uncommitted claims return to the queue. Claimed messages cannot be deleted or
+reordered. Different conversations do not share an execution gate.
 
-Request-scoped `chat_queue_boundary` content events separate the preceding answer,
-the queued user input and the following answer within one running invocation.
-Their structured metadata preserves message/request identity, text and attachments;
-it is not a truncated tool-output preview. Queue changes and execution lifecycle
-use the existing canonical event lane, with no polling or additional EventSource.
+Durable enqueue is not execution completion. Acceptance of queued B while A runs
+does not replace A's content owner. Actual queued execution publishes canonical
+response lifecycle with `queue_execution: true`, `content_request_id` equal to
+B's request ID, and `queued_message: {id,text,attachments}` on started. B streams
+through its own existing `/api/ui/responses/{request_id}/stream` and has its own
+cancellation target. Late A terminal events cannot clear B's active state.
+Terminal history reconciliation follows the session merge and retains native
+completed, failed, or cancelled status. Browser display projections omit the
+model-only attachment context suffix while preserving attachment descriptors.
 
-Logical request identity is separate from content-stream ownership.
-`content_request_id`, when present on canonical response lifecycle events, names
-the executing content request; `request_id` still correlates the queued input.
-Queuing or steering B inside active request A must not detach a spectator from
-A's content stream. Durable enqueue is not execution completion. Deferred turns
-publish actual started/terminal lifecycle events, with terminal history reads
-ordered after the session merge. Selected conversations reconcile on deferred
-completion even when a fast started/terminal pair is batched into one render.
-Queue execution lifecycle events carry `queue_execution: true`; this discriminator
-is independent of the optional content owner. A successful queued terminal requests
-canonical transcript reconciliation even if local handoff text changed while that
-snapshot was loading. Thread and reconciliation-token guards still reject stale
-results after navigation or a superseding reconciliation.
+Internally the gateway follows deferred output on
+`GET /v1/responses/{response_id}/stream`, with bounded replay and a `cursor`
+query parameter or `Last-Event-ID` header. Slow followers reconnect from their
+last consumed frame; an expired cursor produces explicit resynchronization,
+not a truncated successful reply. Gateway restart discovers persisted sending
+queues and restores their response relays. Queue snapshots/lifecycle continue
+to use the existing canonical lane; no polling or additional app-lifetime
+EventSource is introduced.
 
 ### Message output usage and terminal work state
 
@@ -289,13 +291,10 @@ input tokens, tool-result bytes or delegated-agent usage. Reasoning is included
 in output, not added to it. Explicit zero remains zero; missing usage in any
 contributing call makes the aggregate unknown. Total-only provider metadata is
 not a substitute for output usage.
-Messages may carry `interruption_reason`: `user_cancelled` for cancellation or
-`new_message` for an explicit Send now boundary. Empty interrupted segments remain
-visible and partial output is preserved. This presentation reason does not change
-native response status or turn safe-boundary delivery into cancellation.
-Native queued input stores the explicit `progena_queue_send_now` flag alongside
-its queue request identity; ordinary queued input does not mark the prior reply.
-
+Cancelled messages also carry `interruption_reason: "user_cancelled"`, including
+empty cancelled turns. The frontend renders this as a terminal timeline disclosure
+rather than appending cancellation prose. Partial output and native cancelled
+status are preserved.
 
 Reasoning-only checkpoint tails remain visible even without tool calls or answer
 text. They retain reported aggregate output but do not invent final-answer usage
@@ -480,7 +479,7 @@ responses never are.
 | Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs` | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow.runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed` |
 | Kanban and tasks | `GET /api/ui/kanban`; `POST /api/ui/kanban/cards`; `PATCH/DELETE /api/ui/kanban/cards/{card_id}`; `GET/PUT /api/ui/tasks/{card_id}/content`; `POST /api/ui/tasks/{card_id}/activity` | Canonical `ui.event` envelopes: `kanban.snapshot`, `task.content.updated`, `task.activity.updated` |
 | Widgets and MCP | `GET /api/ui/widgets`; `GET /api/ui/mcp`; `GET /api/ui/mcp/content`; `PATCH/DELETE /api/ui/widgets/{widget_id}`; `POST /api/ui/widgets/{widget_id}/refresh` | Canonical `ui.event` envelopes: `widgets.updated`, `mcp.snapshot` (lean list, no per-tool/log detail), `mcp.server.detail.updated` (full tools/logs for one server) |
-| Schedules and event widgets | `GET/POST /api/ui/schedules`; `POST /api/ui/schedules/{schedule_id}/trigger`; `POST /api/ui/events` | Canonical `ui.event` envelopes: `schedule.snapshot`, `widgets.updated` |
+| Schedules and event widgets | `GET/POST /api/ui/schedules`; `POST /api/ui/schedules/{schedule_id}/trigger`; `POST /api/ui/events` | Canonical `ui.event` envelopes: `schedule.snapshot`, `widgets.updated`. `POST /schedules` and `PATCH /widgets/schedule:{id}` accept `conversation_id` (the destination chat; `null`/absent on create is standalone, present on patch retargets). Unknown chats are 404; archived chats are 409, including re-enabling a schedule whose chat is archived. Archiving a chat pauses its schedules and deleting it deletes them. Chat history messages carry `scheduled: {schedule_id, run_id}` on the input a schedule injected, and `scheduled_response` events are scoped (`session_id`/`thread_id`) to the destination chat. |
 | Instructions | `GET /api/ui/instructions`; `GET/PUT /api/ui/instructions/content`; `GET /api/ui/instructions/revisions`; `GET /api/ui/instructions/revisions/{id}`; `POST /api/ui/instructions/revisions/{id}/restore` | `instructions.snapshot` (front matter summaries), `instruction.loaded`, `instruction.revisions.loaded`, `instruction.revision.loaded`. Only `progena/` instructions are editable (403 otherwise); invalid front matter or changed `variables` is a 400. |
 | Marketplaces and plugins | `GET/PUT /api/ui/marketplaces`; `GET /api/ui/marketplaces/{name}/plugins`; `GET/POST /api/ui/plugins`; `DELETE /api/ui/plugins/{marketplace}/{plugin}` | Canonical `ui.event` envelopes: `marketplaces.snapshot`, `plugins.snapshot`, request-scoped `plugin.catalog.snapshot`. Skills are no longer authored directly — they ship inside installed marketplace plugins. |
 | Alerts | `GET /api/ui/alerts`; `POST /api/ui/alerts/viewed`; `POST /api/ui/alerts/{alert_id}/dismiss`; `POST /api/ui/alerts/{alert_id}/respond` | Canonical `ui.event` envelopes: `alerts.updated` and `alert` for independently generated alerts |
@@ -613,10 +612,11 @@ This work runs off the async request loop. Measure large installations before
 adding a checkpoint-derived projection; current request cost scales with
 retained message history, not just the selected range.
 
-Profiles expose optional public/PATCH `pricing` with `currency` and
-`input_per_million`, `cached_input_per_million`, `output_per_million` decimal
-strings. All rates must be finite/nonnegative; zero is valid; PATCH `null`
-removes pricing. Profiles may also carry an optional positive-integer
+Profiles expose optional top-level `currency`, `input_per_million`,
+`cached_input_per_million` and `output_per_million` (decimal strings) in public
+snapshots and PATCH bodies. The four are all-or-nothing: none means unpriced, a
+partial set is rejected, and PATCH `null` on each removes them. All rates must
+be finite/nonnegative; zero is valid. Profiles may also carry an optional positive-integer
 `context_window`; absent capacity is never inferred from a model name. Cached-input
 tokens use the cache rate instead of the input rate. Unknown cache detail is
 labelled as an estimate charged at the input rate; unknown pricing is unpriced,
@@ -638,11 +638,7 @@ USD preset, verified against the [Azure pricing page](https://azure.microsoft.co
 on 2026-10-20: input `0.25`, cached input `0.025`, output `2.00` per million
 tokens. Displayed rounded prices are not used for calculation. This preset
 does not establish prices for other models, regions or deployment tiers.
-An absent catalog is seeded with this pricing only when
-`PROGENA_MODEL_DEFAULT_MODEL=gpt-5-mini` and
-`PROGENA_MODEL_DEFAULT_PRICING_TIER=global_standard` are both explicit.
-Existing catalogs are never silently repriced; arbitrary deployment names
-remain unpriced until configured.
+Arbitrary deployment names remain unpriced until configured.
 
 
 ## Local development

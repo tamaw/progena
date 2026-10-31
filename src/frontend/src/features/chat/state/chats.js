@@ -138,11 +138,12 @@ function removeChatRuntimeId(ids, threadId) {
   return ids.filter((id) => id !== threadId);
 }
 
-// A queued response can run within an already-open response transport. Its
-// lifecycle carries the queued request id while content remains owned by that
-// outer request, so tracking must never displace the active stream owner.
 function responseRequestIdFor(payload) {
-  if (typeof payload?.content_request_id === 'string' && payload.content_request_id) {
+  if (
+    (payload?.queued === true || payload?.queue_execution === true)
+    && typeof payload?.content_request_id === 'string'
+    && payload.content_request_id
+  ) {
     return payload.content_request_id;
   }
   return typeof payload?.request_id === 'string' && payload.request_id ? payload.request_id : null;
@@ -333,6 +334,12 @@ export const eventHandlers = {
     beginResponseTracking(state.chatRuntime, requestId, threadId);
     state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
     state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
+    // The restart interruption describes the conversation's latest turn. A new
+    // turn supersedes it; the interrupted turn itself keeps its own row once
+    // the canonical transcript reports it `interrupted`.
+    if (state.chats.active.threadId === threadId && state.chats.active.detail?.interruption) {
+      state.chats.active.detail.interruption = null;
+    }
     // Tracked even for the thread this tab is currently viewing: a generation
     // started elsewhere still needs to be discoverable so a spectator stream
     // can attach to it.
