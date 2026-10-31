@@ -190,11 +190,15 @@ class CheckpointChatOpenAI(ChatOpenAI):
     def _replace_chatgpt_clients(self, access_token: str) -> None:
         """Swap both SDK clients before retrying an unauthorized request."""
         self._chatgpt_access_token = access_token
+        options = {
+            "api_key": access_token,
+            "default_headers": {"Authorization": f"Bearer {access_token}"},
+        }
         if self.root_client is not None:
-            self.root_client = self.root_client.with_options(api_key=access_token)
+            self.root_client = self.root_client.with_options(**options)
             self.client = self.root_client.chat.completions
         if self.root_async_client is not None:
-            self.root_async_client = self.root_async_client.with_options(api_key=access_token)
+            self.root_async_client = self.root_async_client.with_options(**options)
             self.async_client = self.root_async_client.chat.completions
 
     def _refresh_chatgpt_after_unauthorized(self) -> bool:

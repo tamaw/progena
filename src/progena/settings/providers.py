@@ -910,6 +910,8 @@ class ProviderRepository:
                     credential.refresh_available_at is not None
                     and now < credential.refresh_available_at
                 ):
+                    if rejected_token is None and credential.access_token_expires_at > now:
+                        return credential.access_token
                     raise ValueError("ChatGPT access token is expiring before it can be refreshed")
                 try:
                     refreshed_payload = refresh_token_response(

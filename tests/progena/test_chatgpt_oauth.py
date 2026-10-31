@@ -5,6 +5,7 @@ import hashlib
 import stat
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import urlopen
 
@@ -12,8 +13,9 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from src.progena.settings import chatgpt_cli
+from src.progena.settings import chatgpt_cli, providers
 from src.progena.settings import chatgpt_oauth as oauth
+from src.progena.settings.providers import ProviderRepository
 
 
 @pytest.fixture
@@ -261,3 +263,49 @@ def test_wrong_callback_state_never_exchanges_code(monkeypatch):
             agent_name="Progena",
             timeout_seconds=5,
         )
+
+
+@pytest.mark.parametrize(
+    ("expires_after", "rejected_token", "returns_bearer"),
+    [
+        (timedelta(seconds=90), None, True),
+        (timedelta(seconds=-1), None, False),
+        (timedelta(seconds=90), "access-token", False),
+    ],
+)
+def test_access_token_uses_unexpired_bearer_when_refresh_is_temporarily_unavailable(
+    monkeypatch, expires_after, rejected_token, returns_bearer
+):
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    credential = oauth.ChatGPTCredential(
+        email="test@example.invalid",
+        issuer=oauth.CHATGPT_ISSUER,
+        subject="subject-one",
+        client_id="oaiapp_test",
+        ext_agent_host_id="host-id",
+        id_token="id-token",
+        access_token="access-token",
+        refresh_token="refresh-token",
+        token_type="Bearer",
+        expires_in=3600,
+        scopes=oauth.REQUIRED_SCOPES,
+        saved_at=now - timedelta(minutes=1),
+        access_token_expires_at=now + expires_after,
+        refresh_available_at=now + timedelta(seconds=30),
+    )
+    repository = object.__new__(ProviderRepository)
+    repository._pool = MagicMock()
+    monkeypatch.setattr(repository, "chatgpt_host_id", lambda: "host-id")
+    monkeypatch.setattr(repository, "_get_row", lambda *_args, **_kwargs: {"kind": "chatgpt"})
+    monkeypatch.setattr(
+        repository,
+        "_credential_from_row",
+        lambda *_args, **_kwargs: credential,
+    )
+    monkeypatch.setattr(providers, "_utc_now", lambda: now)
+
+    if returns_bearer:
+        assert repository._chatgpt_access_token("provider-1") == credential.access_token
+    else:
+        with pytest.raises(ValueError, match="expiring before it can be refreshed"):
+            repository._chatgpt_access_token("provider-1", rejected_token=rejected_token)
