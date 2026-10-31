@@ -168,7 +168,7 @@ export function buildWorkSteps(workItems) {
       steps.push({
         id: `step-${item.id}`,
         kind: 'plan',
-        title: 'Plan',
+        title: 'Todo',
         detail: typeof current?.content === 'string' ? current.content : '',
         status: 'success',
         durationMs: null,
@@ -218,8 +218,14 @@ export function todoProgress(todos) {
  * (`todos_update`) carries no call id; it is the output of the latest
  * write_todos call that has none yet, so it becomes that call's `plan`.
  * Other rows pass through unchanged.
+ *
+ * Text the agent wrote just before a call (its `commentary`) is Progena
+ * speaking, so it becomes its own `{ kind: 'tool_narration' }` row ahead of
+ * the call rather than part of the call's entry. Calls in
+ * `hiddenToolCallIds` (a `task` call whose subagent card is shown) render
+ * only that narration; the card stands in for the call itself.
  */
-export function mergeToolCallItems(items) {
+export function mergeToolCallItems(items, { hiddenToolCallIds } = {}) {
   const merged = [];
   const indexByKey = new Map();
   for (const item of Array.isArray(items) ? items : []) {
@@ -242,12 +248,27 @@ export function mergeToolCallItems(items) {
     const existing = indexByKey.get(key);
     if (existing === undefined) {
       indexByKey.set(key, merged.length);
-      merged.push({ kind: 'tool_call', id: `call-${key}`, start: null, end: null, plan: null, [slot]: item });
+      merged.push({ kind: 'tool_call', id: `call-${key}`, key, start: null, end: null, plan: null, [slot]: item });
     } else {
       merged[existing] = { ...merged[existing], [slot]: item };
     }
   }
-  return merged;
+  return merged.flatMap((entry) => {
+    if (entry.kind !== 'tool_call') return [entry];
+    const { key, ...call } = entry;
+    const commentary = entry.start?.event?.metadata?.commentary;
+    const narration = typeof commentary === 'string' && commentary.trim()
+      ? [{ kind: 'tool_narration', id: `narration-${key}`, text: commentary.trim() }]
+      : [];
+    return hiddenToolCallIds?.has(key) ? narration : [...narration, call];
+  });
+}
+
+/** Tool call ids whose `task` lifecycle a visible subagent card represents. */
+export function subagentCardToolCallIds(cardItems) {
+  return new Set((Array.isArray(cardItems) ? cardItems : [])
+    .filter((item) => item?.kind === 'subagent' && typeof item.toolCallId === 'string' && item.toolCallId)
+    .map((item) => item.toolCallId));
 }
 
 function toolCallName(entry) {

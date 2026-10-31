@@ -6,11 +6,12 @@
  *
  * Text the agent wrote just before the call (its commentary, see
  * claimToolCommentary in liveAssistantTurnModel.js) is narration addressed to
- * the user, so it renders in full above that line rather than inside it.
+ * the user, so it renders in full as its own Progena row (ToolNarrationEntry)
+ * above the call, and the call's own dot stays beside its line.
  *
  * A write_todos call that produced a plan update renders as that plan
- * instead: the current item, an inline progress bar and "n/total", opening
- * to the checklist.
+ * instead: "Todo", the current item, an inline progress bar and
+ * "n/total", opening to the checklist.
  */
 
 import { memo, useMemo } from 'react';
@@ -60,12 +61,15 @@ function PlanLine({ plan, time, children }) {
   const hasBody = todos.length > 0 || Boolean(children);
   return (
     <EntryLine
-      title={current?.content || 'Plan'}
+      title="Todo"
       text={(
-        <span className="tool-call-entry__plan">
-          <TodoProgress todos={todos} />
-          <span className="muted">{completed}/{total}</span>
-        </span>
+        <>
+          {current?.content && <span className="tool-call-entry__summary">{current.content}</span>}
+          <span className="tool-call-entry__plan">
+            <TodoProgress todos={todos} />
+            <span className="muted">{completed}/{total}</span>
+          </span>
+        </>
       )}
       trailing={<Trailing time={time} />}
     >
@@ -98,8 +102,6 @@ const ToolCallEntry = memo(function ToolCallEntry({ item }) {
   const badgeClass = status === 'error'
     ? 'entry__badge--err'
     : item.plan ? 'entry__badge--plan' : 'entry__badge--tool';
-  const commentary = typeof start?.metadata?.commentary === 'string' ? start.metadata.commentary.trim() : '';
-  const narrationHtml = useMemo(() => (commentary ? renderSafeMarkdown(commentary) : ''), [commentary]);
 
   const view = useMemo(() => buildToolCallView({
     toolName,
@@ -142,11 +144,23 @@ const ToolCallEntry = memo(function ToolCallEntry({ item }) {
         <div className="entry__gutter" aria-hidden="true">
           <span className={`entry__badge ${badgeClass}${status === 'running' ? ' work-step__badge--running' : ''}`} />
         </div>
+        <div className="entry__main">{line}</div>
+      </article>
+    </div>
+  );
+});
+
+/** Progena's own words before a tool call, as a row of its own. */
+export const ToolNarrationEntry = memo(function ToolNarrationEntry({ text }) {
+  const html = useMemo(() => renderSafeMarkdown(text), [text]);
+  return (
+    <div className="chat-entry-chain--item">
+      <article className="message-stream-event chat-event-entry entry entry--chain-item tool-call-entry__narration-entry" role="listitem">
+        <div className="entry__gutter" aria-hidden="true">
+          <span className="entry__badge entry__badge--assistant" />
+        </div>
         <div className="entry__main">
-          {narrationHtml && (
-            <div className="message-content tool-call-entry__narration" dangerouslySetInnerHTML={{ __html: narrationHtml }} />
-          )}
-          {line}
+          <div className="message-content tool-call-entry__narration" dangerouslySetInnerHTML={{ __html: html }} />
         </div>
       </article>
     </div>

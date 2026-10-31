@@ -5,9 +5,11 @@
  * stable task identity, so concurrent delegates stay independent and an
  * approval pause can resume the same card.
  *
- * The body shows only the latest CARD_SUMMARY_LINES chain lines (task
- * summary, streamed text, nested tool calls) with an "N earlier" toggle for
- * the rest, so every concurrent card keeps the same small footprint. The
+ * The header reads "<subagent> <task summary>" in the subagent colour; it
+ * stands in for the `task` call itself, whose plain tool row is hidden (see
+ * mergeToolCallItems). The body shows only the latest CARD_SUMMARY_LINES
+ * chain lines (streamed text, nested tool calls) with an "N earlier" toggle
+ * for the rest, so every concurrent card keeps the same small footprint. The
  * header stays bare chrome, styled like any other top-level entry -- the
  * tinted "card" look lives on the body.
  *
@@ -30,21 +32,6 @@ import { selectRecentLines } from '../models/workGroupModel';
 import useRunningDisclosure from '../hooks/useRunningDisclosure';
 import EarlierLinesToggle from './EarlierLinesToggle';
 import ConversationSummaryMarker, { ConversationSummaryActivity } from './ConversationSummaryMarker';
-
-const SubagentTaskSummaryEntry = memo(function SubagentTaskSummaryEntry({ taskSummary, isLast }) {
-  return (
-    <div className={`entry subagent-child subagent-card__task-summary-entry ${isLast ? 'entry--chain-end' : 'entry--chain-item'}`}>
-      <div className="entry__gutter" aria-hidden="true">
-        <span className="entry__badge subagent-card__badge subagent-card__badge--submitted" />
-      </div>
-      <div className="entry__main">
-        <div className="entry__head">
-          <div className="message-stream-event-body subagent-card__task-summary muted">{taskSummary}</div>
-        </div>
-      </div>
-    </div>
-  );
-});
 
 // One nested tool call = one mini entry in the chain, the same "mini card/
 // event" treatment A2ACallCard's A2ASubEntry gives each status update:
@@ -170,10 +157,7 @@ const SubagentCard = memo(function SubagentCard({ item, summaryMarkers = [], sum
   const statusLabel = item.status === 'interrupted'
     ? 'Awaiting approval'
     : (item.status === 'cancelled' ? 'Cancelled' : '');
-  const lines = item.taskSummary
-    ? [{ kind: 'task_summary', id: 'task-summary' }, ...entries]
-    : entries;
-  const { visibleLines, hiddenCount } = selectRecentLines(lines, showAll);
+  const { visibleLines, hiddenCount } = selectRecentLines(entries, showAll);
   const error = item.status === 'error' && item.error
     ? <div className="subagent-card__error">{item.error}</div>
     : null;
@@ -185,7 +169,10 @@ const SubagentCard = memo(function SubagentCard({ item, summaryMarkers = [], sum
       </div>
       <div className="entry__main">
         <button type="button" className="entry__head entry-toggle" aria-expanded={open} onClick={toggle}>
-          <span className="entry__role">{item.subagentName || 'subagent'}</span>
+          <span className="entry__role subagent-card__name">{item.subagentName || 'subagent'}</span>
+          {item.taskSummary && (
+            <span className="subagent-card__title-summary" title={item.taskSummary}>{item.taskSummary}</span>
+          )}
           {statusLabel && <span className="muted">{statusLabel}</span>}
           {failedToolCount > 0 && <span className="work-group__failed">{failedToolCount} failed</span>}
           <span className="msg__head-trailing">
@@ -211,9 +198,6 @@ const SubagentCard = memo(function SubagentCard({ item, summaryMarkers = [], sum
               <div className="subagent-card__children">
                 {visibleLines.map((line, index) => {
                   const isLast = index === visibleLines.length - 1;
-                  if (line.kind === 'task_summary') {
-                    return <SubagentTaskSummaryEntry key={line.id} taskSummary={item.taskSummary} isLast={isLast} />;
-                  }
                   if (line.kind === 'tool') {
                     return <SubagentChild key={line.id} child={line} isLast={isLast} />;
                   }

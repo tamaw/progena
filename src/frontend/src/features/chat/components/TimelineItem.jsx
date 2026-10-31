@@ -13,6 +13,8 @@
  *   - `{ kind: 'a2a_call', ... }` — the remote agent's own submitted/
  *     working/completed self-reporting for an A2A tool invocation, alongside
  *     (not instead of) its plain lifecycle rows above
+ *   - `{ kind: 'tool_call' | 'tool_narration', ... }` — a merged tool call
+ *     and the agent's narration before it (see mergeToolCallItems)
  */
 
 import { Fragment, memo } from 'react';
@@ -25,11 +27,14 @@ import A2ACallCard from './A2ACallCard';
 import NormalToolContent from './NormalToolContent';
 import AssistantMessageEntry from './AssistantMessageEntry';
 import { selectAgentName } from '../../settings/state/preferences';
-import ToolCallEntry from './ToolCallEntry';
+import ToolCallEntry, { ToolNarrationEntry } from './ToolCallEntry';
 
 const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities, showResponseStatus, continuesAfterInterruption = false }) {
   if (item.kind === 'tool_call') {
     return <ToolCallEntry item={item} />;
+  }
+  if (item.kind === 'tool_narration') {
+    return <ToolNarrationEntry text={item.text} />;
   }
   return <TimelineRow
     item={item}

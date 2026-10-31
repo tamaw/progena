@@ -47,11 +47,13 @@ const ReasoningBody = memo(function ReasoningBody({ event }) {
 
 const WorkEntries = memo(function WorkEntries({
   items,
+  cardToolCallIds,
   onRegenerate,
   summaryMarkers,
   summaryActivities,
 }) {
-  return mergeToolCallItems(items).map((item, index) => (
+  const hiddenToolCallIds = useMemo(() => new Set(cardToolCallIds ? cardToolCallIds.split('\n') : []), [cardToolCallIds]);
+  return mergeToolCallItems(items, { hiddenToolCallIds }).map((item, index) => (
     <TimelineItem
       key={timelineItemKey(item, index)}
       item={item}
@@ -87,6 +89,9 @@ const WorkGroup = memo(function WorkGroup({
   terminal = false,
   responseStatus,
   onRegenerate,
+  // Newline-joined ids of `task` calls shown as subagent cards; a string so
+  // this memoized group only re-renders when the set actually changes.
+  cardToolCallIds = '',
   summaryMarkers,
   summaryActivities,
 }) {
@@ -156,6 +161,7 @@ const WorkGroup = memo(function WorkGroup({
       {expanded && (
         <WorkEntries
           items={rest}
+          cardToolCallIds={cardToolCallIds}
           onRegenerate={onRegenerate}
           summaryMarkers={summaryMarkers}
           summaryActivities={summaryActivities}

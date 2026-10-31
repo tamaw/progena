@@ -2,7 +2,7 @@
 import React from 'react';
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import ToolCallEntry from '@frontend/features/chat/components/ToolCallEntry';
+import ToolCallEntry, { ToolNarrationEntry } from '@frontend/features/chat/components/ToolCallEntry';
 
 if (typeof globalThis.React === 'undefined') {
   globalThis.React = React;
@@ -13,35 +13,36 @@ function row(id, eventType, metadata) {
 }
 
 describe('ToolCallEntry', () => {
-  it('shows narration in full above the call line, which summarises the input and opens to input and output boxes', () => {
-    const narration = 'I’ll check the **config** first, then decide whether the saved routine needs another pass before relaunching it.';
+  it('summarises the input on the call line and opens to input and output boxes', () => {
     const html = renderToStaticMarkup(React.createElement(ToolCallEntry, {
       item: {
         kind: 'tool_call',
         id: 'call-c',
-        start: row('s', 'tool_start', { args_preview: { path: '/config/a.json' }, commentary: narration }),
+        start: row('s', 'tool_start', { args_preview: { path: '/config/a.json' } }),
         end: row('e', 'tool_result', { result_preview: 'line one', duration_ms: 12 }),
       },
     }));
 
-    expect(html.match(/entry__role/g)).toHaveLength(1);
-    const narrationPos = html.indexOf('tool-call-entry__narration');
     const linePos = html.indexOf('tool-call-entry__line');
-    expect(narrationPos).toBeGreaterThan(-1);
-    // Outside the disclosure, so it shows without opening the call.
-    expect(narrationPos).toBeLessThan(html.indexOf('<details'));
-    expect(html.slice(narrationPos, linePos)).toContain('<strong>config</strong>');
-    expect(html.slice(narrationPos, linePos)).toContain('before relaunching it.');
     const summary = html.slice(linePos, html.indexOf('</summary>'));
     expect(summary).toContain('Read File');
     expect(summary).toContain('/config/a.json');
-    expect(summary).not.toContain('check the');
     const inputPos = html.indexOf('tool-io__label">Input');
     const outputPos = html.indexOf('tool-io__label">Output');
     expect(outputPos).toBeGreaterThan(inputPos);
     expect(html.slice(inputPos, outputPos)).toContain('/config/a.json');
     expect(html.slice(outputPos)).toContain('line one');
     expect(html).toContain('12ms');
+  });
+
+  it("renders narration in full as Progena's own row", () => {
+    const html = renderToStaticMarkup(React.createElement(ToolNarrationEntry, {
+      text: 'I’ll check the **config** first, then decide whether the saved routine needs another pass before relaunching it.',
+    }));
+    expect(html).toContain('entry__badge--assistant');
+    expect(html).toContain('<strong>config</strong>');
+    expect(html).toContain('before relaunching it.');
+    expect(html).not.toContain('<details');
   });
 
   it('marks a call that has not finished as running and a failed call as an error', () => {
@@ -80,8 +81,10 @@ describe('ToolCallEntry', () => {
       },
     }));
     expect(html).not.toContain('Write Todos');
+    expect(html).toMatch(/tool-call-entry__title">Todo</);
     // Nothing in progress: the next pending item is the current one.
-    expect(html).toMatch(/tool-call-entry__title">Write the mapping</);
+    expect(html).toMatch(/tool-call-entry__summary">Write the mapping</);
+    expect(html).toContain('entry__badge--plan');
     expect(html).toContain('1/2');
     expect(html).toContain('todo-panel__item--completed');
   });
