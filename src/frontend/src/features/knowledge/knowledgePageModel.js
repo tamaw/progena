@@ -2,10 +2,14 @@
 // Kept free of React so the filter/search/sort/group logic is unit-testable
 // in isolation, mirroring tasksPageModel.js.
 
+// Indexed is the quiet default (hollow ring); indexing is green because new
+// data is arriving; a missing/unrecognised status is amber rather than
+// pretending indexing is underway.
 export const KB_STATUS_META = {
-  indexed: { label: 'Indexed', tone: 'ok' },
-  indexing: { label: 'Indexing', tone: 'warning' },
+  indexed: { label: 'Indexed', tone: 'idle' },
+  indexing: { label: 'Indexing', tone: 'ok' },
   failed: { label: 'Failed', tone: 'error' },
+  unknown: { label: 'Unknown', tone: 'warning' },
 };
 
 // Left-pane filter chips. Mirrors the Agents page (All / Running / ...): one
@@ -20,10 +24,11 @@ const KB_GROUP_ORDER = [
   { status: 'indexed', label: 'Indexed' },
   { status: 'indexing', label: 'Indexing' },
   { status: 'failed', label: 'Needs attention' },
+  { status: 'unknown', label: 'Unknown' },
 ];
 
 export function statusMeta(status, { indexedPages, indexPages } = {}) {
-  const meta = KB_STATUS_META[status] || KB_STATUS_META.indexing;
+  const meta = KB_STATUS_META[status] || KB_STATUS_META.unknown;
   if (status === 'indexing' && Number.isFinite(indexedPages) && Number.isFinite(indexPages) && indexPages > 0) {
     return { ...meta, label: `Indexing ${indexedPages}/${indexPages}` };
   }
@@ -104,7 +109,7 @@ export function fromApiBase(apiBase) {
   return {
     id: apiBase.id,
     name: apiBase.name || apiBase.id,
-    status: apiBase.index_status || 'indexing',
+    status: KB_STATUS_META[apiBase.index_status] ? apiBase.index_status : 'unknown',
     owner: apiBase.owner || 'user',
     description: apiBase.description || 'Knowledge base.',
     pageCount: Number(apiBase.page_count) || 0,

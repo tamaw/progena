@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 import src.backend.settings.model_profiles as model_profile_routes
 from src.backend.settings.model_profiles import create_model_profile_router
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
+from src.progena.settings.model_profiles import PRICING_FIELDS
 
 
 class FakeProviderRepository:
@@ -60,6 +61,7 @@ class TestPublicLeakageGuard:
             "profile",
             {
                 "general": {
+                    "description": "Default chat profile.",
                     "provider_id": "foundry-1",
                     "deployment": "greeting",
                     "context_window": 128_000,
@@ -67,12 +69,10 @@ class TestPublicLeakageGuard:
                     "reasoning_enabled": True,
                     "reasoning_effort": "medium",
                     "reasoning_summary": "concise",
-                    "pricing": {
-                        "currency": "USD",
-                        "input_per_million": "0.25",
-                        "cached_input_per_million": "0.03",
-                        "output_per_million": "2.00",
-                    },
+                    "currency": "USD",
+                    "input_per_million": "0.25",
+                    "cached_input_per_million": "0.03",
+                    "output_per_million": "2.00",
                 }
             },
         )
@@ -94,7 +94,8 @@ class TestPublicLeakageGuard:
         assert public["context_window"] == 128_000
         assert public["cache_ttl_seconds"] == 1_800
         assert "api_key" not in public
-        assert public["pricing"] == {
+        assert public["description"] == "Default chat profile."
+        assert {key: public[key] for key in PRICING_FIELDS} == {
             "currency": "USD",
             "input_per_million": "0.25",
             "cached_input_per_million": "0.03",
@@ -382,7 +383,7 @@ class TestPatchEdits:
         assert "reasoning_effort" not in saved["general"]
         assert "reasoning_summary" not in saved["general"]
 
-    def test_patch_persists_pricing_and_null_removes_it(self):
+    def test_patch_persists_flat_pricing_and_description_and_null_removes_them(self):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENA_STATE_PREFIX,
@@ -397,18 +398,43 @@ class TestPatchEdits:
             "output_per_million": "0",
         }
         with TestClient(app) as client:
-            saved = client.patch("/model-profiles/general", json={"pricing": pricing})
-            removed = client.patch("/model-profiles/general", json={"pricing": None})
+            saved = client.patch(
+                "/model-profiles/general", json={**pricing, "description": "  Zero-rate test  "}
+            )
+            removed = client.patch(
+                "/model-profiles/general",
+                json={**dict.fromkeys(PRICING_FIELDS), "description": None},
+            )
 
         assert saved.status_code == 202
-        assert events[-2][1]["profiles"][0]["pricing"] == pricing
+        public = events[-2][1]["profiles"][0]
+        assert {key: public[key] for key in PRICING_FIELDS} == pricing
+        assert public["description"] == "Zero-rate test"
         assert removed.status_code == 202
-        assert (
-            "pricing" not in store.get_document(PROGENA_STATE_PREFIX, "profile").payload["general"]
-        )
+        stored = store.get_document(PROGENA_STATE_PREFIX, "profile").payload["general"]
+        assert stored == {"provider_id": "foundry-1", "deployment": "greeting"}
 
-    @pytest.mark.parametrize("rate", ["NaN", "Infinity", "-0.01"])
-    def test_patch_rejects_nonfinite_or_negative_pricing(self, rate):
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {
+                "currency": "USD",
+                "input_per_million": "NaN",
+                "cached_input_per_million": "0",
+                "output_per_million": "1",
+            },
+            {
+                "currency": "USD",
+                "input_per_million": "-0.01",
+                "cached_input_per_million": "0",
+                "output_per_million": "1",
+            },
+            {"currency": "USD", "input_per_million": "1"},
+            {"description": "x" * 281},
+            {"pricing": {"currency": "USD"}},
+        ],
+    )
+    def test_patch_rejects_invalid_partial_or_nested_fields(self, body):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENA_STATE_PREFIX,
@@ -417,23 +443,12 @@ class TestPatchEdits:
         )
         app, events = _make_app(store)
         with TestClient(app) as client:
-            response = client.patch(
-                "/model-profiles/general",
-                json={
-                    "pricing": {
-                        "currency": "USD",
-                        "input_per_million": rate,
-                        "cached_input_per_million": "0",
-                        "output_per_million": "1",
-                    }
-                },
-            )
+            response = client.patch("/model-profiles/general", json=body)
 
         assert response.status_code == 422
         assert events == []
-        assert (
-            "pricing" not in store.get_document(PROGENA_STATE_PREFIX, "profile").payload["general"]
-        )
+        stored = store.get_document(PROGENA_STATE_PREFIX, "profile").payload["general"]
+        assert stored == {"provider_id": "foundry-1", "deployment": "greeting"}
 
     def test_patch_missing_profile_returns_404(self):
         store = InMemoryDocumentStore()
@@ -842,10 +857,50 @@ def test_chatgpt_catalog_rejects_when_provider_changes_before_locked_mutation(mo
         response = client.patch("/model-profiles/general", json={"deployment": "gpt-6.1-sol"})
 
     assert response.status_code == 409
-    assert (
-        response.json()["detail"] == "Profile provider changed during validation; retry the request"
+    assert response.json()["detail"] == (
+        "Profile provider or deployment changed during validation; retry the request"
     )
     assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == {
         "general": {"provider_id": "chatgpt-2", "deployment": "other-model"}
+    }
+    assert events == []
+
+
+def test_chatgpt_catalog_rejects_provider_only_patch_when_deployment_changes_during_validation(
+    monkeypatch,
+):
+    store = InMemoryDocumentStore()
+    original = {"general": {"provider_id": "foundry-1", "deployment": "model-a"}}
+    store.save_document(PROGENA_STATE_PREFIX, "profile", original)
+    repository = FakeProviderRepository(
+        [
+            {"id": "foundry-1", "kind": "foundry", "is_default": True},
+            {"id": "chatgpt-1", "kind": "chatgpt", "is_default": False},
+        ]
+    )
+
+    async def models(provider_id: str) -> list[dict[str, str]]:
+        assert provider_id == "chatgpt-1"
+        store.mutate_document(
+            PROGENA_STATE_PREFIX,
+            "profile",
+            lambda payload: {
+                **payload,
+                "general": {"provider_id": "foundry-1", "deployment": "model-b"},
+            },
+        )
+        return [{"slug": "model-a", "display_name": "Model A"}]
+
+    monkeypatch.setattr(model_profile_routes, "get_chatgpt_models", models)
+    app, events = _make_app(store, repository)
+    with TestClient(app) as client:
+        response = client.patch("/model-profiles/general", json={"provider_id": "chatgpt-1"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Profile provider or deployment changed during validation; retry the request"
+    )
+    assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == {
+        "general": {"provider_id": "foundry-1", "deployment": "model-b"}
     }
     assert events == []

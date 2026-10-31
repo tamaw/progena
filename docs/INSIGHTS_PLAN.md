@@ -23,16 +23,15 @@ The first implementation task is a read-only inspection of actual checkpoint rec
 
 ## Pricing schema
 
-Proposed optional object on each named profile:
+Optional top-level fields on each named profile (originally proposed as a nested
+`pricing` object; flattened so each maps to one form field):
 
 ```json
 {
-  "pricing": {
-    "currency": "USD",
-    "input_per_million": "2.50",
-    "cached_input_per_million": "1.25",
-    "output_per_million": "10.00"
-  }
+  "currency": "USD",
+  "input_per_million": "2.50",
+  "cached_input_per_million": "1.25",
+  "output_per_million": "10.00"
 }
 ```
 

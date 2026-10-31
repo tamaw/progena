@@ -3,7 +3,7 @@
 import json
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -600,6 +600,7 @@ async def test_chatgpt_langchain_stream_retries_unauthorized_before_emitting_chu
             use_responses_api=True,
             output_version="responses/v1",
             streaming=True,
+            default_headers={"Authorization": "Bearer rejected-token"},
             http_async_client=client,
         )
         model.set_provider_kind("chatgpt")
@@ -611,6 +612,70 @@ async def test_chatgpt_langchain_stream_retries_unauthorized_before_emitting_chu
         "Bearer rotated-token",
     ]
     refresh.assert_awaited_once_with("provider-1", "rejected-token")
+
+
+def test_chatgpt_langchain_stream_retries_with_refreshed_explicit_bearer(monkeypatch):
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(401, json={"error": {"message": "expired"}})
+        completed = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_2",
+                "object": "response",
+                "created_at": 0,
+                "status": "completed",
+                "model": "gpt-test",
+                "error": None,
+                "output": [
+                    {
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "retried"}],
+                    }
+                ],
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+            },
+        }
+        return httpx.Response(
+            200,
+            text=f"event: response.completed\ndata: {json.dumps(completed)}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    refresh = Mock(return_value="rotated-token")
+    monkeypatch.setattr(
+        checkpoint_usage,
+        "refresh_chatgpt_access_token_after_rejection_sync",
+        refresh,
+    )
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        model = CheckpointChatOpenAI(
+            model="gpt-test",
+            base_url="https://api.openai.com/v1",
+            api_key="rejected-token",
+            use_responses_api=True,
+            output_version="responses/v1",
+            streaming=True,
+            default_headers={"Authorization": "Bearer rejected-token"},
+            http_client=client,
+        )
+        model.set_provider_kind("chatgpt")
+        model.set_chatgpt_provider("provider-1", "rejected-token")
+        model.invoke([HumanMessage(content="Retry.")])
+
+    assert [request.headers["authorization"] for request in requests] == [
+        "Bearer rejected-token",
+        "Bearer rotated-token",
+    ]
+    refresh.assert_called_once_with("provider-1", "rejected-token")
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@ import pytest
 from src.progena.settings.model_profiles import (
     default_model_profiles_payload,
     migrate_legacy_model_profiles_payload,
+    profile_pricing,
     validate_model_profiles_document,
     validate_model_profiles_payload,
 )
@@ -125,45 +126,56 @@ def test_legacy_migration_discards_connection_fields_but_keeps_model_behaviour()
     }
 
 
-def test_pricing_accepts_zero_rates_and_normalizes_null_to_unpriced():
+def test_pricing_accepts_zero_rates_and_absent_pricing_is_unpriced():
     profiles = validate_model_profiles_payload(
         {
             "free": {
                 "provider_id": "foundry-1",
                 "deployment": "zero-rate",
-                "pricing": {
-                    "currency": "USD",
-                    "input_per_million": "0",
-                    "cached_input_per_million": "0.00",
-                    "output_per_million": "0.000",
-                },
+                "currency": "USD",
+                "input_per_million": "0",
+                "cached_input_per_million": "0.00",
+                "output_per_million": "0.000",
             },
-            "unpriced": {
-                "provider_id": "foundry-1",
-                "deployment": "no-rate",
-                "pricing": None,
-            },
+            "unpriced": {"provider_id": "foundry-1", "deployment": "no-rate"},
         }
     )
 
-    assert profiles["free"]["pricing"]["output_per_million"] == "0.000"
-    assert "pricing" not in profiles["unpriced"]
+    assert profile_pricing(profiles["free"])["output_per_million"] == "0.000"
+    assert profile_pricing(profiles["unpriced"]) is None
 
 
 @pytest.mark.parametrize("rate", ["-0.01", "NaN", "Infinity", "-Infinity", "1.0000000000001"])
 def test_pricing_rejects_nonfinite_negative_and_excess_precision_rates(rate):
-    with pytest.raises(ValueError, match="pricing.input_per_million"):
+    with pytest.raises(ValueError, match="input_per_million"):
         validate_model_profiles_payload(
             {
                 "general": {
                     "provider_id": "foundry-1",
                     "deployment": "deployment",
-                    "pricing": {
-                        "currency": "USD",
-                        "input_per_million": rate,
-                        "cached_input_per_million": "0",
-                        "output_per_million": "1",
-                    },
+                    "currency": "USD",
+                    "input_per_million": rate,
+                    "cached_input_per_million": "0",
+                    "output_per_million": "1",
                 }
             }
         )
+
+
+def test_pricing_fields_are_all_or_nothing_and_nested_pricing_is_rejected():
+    base = {"provider_id": "foundry-1", "deployment": "deployment"}
+    with pytest.raises(ValueError, match="missing"):
+        validate_model_profiles_payload({"general": {**base, "currency": "USD"}})
+    with pytest.raises(ValueError, match="unsupported fields"):
+        validate_model_profiles_payload({"general": {**base, "pricing": {"currency": "USD"}}})
+
+
+def test_description_is_trimmed_dropped_when_blank_and_capped():
+    base = {"provider_id": "foundry-1", "deployment": "deployment"}
+    profiles = validate_model_profiles_payload(
+        {"kept": {**base, "description": "  Fast default  "}, "blank": {**base, "description": " "}}
+    )
+    assert profiles["kept"]["description"] == "Fast default"
+    assert "description" not in profiles["blank"]
+    with pytest.raises(ValueError, match="at most 280"):
+        validate_model_profiles_payload({"general": {**base, "description": "x" * 281}})
