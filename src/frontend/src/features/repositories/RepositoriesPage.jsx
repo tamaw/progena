@@ -30,38 +30,9 @@ import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { useConfig } from '../../context/ConfigContext';
 import { selectRealtimeConnected } from '../../realtime/realtimeSlice';
 import { deleteRepo, fetchRepoDetail, fetchRepoUpstream, fetchRepos, selectRepoDetail, selectRepos, selectReposState, selectWorkspaceSignal } from './state';
+import { repoStatus } from './repositoriesPageModel';
 
 const SOURCE_FILTERS = ['All', 'Remote', 'Local', 'Dirty'];
-
-// A repo's row status is entirely derived from its latest heartbeat scan —
-// there is no PR/CI signal available (that needs a GitHub API integration
-// this pass deliberately doesn't add).
-function scanStatus(scan) {
-  if (!scan || !scan.exists) return 'pending';
-  if (!scan.is_git_repo) return 'error';
-  if (scan.error) return 'error';
-  if ((scan.dirty_count || 0) > 0) return 'dirty';
-  if ((scan.upstream_ahead || 0) > 0 || (scan.upstream_behind || 0) > 0) return 'upstream';
-  return 'clean';
-}
-
-// `pending` is a missing scan or checkout ("Not yet cloned"), not a scan in
-// progress, so it is amber rather than a working colour.
-const REPO_STATUS_TONE = {
-  clean: 'idle',
-  upstream: 'ok',
-  dirty: 'warning',
-  error: 'error',
-  pending: 'warning',
-};
-
-const REPO_STATUS_LABEL = {
-  clean: 'Synced',
-  upstream: 'Changes upstream',
-  dirty: 'Uncommitted changes',
-  error: 'Scan error',
-  pending: 'Not yet cloned',
-};
 
 // Declared remote_url is stored bare (e.g. "github.com/tamaw/marketplace",
 // no scheme) -- add https:// so window.open() navigates instead of resolving
@@ -156,7 +127,7 @@ export default function RepositoriesPage() {
     ).unwrap());
   }, [dispatch, fetchAction, reposUrl, selectedRow]);
 
-  const status = scanStatus(selectedRow?.scan);
+  const status = repoStatus(selectedRow?.scan);
   const declared = selectedRow?.declared || {};
   const scan = detail?.scan || selectedRow?.scan || null;
 
@@ -196,14 +167,14 @@ export default function RepositoriesPage() {
             }))}
             getItemKey={(row) => row.id}
             renderItem={(row) => {
-              const rowStatus = scanStatus(row.scan);
+              const rowStatus = repoStatus(row.scan);
               return (
                 <button
                   type="button"
                   className={`repo-source-row ${selectedRow?.id === row.id ? 'is-selected' : ''}`}
                   onClick={() => setSelectedId(row.id)}
                 >
-                  <span className={`repo-source-row__mark sess-row__dot--${REPO_STATUS_TONE[rowStatus]}`} title={REPO_STATUS_LABEL[rowStatus]} />
+                  <span className={`repo-source-row__mark sess-row__dot--${rowStatus.tone}`} title={rowStatus.label} />
                   <span className="repo-source-row__title">{row.declared?.name}</span>
                   <span className="repo-source-row__age">{row.scan?.last_commit?.relative_time || '—'}</span>
                   <span className="repo-source-row__meta">{row.scan?.dirty_count ?? 0} uncommitted</span>
@@ -216,7 +187,7 @@ export default function RepositoriesPage() {
         {selectedRow ? (
           <PaneListFooter>
             <span>{selectedRow.scan?.branch || '—'}</span>
-            <span>{REPO_STATUS_LABEL[status]}</span>
+            <span>{status.label}</span>
           </PaneListFooter>
         ) : null}
       </PaneList>
@@ -260,7 +231,7 @@ export default function RepositoriesPage() {
                 </DetailHeaderActions>
               )}
               meta={[
-                <DetailStatus key="state" tone={REPO_STATUS_TONE[status]}>{REPO_STATUS_LABEL[status]}</DetailStatus>,
+                <DetailStatus key="state" tone={status.tone}>{status.label}</DetailStatus>,
                 <span key="access" className="muted">{declared.access === 'write' ? 'read · write' : 'read only'}</span>,
                 <span key="commits"><strong>{scan?.commit_count ?? '—'}</strong> commits</span>,
                 <span key="branches"><strong>{scan?.branch_count ?? '—'}</strong> branches</span>,
