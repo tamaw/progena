@@ -1176,7 +1176,13 @@ body,
   box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.08);
 }
 
-/* The dot encodes the store's connection status. */
+/* The dot encodes the base's search-index status (see KB_STATUS_META). */
+.kb-card__dot--idle {
+  background: transparent;
+  border: 1.5px solid var(--color-text-muted);
+  box-sizing: border-box;
+}
+
 .kb-card__dot--ok {
   background: var(--color-success);
 }
@@ -1187,10 +1193,6 @@ body,
 
 .kb-card__dot--error {
   background: var(--color-error);
-}
-
-.kb-card__dot--muted {
-  background: var(--color-text-muted);
 }
 
 .app-shell__content {
