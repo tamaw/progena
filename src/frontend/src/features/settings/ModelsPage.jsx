@@ -125,7 +125,11 @@ const MODELS = [
 
 const MODEL_FILTERS = ['All', 'Available', 'Preview', 'Reasoning'];
 
-const STATUS_DOT = { available: 'running', preview: 'stopped', deprecated: 'failed' };
+// The catalogue above is static (no SSE/Redux source); only these two values exist.
+const MODEL_STATUS = {
+  available: { label: 'Available', tone: 'idle' },
+  preview: { label: 'Preview', tone: 'info' },
+};
 
 function matchesModel(model, filter, search) {
   if (filter === 'Available' && model.status !== 'available') return false;
@@ -146,11 +150,11 @@ function ModelRow({ model, selected, onSelect }) {
   return (
     <button
       type="button"
-      className={`sess-row agents-agent-row agents-agent-row--${model.status} ${selected ? 'is-selected' : ''}`}
+      className={`sess-row agents-agent-row ${selected ? 'is-selected' : ''}`}
       onClick={() => onSelect(model.id)}
     >
       <span className="sess-row__top">
-        <span className={`sess-row__dot agents-agent-row__status agents-agent-row__status--${STATUS_DOT[model.status] || 'stopped'}`} />
+        <span className={`sess-row__dot sess-row__dot--${MODEL_STATUS[model.status].tone}`} title={MODEL_STATUS[model.status].label} />
         <span className="sess-row__agent agents-agent-row__name">{model.name}</span>
         <span className="sess-row__project">{model.provider}</span>
       </span>
@@ -231,7 +235,7 @@ export default function ModelsPage() {
               </DetailHeaderActions>
             )}
             meta={[
-              <DetailStatus key="status" tone={selected.status === 'available' ? 'ok' : 'info'}>{selected.status === 'available' ? 'Available' : 'Preview'}</DetailStatus>,
+              <DetailStatus key="status" tone={MODEL_STATUS[selected.status].tone}>{MODEL_STATUS[selected.status].label}</DetailStatus>,
               selected.isDefault ? <span key="default" className="muted">Default</span> : null,
               <span key="ctx" className="muted">{selected.context} context</span>,
               <span key="mode" className="muted">{selected.modality.join(' · ')}</span>,
@@ -260,7 +264,7 @@ export default function ModelsPage() {
                 <CardFact label="Model ID"><code>{selected.id}</code></CardFact>
                 <CardFact label="Knowledge cutoff">{selected.cutoff}</CardFact>
                 <CardFact label="Modality">{selected.modality.join(' · ')}</CardFact>
-                <CardFact label="Status">{selected.status === 'available' ? 'Available' : 'Preview'}</CardFact>
+                <CardFact label="Status">{MODEL_STATUS[selected.status].label}</CardFact>
               </div>
             </section>
 

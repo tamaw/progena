@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { catalogueAgents, catalogueRoutines } from '@frontend/features/agents/agentCatalogueModel';
+import { agentStatusPresentation, catalogueAgents, catalogueRoutines } from '@frontend/features/agents/agentCatalogueModel';
+
+describe('agentStatusPresentation', () => {
+  it('maps registry lifecycle values to shared tones', () => {
+    expect(agentStatusPresentation({ kind: 'a2a', status: 'running' })).toEqual({ label: 'Running', tone: 'idle' });
+    expect(agentStatusPresentation({ kind: 'a2a', status: 'executing' }).tone).toBe('ok');
+    expect(agentStatusPresentation({ kind: 'acp', status: 'waiting' }).tone).toBe('info');
+    expect(agentStatusPresentation({ kind: 'a2a', status: 'failed' })).toEqual({ label: 'Failed', tone: 'error' });
+    expect(agentStatusPresentation({ kind: 'acp', status: 'stopped' }).tone).toBe('muted');
+  });
+
+  it('lets disabled win, gives object manifests no status, and flags unrecognised values', () => {
+    expect(agentStatusPresentation({ kind: 'a2a', status: 'failed', enabled: false })).toEqual({ label: 'Disabled', tone: 'muted' });
+    expect(agentStatusPresentation({ kind: 'object', status: 'running' })).toBeNull();
+    expect(agentStatusPresentation({ kind: 'a2a', status: '' })).toEqual({ label: 'Unknown', tone: 'warning' });
+    expect(agentStatusPresentation({ kind: 'a2a', status: 'paused' })).toEqual({ label: 'Unknown', tone: 'warning' });
+  });
+});
 
 describe('catalogueAgents', () => {
   const agents = [

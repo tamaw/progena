@@ -3,26 +3,31 @@ import { useDispatch, useSelector } from 'react-redux';
 import useEntityDraft from '../../hooks/useEntityDraft';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { PaneEmptyState } from '../../components/layout/PaneList';
+import { DetailStatus } from '../../components/layout/DetailHeader';
 import { MetricCard, CardFact, CapabilityChip, DraftField } from '../../components/DetailCards';
 import InlineFailure from '../../components/InlineFailure';
 import { fetchAgentSkillContent, selectAgentSkillContent, updateAgentSkillContent } from './state/agents';
 import { formatShortLocalDateTime } from '../../lib/displayTime';
 import { formatAge } from './agentFormat';
 
-// Chip tone per A2A/ACP task status (Progena's A2ATaskStatus and ACPTaskStatus).
+// Shared status tone per A2A/ACP task status (Progena's A2ATaskStatus and
+// ACPTaskStatus): finished-OK is quiet, in-flight work green, waiting blue.
 const TASK_TONE = {
-  completed: 'ok',
+  completed: 'idle',
+  working: 'ok',
   queued: 'info',
-  working: 'info',
   submitted: 'info',
   'input-required': 'info',
   'auth-required': 'info',
   failed: 'error',
   rejected: 'error',
+  interrupted: 'warning',
   canceled: 'muted',
-  interrupted: 'muted',
-  unknown: 'muted',
 };
+
+function taskStatusLabel(status) {
+  return String(status || 'unknown').replace(/-/g, ' ').replace(/^./, (char) => char.toUpperCase());
+}
 
 function MiniListSection({ title, count, children, action }) {
   return (
@@ -60,7 +65,7 @@ function RecentRunList({ runs, emptyText }) {
         const at = run.completed || run.updated || run.created;
         return (
           <li key={run.id} className="agents-run-row">
-            <span className={`agents-chip agents-chip--${TASK_TONE[run.status] || 'muted'}`}>{run.status}</span>
+            <DetailStatus tone={TASK_TONE[run.status] || 'warning'}>{taskStatusLabel(run.status)}</DetailStatus>
             {at ? (
               <>
                 <time className="agents-run-row__time" dateTime={at} title={at}>{formatShortLocalDateTime(at)}</time>

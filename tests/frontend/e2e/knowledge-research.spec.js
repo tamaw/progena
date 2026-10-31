@@ -154,7 +154,7 @@ test('research agent fills a knowledge base from the web and a second agent answ
   let keyPath;
   await test.step('the pages are browsable in the Knowledge UI', async () => {
     await openKnowledgeBase(page);
-    await poll(() => page.locator('.task-card.is-selected .kb-card__dot--ok').isVisible(), 'base shows indexed status', 120_000);
+    await poll(() => page.locator('.task-card.is-selected .kb-card__dot[aria-label="Indexed"]').isVisible(), 'base shows indexed status', 120_000);
     await expect(page.locator('.task-card.is-selected .kb-card__info')).toContainText(`${conceptPaths().length} pages`);
 
     // The base index loads by default; its page links open in place, without a reload.

@@ -33,12 +33,13 @@ import DetailHeader, {
   DeleteActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
+  DetailStatus,
   EditActionIcon,
   SaveActionIcon,
 } from '../../components/layout/DetailHeader';
 import { A2ADetailBody, ACPDetailBody, ObjectAgentDetailBody } from './AgentDetailBodies';
 import { formatAge } from './agentFormat';
-import { catalogueAgents } from './agentCatalogueModel';
+import { agentStatusPresentation, catalogueAgents } from './agentCatalogueModel';
 
 const AGENT_FILTERS = ['All', 'Running', 'Failed', 'Stopped', 'Disabled'];
 const SORT_MODES = ['Type', 'Name', 'Recent'];
@@ -69,29 +70,18 @@ function makeDraftAgent(kind) {
   };
 }
 
-function StatusPill({ status }) {
-  const label = status || 'draft';
-  return (
-    <span className={`agents-status-pill agents-status-pill--${label}`}>
-      <span className="adot" />
-      {label}
-    </span>
-  );
-}
-
 function AgentRow({ agent, selected, onSelect }) {
-  // Object agents have no runtime status/enabled concept (see DetailHeader);
-  // showing a status dot for them would fabricate a "draft"/"disabled" state
-  // that doesn't exist in the manifest.
-  const status = agent.kind === 'object' ? null : (agent.enabled === false ? 'disabled' : (agent.status || 'draft'));
+  // Object agents have no runtime status/enabled concept (see DetailHeader),
+  // so they get no dot rather than a fabricated state.
+  const status = agentStatusPresentation(agent);
   return (
     <button
       type="button"
-      className={`sess-row agents-agent-row ${status ? `agents-agent-row--${status}` : ''} ${selected ? 'is-selected' : ''}`}
+      className={`sess-row agents-agent-row ${selected ? 'is-selected' : ''}`}
       onClick={() => onSelect(agent.id)}
     >
       <span className="sess-row__top">
-        {status ? <span className={`sess-row__dot agents-agent-row__status agents-agent-row__status--${status}`} /> : null}
+        {status ? <span className={`sess-row__dot sess-row__dot--${status.tone}`} title={status.label} /> : null}
         <span className="sess-row__agent agents-agent-row__name">{agent.name}</span>
         <span className="sess-row__project">{agent.model}</span>
       </span>
@@ -355,6 +345,7 @@ export default function AgentsPage() {
   );
   const isA2A = selectedAgent?.kind === 'a2a';
   const isACP = selectedAgent?.kind === 'acp';
+  const selectedStatus = selectedAgent ? agentStatusPresentation(selectedAgent) : null;
   const runningCount = agents.filter((agent) => agent.status === 'running').length;
   const taskCount = agents.reduce((total, agent) => total + (agent.tasks?.length || 0), 0);
 
@@ -510,10 +501,10 @@ export default function AgentsPage() {
             ) : null}
             meta={[
               // Object agents have no schema-backed status/enabled concept
-              // (no runtime process, no manifest field) -- showing a pill
+              // (no runtime process, no manifest field) -- showing a status
               // here would fabricate a value the backend doesn't have.
-              selectedAgent.kind !== 'object'
-                ? <StatusPill key="status" status={selectedAgent.enabled === false ? 'disabled' : selectedAgent.status} /> : null,
+              selectedStatus
+                ? <DetailStatus key="status" tone={selectedStatus.tone}>{selectedStatus.label}</DetailStatus> : null,
               // Object agents show Model in the Manifest section and
               // Tools/Skills counts in their own MiniListSection headers
               // below -- repeating them here would be a literal duplicate
