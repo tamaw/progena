@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from math import prod
@@ -205,6 +206,9 @@ class _CodeExecution:
         self._node_id = node_id
         self._lock = threading.Lock()
         self._cancelled = False
+        # quickjs-rs clears the runtime deadline before draining guest
+        # catch/finally jobs on cancellation; this keeps that cleanup bounded.
+        self._cleanup_deadline: float | None = None
         self._worker_loop: asyncio.AbstractEventLoop | None = None
         self._worker_task: asyncio.Task[Any] | None = None
 
@@ -227,12 +231,31 @@ class _CodeExecution:
         self._bridge.cancel()
         with self._lock:
             self._cancelled = True
+            if self._cleanup_deadline is None:
+                self._cleanup_deadline = time.monotonic() + _CODE_TIMEOUT_SECONDS
             loop = self._worker_loop
             task = self._worker_task
         if loop is not None and task is not None:
             # The worker may already have closed its loop after completing.
             with suppress(RuntimeError):
                 loop.call_soon_threadsafe(task.cancel)
+
+    def _install_interrupt_handler(self, runtime: QuickJSRuntime) -> None:
+        """Interrupt on the eval deadline or, once cancelled, the cleanup deadline.
+
+        Replaces quickjs-rs's handler (same eval-deadline check) through its
+        private ``_engine_rt``; quickjs-rs is pinned below 0.3.
+        """
+
+        def interrupt_guest() -> bool:
+            now = time.monotonic()
+            deadline = runtime._deadline
+            cleanup_deadline = self._cleanup_deadline
+            return (deadline is not None and now >= deadline) or (
+                cleanup_deadline is not None and now >= cleanup_deadline
+            )
+
+        runtime._engine_rt.set_interrupt_handler(interrupt_guest)
 
     def _register_filesystem_hosts(self, context: Any) -> None:
         filesystem = self._filesystem
@@ -299,6 +322,7 @@ class _CodeExecution:
                 ) as runtime,
                 runtime.new_context(timeout=_CODE_TIMEOUT_SECONDS) as context,
             ):
+                self._install_interrupt_handler(runtime)
                 self._register_filesystem_hosts(context)
                 task = loop.create_task(
                     context.eval_async(
