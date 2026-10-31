@@ -401,7 +401,6 @@ export default function ToolsPage() {
   const serverTools = Array.isArray(serverDetail?.data?.tools) ? serverDetail.data.tools : [];
   const enabledToolCount = serverTools.filter((tool) => tool.enabled !== false).length;
   const [toolListRef, toolListMaxHeight] = useRowCappedHeight(VISIBLE_TOOL_ROWS, [serverTools]);
-  const selectedLogs = Array.isArray(serverDetail?.data?.logs) ? serverDetail.data.logs.slice(0, 5) : [];
 
   return (
     <PageShell className="tools-page">
@@ -602,24 +601,6 @@ export default function ToolsPage() {
                       : (selectedServer.enabled === false
                         ? 'Enable the server to discover its tools.'
                         : `No tools discovered yet. ${agentName} lists them on its next MCP refresh.`)}</PaneEmptyState>
-                  )}
-                </div>
-              </section>
-
-              <section className="tools-section">
-                <h2>Activity</h2>
-                <div className="tools-tool-list">
-                  {selectedLogs.length ? selectedLogs.map((entry, index) => (
-                    <article className="tools-tool-row" key={entry.id || entry.timestamp || index}>
-                      <span className="tools-tool-row__icon">log</span>
-                      <div className="tools-tool-row__body">
-                        <strong>{entry.message || entry.event || 'Server activity'}</strong>
-                        <p>{formatShortLocalDateTime(entry.timestamp || entry.time || entry.updated_at) || 'recent'}</p>
-                      </div>
-                      <span className="tools-tool-row__calls">{String(entry.level || entry.source || 'info').toLowerCase()}</span>
-                    </article>
-                  )) : (
-                    <PaneEmptyState>{isDetailLoading ? 'Loading activity…' : 'No recent activity for this server.'}</PaneEmptyState>
                   )}
                 </div>
               </section>
