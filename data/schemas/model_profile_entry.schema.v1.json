@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Model profile entry",
+  "description": "One profile's value in /config/profiles.json (the 'profile' state document, an object keyed by profile name). Every field is top-level. A profile points a named model choice at a saved provider connection and deployment; agents, routines and the knowledge indexer refer to it by name.",
+  "type": "object",
+  "properties": {
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 280,
+      "description": "What this profile is for, shown on the Profiles page. Trimmed; omit instead of leaving it blank."
+    },
+    "provider_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Id of a saved provider connection (Providers page). Must exist when the profile is used."
+    },
+    "deployment": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The model or deployment name on that provider (labelled 'Model' in the UI), e.g. 'gpt-5-mini'."
+    },
+    "context_window": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The model's context window in tokens. Omit when unknown."
+    },
+    "cache_ttl_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "How long the provider keeps a prompt cache, in seconds. Omit when unknown."
+    },
+    "reasoning_enabled": {
+      "type": "boolean",
+      "description": "Force reasoning on or off. Omit to inherit the model's default."
+    },
+    "reasoning_effort": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Reasoning effort, e.g. 'low', 'medium', 'high'. Omit to inherit."
+    },
+    "reasoning_summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Reasoning summary mode, e.g. 'auto', 'concise', 'detailed'. Omit to inherit."
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$",
+      "description": "ISO 4217 currency of the rates, e.g. 'USD'. Pricing is all four fields or none; none means unpriced."
+    },
+    "input_per_million": {
+      "type": "string",
+      "pattern": "^\\d+(?:\\.\\d{1,12})?$",
+      "description": "Estimated cost per 1M input tokens as a decimal string, e.g. '0.25'. Zero is valid."
+    },
+    "cached_input_per_million": {
+      "type": "string",
+      "pattern": "^\\d+(?:\\.\\d{1,12})?$",
+      "description": "Estimated cost per 1M cached input tokens as a decimal string, e.g. '0.025'."
+    },
+    "output_per_million": {
+      "type": "string",
+      "pattern": "^\\d+(?:\\.\\d{1,12})?$",
+      "description": "Estimated cost per 1M output tokens as a decimal string, e.g. '2.00'."
+    }
+  },
+  "required": ["provider_id", "deployment"],
+  "dependencies": {
+    "currency": ["input_per_million", "cached_input_per_million", "output_per_million"],
+    "input_per_million": ["currency", "cached_input_per_million", "output_per_million"],
+    "cached_input_per_million": ["currency", "input_per_million", "output_per_million"],
+    "output_per_million": ["currency", "input_per_million", "cached_input_per_million"]
+  },
+  "additionalProperties": false
+}

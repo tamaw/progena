@@ -4,7 +4,9 @@ Model profiles refer exclusively to persisted providers. Legacy Azure discrimina
 profiles are migrated once after a default Foundry provider exists. Every profile
 field is top-level (no nested objects) so each maps to one form field. Optional
 pricing rates are explicit estimates; they never infer a deployment's model or
-service tier, and are all present or all absent.
+service tier, and are all present or all absent. Each normalized profile must
+also conform to ``data/schemas/model_profile_entry.schema.v1.json``, the shape
+agents see under ``/schemas/``.
 """
 
 from __future__ import annotations
@@ -13,6 +15,8 @@ import json
 import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
+
+from src.progena.documents.catalog import check_entry_schema
 
 MODEL_PROFILES_DOC_KEY = "profile"
 _LEGACY_AZURE_PROVIDER = "azure_openai"
@@ -155,6 +159,7 @@ def _normalize_profile(name: str, profile: Any) -> dict[str, Any]:
         elif not isinstance(value, str) or not value.strip():
             raise ValueError(f"profile {name!r}: {field} must be a non-empty string")
         normalized[field] = value if isinstance(value, bool) else value.strip()
+    check_entry_schema(f"profile {name!r}", normalized, "model_profile_entry")
     return normalized
 
 
