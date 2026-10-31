@@ -20,7 +20,7 @@
  * rendering a React hook.
  */
 
-import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, extractCacheReadTokenCount, mergeReasoningEvents, isReasoningEvent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE, CANCELLED_SUFFIX } from './streamEventsModel';
+import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, extractCacheReadTokenCount, mergeReasoningEvents, isReasoningEvent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
 import { isA2AToolName } from './a2aTools';
 import { normalizeContextUsage } from './contextWindowModel';
 import { applyConversationSummaryActivity } from './conversationSummaryModel';
@@ -1039,6 +1039,7 @@ export function toCommittedAssistantMessage(turn) {
     displayToolCalls: turn.displayToolCalls,
     isStreaming: turn.isStreaming,
     error: turn.error,
+    interruptionReason: turn.interruptionReason,
     workActive: Boolean(turn.isStreaming) && turn.lastActivity === 'work',
     timelineItems: turn.timelineItems,
   };
@@ -1075,25 +1076,24 @@ export function resolveLiveTurnResponseStatus(turn, status) {
 /**
  * Finalise a live assistant turn — freeze it and return a committed message.
  *
- * Rules:
- * - `completed` with visible output → normal message.
- * - `completed` with **no** visible output → "(No response text)" placeholder.
- * - a provider-reported failure without visible output → a concise failed row.
- * - `cancelled` with no visible output → drop (return null).
- * - `cancelled` with partial visible output → keep, append cancelled suffix once.
- * - transport `error` → message with `Error: ...` content and `error: true`.
+ * Interruption markers are durable rows, so user cancellation and a queue
+ * boundary retain even an otherwise empty assistant turn.
  */
-export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
+export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage, interruptionReason }) {
   if (!turn) return null;
 
   const transportStatus = terminalResponseStatus(status);
   const responseStatus = resolveLiveTurnResponseStatus(turn, status);
+  const resolvedInterruptionReason = interruptionReason
+    ?? turn.interruptionReason
+    ?? (responseStatus === 'cancelled' ? 'user_cancelled' : undefined);
   const hasVisibleOutput = (
     turn.content.trim().length > 0
     || hasVisibleTimelineOutput(turn.timelineItems)
   );
+  const preservesEmptyInterruptedTurn = resolvedInterruptionReason === 'user_cancelled';
 
-  if (responseStatus === 'cancelled' && !hasVisibleOutput) {
+  if (responseStatus === 'cancelled' && !hasVisibleOutput && !preservesEmptyInterruptedTurn) {
     return null;
   }
 
@@ -1106,6 +1106,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
     responseStatus,
     assistantTimestamp: now || turn.startedAt,
     responseTimestamp: responseStatus === 'completed' && hasAnswerText ? now || turn.startedAt : null,
+    ...(resolvedInterruptionReason ? { interruptionReason: resolvedInterruptionReason } : {}),
   };
 
   if (responseStatus === 'failed' && transportStatus === 'failed') {
@@ -1208,7 +1209,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
     return toCommittedAssistantMessage(finalTurn);
   }
 
-  if (responseStatus === 'completed' && !hasVisibleOutput) {
+  if (responseStatus === 'completed' && !hasVisibleOutput && !preservesEmptyInterruptedTurn) {
     // No text and no visible events — show placeholder so the cursor doesn't vanish.
     finalTurn.content = '(No response text)';
     if (!finalTurn.assistantMessageId) {
@@ -1234,12 +1235,6 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
       },
     ];
     return toCommittedAssistantMessage(finalTurn);
-  }
-
-  if (responseStatus === 'cancelled' && hasVisibleOutput) {
-    finalTurn.content = finalTurn.content.endsWith(CANCELLED_SUFFIX)
-      ? finalTurn.content
-      : `${finalTurn.content}${CANCELLED_SUFFIX}`;
   }
 
   // Ensure the timeline items reflect the final state.

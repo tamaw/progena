@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useRef } from 'react';
 
 import LiveAssistantTurn from './LiveAssistantTurn';
 import ConversationSummaryMarker from './ConversationSummaryMarker';
+import InterruptedMarker from './InterruptedMarker';
 import { Message } from './Message';
 import { buildConversationSummaryEntries, normalizeConversationSummaryMarkers } from '../models/conversationSummaryModel';
 import { followTranscript } from '../models/transcriptScroll';
@@ -159,11 +160,7 @@ function ChatMessages({
       {liveOwnedRootMarkers.map((marker) => (
         <ConversationSummaryMarker key={marker.id} marker={marker} />
       ))}
-      {interruption && !isGenerating ? (
-        <p className="chat-messages__interruption" role="status">
-          <strong>Interrupted</strong> — the runtime restarted during this turn. The last step may have partly run. Type continue to carry on.
-        </p>
-      ) : null}
+      {interruption && !isGenerating ? <InterruptedMarker reason="runtime_restart" /> : null}
     </div>
   );
 }

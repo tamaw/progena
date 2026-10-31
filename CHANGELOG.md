@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Interrupted runs after a runtime restart**: chats, scheduled runs and routine runs cut off by a runtime restart now say so instead of looking idle or still running. Detection is read-only: the backend reads the LangGraph checkpoint directly, compares its `runtime_instance` owner to the live health identity, and excludes steps waiting on a person or failed turns. A backend-only restart never counts.
 
 ### Fixed
+- **One Interrupted row for restarts and cancellation**: a runtime restart and the user pressing Stop ("Cancelled by you.") share the same expandable amber-dot Interrupted timeline row, connected from above only. Partial answers stay above it, empty cancelled turns remain visible, the reason survives reload, and no synthetic `[Cancelled]` assistant text is added.
 - **Strict manual workflow payloads**: browser request correlation no longer becomes an extra manual-trigger property, so `additionalProperties: false` schemas run normally.
 - **Manual workflow tool defaults**: `run_workflow` now applies declared payload defaults before validation, matching backend manual-trigger resolution.
 - **ChatGPT provider recovery**: unauthorized sync and async retries replace explicit bearer headers, and temporarily unavailable refresh grants no longer discard still-valid bearers.

@@ -9,7 +9,7 @@ import styles from './AssistantMessageEntry.module.css';
 
 const TERMINAL_LABELS = { failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted' };
 
-export default function AssistantMessageEntry({ item, agentName, onRegenerate, showResponseStatus = true }) {
+export default function AssistantMessageEntry({ item, agentName, onRegenerate, showResponseStatus = true, continuesAfterInterruption = false }) {
   const contentRef = useRef(null);
   const formattedContent = useMemo(
     () => item.isStreaming ? '' : renderSafeMarkdown(item.content || ''),
@@ -24,7 +24,7 @@ export default function AssistantMessageEntry({ item, agentName, onRegenerate, s
 
   return (
     <div className="chat-entry-chain--item">
-      <article className={`message-wrapper assistant msg msg--assistant entry entry--assistant ${item.error ? 'entry--standalone' : 'entry--chain-end'}`}>
+      <article className={`message-wrapper assistant msg msg--assistant entry entry--assistant ${item.error ? 'entry--standalone' : (continuesAfterInterruption ? 'entry--chain-item' : 'entry--chain-end')}`}>
         <div className="entry__gutter" aria-hidden="true">
           <span className={`entry__badge entry__badge--assistant${item.isStreaming && !item.error ? ' activity-dot' : ''}`} />
         </div>

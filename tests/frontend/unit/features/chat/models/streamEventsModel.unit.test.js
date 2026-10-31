@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   MAX_STREAM_EVENTS_PER_MESSAGE,
-  CANCELLED_SUFFIX,
   isReasoningEvent,
   hasReasoningContent,
   countReasoningTimelineEntries,

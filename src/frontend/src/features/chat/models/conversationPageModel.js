@@ -2,6 +2,7 @@ import { PERSISTED_CATEGORIES, categoryForEventType } from './streamFilters';
 import { appendStreamEvent, normalizeStreamEvent } from './streamEventsModel';
 import { buildDefaultAssistantTimeline } from './liveAssistantTurnModel';
 import { normalizeContextUsage } from './contextWindowModel';
+import { normalizeInterruptionReason } from './interruptionReasonModel';
 
 const WEEKDAY_WELCOME_MESSAGES = [
   'Sunday reset 🌿',
@@ -162,7 +163,7 @@ export function normalizeStoredMessage(message, index, { preserveTimeline = fals
       }
     }
   }
-
+  const responseStatus = normalizeResponseStatus(message.responseStatus);
   const messageWithoutTimelineItems = { ...message };
   delete messageWithoutTimelineItems.timelineItems;
 
@@ -176,7 +177,10 @@ export function normalizeStoredMessage(message, index, { preserveTimeline = fals
       ? normalizeOutputTokenCount(message.finalCallTokenCount)
       : null,
     usageProvenance: hasAuthoritativeUsage(message) ? PROVIDER_USAGE_PROVENANCE : null,
-    responseStatus: normalizeResponseStatus(message.responseStatus),
+    responseStatus,
+    interruptionReason: normalizeInterruptionReason(
+      message.interruptionReason ?? message.interruption_reason,
+    ),
     reasoningTokenCount: Number.isFinite(message.reasoningTokenCount)
       ? message.reasoningTokenCount
       : 0,

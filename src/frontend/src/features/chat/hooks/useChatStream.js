@@ -445,7 +445,11 @@ export function useChatStream({
               flushPendingText(streamId);
               const finalTurn = liveTurnRef.current;
               const committed = finalTurn
-                ? finalizeLiveAssistantTurn(finalTurn, { status, now: Date.now() })
+                ? finalizeLiveAssistantTurn(finalTurn, {
+                  status,
+                  now: Date.now(),
+                  interruptionReason: status === 'cancelled' ? 'user_cancelled' : undefined,
+                })
                 : null;
               if (committed) {
                 setMessages((prevMessages) => [...prevMessages, committed]);

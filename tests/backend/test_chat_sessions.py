@@ -428,6 +428,50 @@ class TestGetChatDetail:
         assert (failure.token_count, failure.final_call_token_count) == (0, 0)
         assert failure.response_status == "failed"
 
+    def test_projects_native_cancelled_rows_without_retired_sentinel_text(self):
+        [user, partial, _retry, empty] = _messages_from_checkpoint(
+            CheckpointThreadSnapshot(
+                thread_id="thread_cancelled_history",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "answer"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "Partial answer.",
+                        "response_metadata": {"status": "cancelled"},
+                    },
+                    {"id": "u2", "type": "human", "content": "try again"},
+                    {
+                        "id": "a2",
+                        "type": "ai",
+                        "content": "",
+                        "response_metadata": {"status": "cancelled"},
+                    },
+                ],
+            )
+        )
+
+        assert user.content == "answer"
+        assert (
+            partial.id,
+            partial.content,
+            partial.response_status,
+            partial.interruption_reason,
+        ) == (
+            "a1",
+            "Partial answer.",
+            "cancelled",
+            "user_cancelled",
+        )
+        assert (empty.id, empty.content, empty.response_status, empty.interruption_reason) == (
+            "a2",
+            "",
+            "cancelled",
+            "user_cancelled",
+        )
+
     def test_uses_existing_work_as_the_terminal_failure_indicator(self):
         [user, failure] = _messages_from_checkpoint(
             CheckpointThreadSnapshot(

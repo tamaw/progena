@@ -53,6 +53,22 @@ describe('normalizeStoredMessage', () => {
     });
   });
 
+  it('preserves interruption reasons through local history hydration', () => {
+    const restored = normalizeStoredMessage({
+      id: 'stored-cancelled',
+      role: 'assistant',
+      content: '',
+      timestamp: NOW,
+      responseStatus: 'cancelled',
+      interruptionReason: 'user_cancelled',
+    }, 0);
+
+    expect(restored).toMatchObject({
+      responseStatus: 'cancelled',
+      interruptionReason: 'user_cancelled',
+    });
+  });
+
   it('invalidates old serialized chunk counters, including denormalized timelines', () => {
     const restored = normalizeStoredMessage({
       id: 'old-chunk-counter',

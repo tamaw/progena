@@ -39,7 +39,7 @@ to the backend and receives browser application data through two SSE roles:
     none). The text streamed so far is saved to the conversation as an
     assistant message marked `response_metadata.status = "cancelled"` (written
     as the agent's `model` node via `aupdate_state`), so it stays in history,
-    shows as `… [Cancelled]` in the UI, and is context for the next turn. Its
+    shows as an Interrupted row in the UI, and is context for the next turn. Its
     items carry status `incomplete` and are the cancelled response's `output`.
   - `GET /v1/conversations/{id}/items` lists the thread's messages as Responses
     items (`message`, `reasoning`, `function_call`, `function_call_output`) with

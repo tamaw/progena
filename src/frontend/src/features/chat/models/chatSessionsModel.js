@@ -11,6 +11,7 @@ import { isA2AToolName } from './a2aTools';
 import { extractA2ASummary } from './messageRenderUtils';
 import { deriveChatStatus } from './chatStatus';
 import { normalizeContextUsage } from './contextWindowModel';
+import { normalizeInterruptionReason } from './interruptionReasonModel';
 export function compareSessionItems(left, right) {
   const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
   if (pinnedDelta !== 0) {
@@ -265,6 +266,7 @@ function normalizeResponseStatus(value) {
   return typeof value === 'string' && RESPONSE_STATUSES.has(value) ? value : 'unknown';
 }
 
+
 function normalizeOutputTokenCount(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
@@ -279,11 +281,11 @@ export function normalizeBackendChatMessage(message, index) {
   const createdAt = message.created_at || raw.created_at || raw.timestamp || raw.time;
   const timestamp = toValidTimestamp(createdAt) ?? Date.now();
   const role = typeof message.role === 'string' ? message.role : 'assistant';
+  const responseStatus = normalizeResponseStatus(message.response_status);
   const content = typeof message.content === 'string'
     ? message.content
     : String(message.content ?? '');
   const id = typeof message.id === 'string' ? message.id : `backend_msg_${index}_${timestamp}`;
-  const responseStatus = normalizeResponseStatus(message.response_status);
   const streamEvents = buildToolStreamEvents(
     Array.isArray(message.tool_calls) ? message.tool_calls : [],
     id,
@@ -302,6 +304,7 @@ export function normalizeBackendChatMessage(message, index) {
     // Backend projection is authoritative, including a reported zero.
     usageProvenance: 'provider',
     responseStatus,
+    interruptionReason: normalizeInterruptionReason(message.interruption_reason),
     reasoningTokenCount: Number.isFinite(message.reasoning_token_count)
       ? message.reasoning_token_count
       : 0,
