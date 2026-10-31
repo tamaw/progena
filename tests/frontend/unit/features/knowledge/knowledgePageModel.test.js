@@ -41,10 +41,11 @@ const bases = [
 ];
 
 describe('statusMeta', () => {
-  it('maps known statuses and falls back to indexing', () => {
-    expect(statusMeta('indexed').tone).toBe('ok');
-    expect(statusMeta('failed').label).toBe('Failed');
-    expect(statusMeta('nonsense').label).toBe('Indexing');
+  it('maps statuses to tones and falls back to unknown', () => {
+    expect(statusMeta('indexed').tone).toBe('idle');
+    expect(statusMeta('indexing').tone).toBe('ok');
+    expect(statusMeta('failed').tone).toBe('error');
+    expect(statusMeta('nonsense')).toEqual({ label: 'Unknown', tone: 'warning' });
   });
 
   it('shows progress for indexing when counts are known', () => {
@@ -139,7 +140,7 @@ describe('fromApiBase', () => {
   it('falls back when optional fields are missing', () => {
     const ui = fromApiBase({ id: 'x' });
     expect(ui.name).toBe('x');
-    expect(ui.status).toBe('indexing');
+    expect(ui.status).toBe('unknown');
     expect(ui.pageCount).toBe(0);
     expect(ui.path).toBe('/knowledge/x/');
     expect(ui.tags).toEqual([]);
