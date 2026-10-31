@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
@@ -11,6 +12,7 @@ from langgraph.errors import NodeTimeoutError
 from quickjs_rs import JSError
 from quickjs_rs import TimeoutError as QuickJSTimeoutError
 
+from src.progena.routines import control_nodes
 from src.progena.routines.factory import compile_routine_graph
 from src.progena.routines.graph import validate_routine_graph_payload
 
@@ -698,6 +700,37 @@ async def test_code_node_filesystem_host_call_cancels_on_node_timeout_and_task_c
     with pytest.raises(asyncio.CancelledError):
         await invocation
     await asyncio.wait_for(cancelled_backend.cancelled.wait(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_code_node_cancellation_bounds_guest_cleanup(tmp_path, monkeypatch):
+    worker_exited = threading.Event()
+    evaluate = control_nodes._CodeExecution.evaluate
+
+    def tracked_evaluate(self, source):
+        try:
+            return evaluate(self, source)
+        finally:
+            worker_exited.set()
+
+    monkeypatch.setattr(control_nodes._CodeExecution, "evaluate", tracked_evaluate)
+    backend = _BlockingFilesystemBackend(_filesystem_backend(tmp_path))
+    source = """
+    try { return await tools.readFile({ file_path: "/artifacts/slow.txt" }); }
+    finally { while (true) {} }
+    """
+    graph = validate_routine_graph_payload(
+        _payload(_filesystem_code_node(source, paths=["/artifacts/"]))
+    )
+    invocation = asyncio.create_task(
+        compile_routine_graph(graph, model=object(), filesystem_backend=backend).ainvoke({})
+    )
+    await asyncio.wait_for(backend.started.wait(), timeout=1)
+    invocation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await invocation
+
+    assert await asyncio.to_thread(worker_exited.wait, 5)
 
 
 @pytest.mark.asyncio

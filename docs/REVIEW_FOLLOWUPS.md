@@ -10,9 +10,9 @@ The review used sixteen parallel reviewers. Runtime findings were checked with b
 
 - **Location:** [`control_nodes.py:373–377`](../src/progena/routines/control_nodes.py#L373-L377).
 - **Problem:** Cancellation during a filesystem call cancels QuickJS evaluation, whose cancellation cleanup clears the guest deadline before running JavaScript cleanup handlers. An unbounded cleanup handler can then keep the worker alive while the node waits indefinitely for it.
-- **Observed:** In a bounded child process with `quickjs-rs` 0.2.6, cancellation during a pending host read remained unfinished after 2.5 seconds despite the one-second guest execution limit. The child process was terminated without touching application data.
+- **Observed:** In a bounded child process with `quickjs-rs` 0.2.6, cancellation during a pending host read remained unfinished after 2.5 seconds despite the one-second guest execution limit. The child process was terminated without touching application data. Re-checked on `c5b6ac85`: LangGraph returned the cancellation immediately, but the orphaned worker kept spinning at full CPU in guest cleanup.
 - **Required outcome:** Cancellation cleanup remains subject to an effective guest execution deadline, and cancellation/graph timeout reliably completes.
-- **Status:** Open.
+- **Status:** Fixed — `_CodeExecution` installs an interrupt handler that also enforces a cleanup deadline set on cancellation (`test_code_node_cancellation_bounds_guest_cleanup`).
 
 ### 2. P2 — Drain actual threaded mutations before reporting cancellation complete
 
