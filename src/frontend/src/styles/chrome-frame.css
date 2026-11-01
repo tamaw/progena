@@ -18,8 +18,9 @@ body,
   display: grid;
   grid-template-columns: var(--chrome-sidebar-width) minmax(0, 1fr);
   grid-template-rows: var(--chrome-header-height) minmax(0, 1fr);
-  /* dvh tracks the visible mobile viewport (URL bar, on-screen keyboard);
-     100vh is the fallback and the largest viewport on mobile Chrome. */
+  /* dvh tracks dynamic browser chrome such as the mobile URL bar; 100vh is the
+     fallback. On-screen keyboard layout resizing comes from
+     interactive-widget=resizes-content in index.html. */
   height: 100vh;
   height: 100dvh;
   min-height: 0;
