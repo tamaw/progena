@@ -18,7 +18,10 @@ body,
   display: grid;
   grid-template-columns: var(--chrome-sidebar-width) minmax(0, 1fr);
   grid-template-rows: var(--chrome-header-height) minmax(0, 1fr);
+  /* dvh tracks the visible mobile viewport (URL bar, on-screen keyboard);
+     100vh is the fallback and the largest viewport on mobile Chrome. */
   height: 100vh;
+  height: 100dvh;
   min-height: 0;
   min-width: var(--chrome-sidebar-width);
   overflow: hidden;
