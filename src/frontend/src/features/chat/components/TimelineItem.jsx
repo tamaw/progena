@@ -28,6 +28,7 @@ import NormalToolContent from './NormalToolContent';
 import AssistantMessageEntry from './AssistantMessageEntry';
 import { selectAgentName } from '../../settings/state/preferences';
 import ToolCallEntry, { ToolNarrationEntry } from './ToolCallEntry';
+import TokenCountIcon from './TokenCountIcon';
 
 const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities, showResponseStatus, continuesAfterInterruption = false }) {
   if (item.kind === 'tool_call') {
@@ -101,7 +102,7 @@ function TimelineRow({ item, itemIndex, onRegenerate, summaryMarkers, summaryAct
                 {eventTokenMetaItems.map((meta, mi) => (
                   <Fragment key={`${event.id}-${meta}-${mi}`}>
                     {mi > 0 && <span className="message-meta-separator dot-sep" aria-hidden="true" />}
-                    <span className="msg__stat message-token-count">{meta}</span>
+                    <TokenCountIcon label={meta} />
                   </Fragment>
                 ))}
                 {eventFormattedTime && <span className="msg__time entry__time">{eventFormattedTime}</span>}

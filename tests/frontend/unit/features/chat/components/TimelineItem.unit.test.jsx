@@ -8,6 +8,7 @@ const renderers = vi.hoisted(() => ({
   formatMessage: vi.fn(() => '<p><strong>legacy formatted terminal content</strong></p>'),
   sanitizeHtmlFragment: vi.fn((html) => html),
   describeStreamEvent: vi.fn(() => ({ title: '', metaDetail: '', bodyHtml: '', bodyDetail: '' })),
+  tokenMetaItemsForEvent: vi.fn(() => []),
 }));
 
 vi.mock("@frontend/lib/safeMarkdown", () => ({
@@ -20,7 +21,7 @@ vi.mock("@frontend/features/chat/models/messageRenderUtils", () => ({
   badgeClassForEvent: () => '',
   toolDetailsForEvent: () => null,
   todosDetailsForEvent: () => null,
-  tokenMetaItemsForEvent: () => [],
+  tokenMetaItemsForEvent: renderers.tokenMetaItemsForEvent,
   formatTimestamp: () => ''
 }));
 vi.mock('react-redux', () => ({
@@ -151,5 +152,19 @@ describe('TimelineItem subagent summaries', () => {
     const activity = [...container.querySelectorAll('[role="status"]')].map((node) => node.textContent).join(' ');
     expect(activity).toContain('Subagent: Researcher');
     expect(activity).not.toContain('Subagent: Other');
+  });
+});
+
+describe('TimelineItem stream event token count', () => {
+  it('renders per-event token text as the shared expanding icon control', () => {
+    renderers.tokenMetaItemsForEvent.mockReturnValueOnce(['~120 tokens']);
+    const markup = renderToStaticMarkup(React.createElement(TimelineItem, {
+      item: { kind: 'stream_event', id: 'event-1', event: { id: 'event-1', eventType: 'reasoning_delta', content: 'Thinking', metadata: {} } },
+      itemIndex: 0,
+    }));
+    expect(markup).toContain('role="button"');
+    expect(markup).toContain('aria-label="~120 tokens"');
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup.match(/~120 tokens/g)).toHaveLength(2);
   });
 });

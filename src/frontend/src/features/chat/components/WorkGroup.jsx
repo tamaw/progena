@@ -6,6 +6,7 @@
 
 import { memo, useEffect, useMemo, useState } from 'react';
 import TimelineItem from './TimelineItem';
+import TokenCountIcon from './TokenCountIcon';
 import { renderSafeMarkdown, sanitizeHtmlFragment } from '../../../lib/safeMarkdown';
 import { describeStreamEvent, formatTimestamp, tokenMetaItemsForEvent } from '../models/messageRenderUtils';
 import {
@@ -150,7 +151,8 @@ const WorkGroup = memo(function WorkGroup({
             )}
             {terminalLabel && <span className="work-group__status">{terminalLabel}</span>}
             <span className="msg__head-trailing">
-              {tokenMeta.map((meta) => <span key={meta} className="msg__stat message-token-count">{meta}</span>)}
+              {/* Inside the toggle button, so the toggle owns interaction. */}
+              {tokenMeta.map((meta) => <TokenCountIcon key={meta} label={meta} passive />)}
               {time && <span className="msg__time entry__time">{time}</span>}
             </span>
             <span className="tool-event-disclosure__chevron" aria-hidden="true" />
