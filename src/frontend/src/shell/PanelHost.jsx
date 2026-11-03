@@ -16,7 +16,7 @@ const PANEL_EXIT_MS = 200;
 const PANEL_ENTER_DELAY_MS = 16;
 
 // one rAF tick
-export function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmission, quickChatDraft, quickChatInlineActive, onQuickChatSubmissionConsumed, onQuickChatDraftConsumed, onQuickChatInlineSettled, searchQuery, setActivePanel, setSettingsOpen, isPinned, onTogglePin, onResetLiveUiState }) {
+export function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmission, quickChatDraft, quickChatInlineActive, onQuickChatSubmissionConsumed, onQuickChatDraftConsumed, onQuickChatInlineSettled, searchQuery, searchKey, setActivePanel, setSettingsOpen, isPinned, onTogglePin, onResetLiveUiState }) {
   const closePanel = useCallback(() => setActivePanel(null), [setActivePanel]);
 
   // `displayed` = what is currently rendered in the DOM (may lag activePanel during transitions).
@@ -119,7 +119,7 @@ export function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickCha
 
   let panelContent = null;
   if (displayed === 'alerts') panelContent = <AlertsPanel onClose={closePanel} {...shared} />;
-  if (displayed === 'search') panelContent = <SearchPanel navigationItems={navItems} query={searchQuery} onClose={closePanel} {...shared} />;
+  if (displayed === 'search') panelContent = <SearchPanel key={searchKey} navigationItems={navItems} query={searchQuery} onClose={closePanel} {...shared} />;
   if (displayed === 'insights') panelContent = <InsightsPanel onClose={closePanel} {...shared} />;
   if (displayed === 'events') panelContent = (
     <TopNavPane title="Event stream" subtitle="Redux UI events · Ctrl/Cmd+Shift+E" onClose={closePanel} bodyClassName="event-debug" {...shared}>

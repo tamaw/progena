@@ -1,6 +1,5 @@
-import ChatInfoTooltip from './ChatInfoTooltip';
 import tooltipStyles from './ChatInfoTooltip.module.css';
-import styles from './MessageTokenUsage.module.css';
+import TokenCountIcon from './TokenCountIcon';
 
 function formatOutputTokens(value) {
   return new Intl.NumberFormat().format(value);
@@ -18,18 +17,15 @@ export default function MessageTokenUsage({ tokenCount, finalCallTokenCount }) {
     : 'Unknown';
 
   return (
-    <ChatInfoTooltip
-      className={styles.usage}
-      aria-label={hasRootCount ? rootLabel : `Final call: ${finalCallLabel} output tokens`}
-      content={(
+    <TokenCountIcon
+      label={hasRootCount ? rootLabel : `Final call: ${finalCallLabel} output tokens`}
+      details={(
         <>
           <span className={tooltipStyles.row}><span>Output</span><span>{hasRootCount ? formatOutputTokens(tokenCount) : 'Unknown'}</span></span>
           <span className={tooltipStyles.row}><span>Intermediate</span><span>{intermediateLabel}</span></span>
           <span className={tooltipStyles.row}><span>Final call</span><span>{finalCallLabel}</span></span>
         </>
       )}
-    >
-      {hasRootCount ? rootLabel : `Final call: ${finalCallLabel} output tokens`}
-    </ChatInfoTooltip>
+    />
   );
 }

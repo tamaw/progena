@@ -57,3 +57,33 @@ describe('ConfigProvider density', () => {
     expect(seen.current.config.session.idleTimeoutMinutes).toBe(30);
   });
 });
+
+describe('ConfigProvider header field', () => {
+  it('defaults to Ask when nothing is stored', () => {
+    mount();
+    expect(seen.current.config.headerField.default).toBe('ask');
+    expect(seen.current.config.headerField.options).toEqual(['ask', 'search', 'hidden']);
+  });
+
+  it('restores a valid stored mode and falls back to Ask for an unknown one', () => {
+    localStorage.setItem('progena_header_field', 'search');
+    mount();
+    expect(seen.current.config.headerField.default).toBe('search');
+    act(() => root.unmount());
+    localStorage.setItem('progena_header_field', 'sidebar');
+    mount();
+    expect(seen.current.config.headerField.default).toBe('ask');
+  });
+
+  it('persists a selection, rejects invalid modes and resets to Ask', () => {
+    mount();
+    act(() => seen.current.setHeaderField('hidden'));
+    expect(seen.current.config.headerField.default).toBe('hidden');
+    expect(localStorage.getItem('progena_header_field')).toBe('hidden');
+    act(() => seen.current.setHeaderField('bogus'));
+    expect(seen.current.config.headerField.default).toBe('hidden');
+    act(() => seen.current.resetSettings());
+    expect(seen.current.config.headerField.default).toBe('ask');
+    expect(localStorage.getItem('progena_header_field')).toBeNull();
+  });
+});

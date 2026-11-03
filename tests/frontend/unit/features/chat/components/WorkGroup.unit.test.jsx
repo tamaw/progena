@@ -274,3 +274,31 @@ describe('WorkGroup', () => {
     expect(html.match(/Cancelled/g)).toHaveLength(1);
   });
 });
+
+describe('WorkGroup reasoning token count', () => {
+  it('shows the count as a passive expanding icon owned by the group toggle', async () => {
+    const reasoning = {
+      kind: 'stream_event',
+      id: 'counted-reasoning',
+      timestamp: 900,
+      event: {
+        id: 'counted-reasoning',
+        eventType: 'reasoning_summary',
+        content: '**Inspect files**\n\nLooking.',
+        metadata: { reasoning_tokens: 1234 },
+        timestamp: 900,
+      },
+    };
+    await act(async () => root.render(
+      <WorkGroup heading="Inspect files" items={[reasoning]} active={false} endedAt={1_000} />,
+    ));
+
+    const toggle = host.querySelector('.work-group__toggle');
+    expect(toggle.textContent).toContain('1,234 reasoning tokens');
+    expect(toggle.querySelector('svg')).not.toBeNull();
+    expect(toggle.querySelector('[role="button"], [tabindex]')).toBeNull();
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(host.textContent.match(/1,234 reasoning tokens/g)).toHaveLength(1);
+  });
+});

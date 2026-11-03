@@ -24,7 +24,7 @@ function positionTooltip(trigger, bubble, pointer) {
 }
 
 /** Chat metrics use a portal so scroll panes cannot clip their details. */
-export default function ChatInfoTooltip({ children, content, className = '', ...props }) {
+export default function ChatInfoTooltip({ children, content, className = '', onBlur, onKeyDown, ...props }) {
   const id = useId();
   const trigger = useRef(null);
   const bubble = useRef(null);
@@ -72,8 +72,14 @@ export default function ChatInfoTooltip({ children, content, className = '', ...
         setFocused(true);
         setDismissed(false);
       }}
-      onBlur={() => setFocused(false)}
-      onKeyDown={(event) => { if (event.key === 'Escape') setDismissed(true); }}
+      onBlur={(event) => {
+        setFocused(false);
+        onBlur?.(event);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') setDismissed(true);
+        onKeyDown?.(event);
+      }}
     >
       {children}
       {visible && createPortal(

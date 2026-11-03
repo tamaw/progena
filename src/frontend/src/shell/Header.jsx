@@ -9,7 +9,15 @@ import { ChromeIconButton } from '../components/panels/PanelFrame';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { selectAgentName } from '../features/settings/state/preferences';
 
-export function Header({ activePanel, setActivePanel, onSubmitQuickChat, onOpenPanel, onOpenQuickChat, onToggleNav, quickChatInputRef }) {
+function HeaderShortcut() {
+  return (
+    <span className="app-shell__quick-chat-shortcut" aria-label="Keyboard shortcut: Control Q">
+      <kbd>Ctrl</kbd><kbd>Q</kbd>
+    </span>
+  );
+}
+
+export function Header({ activePanel, setActivePanel, fieldMode = 'ask', onSubmitQuickChat, onSubmitSearch, onOpenPanel, onOpenQuickChat, onToggleNav, quickChatInputRef }) {
   const { currentTheme, toggleTheme } = useTheme();
   const alerts = useSelector(selectUiAlerts);
   const unreadCount = alerts?.filter((a) => !a.viewed)?.length || 0;
@@ -34,14 +42,20 @@ export function Header({ activePanel, setActivePanel, onSubmitQuickChat, onOpenP
         </span>
         <span className="app-shell__crumb">{pageLabel}</span>
       </div>
-      <form className="app-shell__quick-chat app-shell__quick-chat--ai" onSubmit={onSubmitQuickChat} aria-label={`Ask ${agentName}`}>
-        <span className="app-shell__quick-chat-ai-icon" aria-hidden="true"><ProgenaAiIcon /></span>
-        <input ref={quickChatInputRef} name="prompt" type="text" placeholder={`Ask ${agentName}`} aria-label={`Ask ${agentName}`} autoComplete="off" />
-        <span className="app-shell__quick-chat-shortcut" aria-label="Keyboard shortcut: Control Q">
-          <kbd>Ctrl</kbd><kbd>Q</kbd>
-        </span>
-      </form>
-      <div className="app-shell__actions">
+      {fieldMode === 'search' ? (
+        <form className="app-shell__quick-chat app-shell__quick-chat--search" role="search" onSubmit={onSubmitSearch} aria-label="Search">
+          <span className="app-shell__quick-chat-search-icon" aria-hidden="true"><SearchIcon /></span>
+          <input ref={quickChatInputRef} name="query" type="search" placeholder="Search" aria-label="Search" autoComplete="off" />
+          <HeaderShortcut />
+        </form>
+      ) : fieldMode === 'hidden' ? null : (
+        <form className="app-shell__quick-chat app-shell__quick-chat--ai" onSubmit={onSubmitQuickChat} aria-label={`Ask ${agentName}`}>
+          <span className="app-shell__quick-chat-ai-icon" aria-hidden="true"><ProgenaAiIcon /></span>
+          <input ref={quickChatInputRef} name="prompt" type="text" placeholder={`Ask ${agentName}`} aria-label={`Ask ${agentName}`} autoComplete="off" />
+          <HeaderShortcut />
+        </form>
+      )}
+      <div className={`app-shell__actions${fieldMode === 'hidden' ? ' app-shell__actions--end' : ''}`}>
         <ChromeIconButton
           label="Toggle theme"
           icon={(

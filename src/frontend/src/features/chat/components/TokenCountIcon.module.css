@@ -1,0 +1,70 @@
+/* Mirrors .msg-action-btn (Copy/Regenerate): a 22px icon that widens to reveal
+   the count. The label stays reachable on narrow screens, where the message
+   action labels are hidden. The :global variant outranks the shared
+   .chat-info-control rules regardless of stylesheet order. */
+.count,
+.count:global(.chat-info-control) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  max-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  overflow: hidden;
+  border-radius: 5px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: pointer;
+  transition: max-width var(--transition-fast), gap var(--transition-fast), padding var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.count svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.label {
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  white-space: nowrap;
+  transition: max-width var(--transition-fast), opacity var(--transition-fast);
+}
+
+.count:hover,
+.count:focus-visible,
+.count.expanded,
+:global(.entry-toggle):hover .passive,
+:global(.entry-toggle):focus-visible .passive,
+:global(.entry-toggle)[aria-expanded="true"] .passive {
+  gap: 4px;
+  max-width: 240px;
+  padding: 0 7px;
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.count:hover .label,
+.count:focus-visible .label,
+.count.expanded .label,
+:global(.entry-toggle):hover .passive .label,
+:global(.entry-toggle):focus-visible .passive .label,
+:global(.entry-toggle)[aria-expanded="true"] .passive .label {
+  max-width: 220px;
+  opacity: 1;
+}
+
+.count:focus-visible {
+  outline: 2px solid var(--color-focus-ring, var(--color-primary));
+  outline-offset: 2px;
+}
+
+/* Inside another control: that control owns the pointer and focus ring. */
+.passive {
+  cursor: inherit;
+}

@@ -61,6 +61,12 @@ const defaultConfig = {
     default: 'comfortable',
     options: ['comfortable', 'compact', 'presentation']
   },
+  // The chrome header field: Ask (AI prompt into Quick Chat), Search (opens the
+  // search panel with the query) or Hidden. Local to this browser like density.
+  headerField: {
+    default: 'ask',
+    options: ['ask', 'search', 'hidden']
+  },
   theme: {
     default: 'system',
     options: ['system', 'dark', 'light']
@@ -70,7 +76,8 @@ const defaultConfig = {
     settings: BROWSER_STORAGE_KEY.SETTINGS, inputHistory: BROWSER_STORAGE_KEY.INPUT_HISTORY,
     sidebarCollapsed: BROWSER_STORAGE_KEY.SIDEBAR_COLLAPSED, pinnedPanel: BROWSER_STORAGE_KEY.PINNED_PANEL,
     streamFilters: BROWSER_STORAGE_KEY.STREAM_FILTERS, quickChatHandoff: BROWSER_STORAGE_KEY.QUICK_CHAT_HANDOFF,
-    idleTimeoutMinutes: BROWSER_STORAGE_KEY.IDLE_TIMEOUT_MINUTES, density: BROWSER_STORAGE_KEY.DENSITY
+    idleTimeoutMinutes: BROWSER_STORAGE_KEY.IDLE_TIMEOUT_MINUTES, density: BROWSER_STORAGE_KEY.DENSITY,
+    headerField: BROWSER_STORAGE_KEY.HEADER_FIELD
   }
 };
 
@@ -84,6 +91,7 @@ export function ConfigProvider({ children, workspaceHost }) {
   const [config, setConfig] = useState(() => {
     const savedTheme = localStorage.getItem(defaultConfig.storage.theme);
     const savedDensity = localStorage.getItem(defaultConfig.storage.density);
+    const savedHeaderField = localStorage.getItem(defaultConfig.storage.headerField);
     const savedTimeout = Number(localStorage.getItem(defaultConfig.storage.idleTimeoutMinutes));
 
     return {
@@ -99,6 +107,10 @@ export function ConfigProvider({ children, workspaceHost }) {
       density: {
         ...defaultConfig.density,
         default: defaultConfig.density.options.includes(savedDensity) ? savedDensity : defaultConfig.density.default
+      },
+      headerField: {
+        ...defaultConfig.headerField,
+        default: defaultConfig.headerField.options.includes(savedHeaderField) ? savedHeaderField : defaultConfig.headerField.default
       },
       session: {
         idleTimeoutMinutes: savedTimeout >= 5 && savedTimeout <= 120 ? savedTimeout : defaultConfig.session.idleTimeoutMinutes
@@ -131,6 +143,12 @@ export function ConfigProvider({ children, workspaceHost }) {
     localStorage.setItem(defaultConfig.storage.density, density);
   };
 
+  const setHeaderField = (mode) => {
+    if (!defaultConfig.headerField.options.includes(mode)) return;
+    setConfig(prev => ({ ...prev, headerField: { ...prev.headerField, default: mode } }));
+    localStorage.setItem(defaultConfig.storage.headerField, mode);
+  };
+
   const setIdleTimeoutMinutes = (minutes) => {
     setConfig(prev => ({ ...prev, session: { ...prev.session, idleTimeoutMinutes: minutes } }));
     localStorage.setItem(defaultConfig.storage.idleTimeoutMinutes, String(minutes));
@@ -152,6 +170,7 @@ export function ConfigProvider({ children, workspaceHost }) {
       setTheme,
       setIdleTimeoutMinutes,
       setDensity,
+      setHeaderField,
       resetSettings
     }}>
       {children}

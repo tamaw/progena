@@ -21,6 +21,7 @@ import { createLiveAssistantTurnStore } from './models/liveAssistantTurnStore';
 import { applyAssistantChunk, applyAssistantMetadata, applyAssistantStreamEvent, createLiveAssistantTurn, finalizeLiveAssistantTurn, resolveLiveTurnResponseStatus } from './models/liveAssistantTurnModel';
 import { loadQuickChatHistory, toQuickChatInputHistory } from './models/quickChatStreamModel';
 import { createQuickChatPromotion, persistQuickChatHandoff } from './models/quickChatPromotionModel';
+import { resolveQuickChatThreadAdoption } from './models/quickChatThreadTarget';
 import { latestContextUsage, resolveComposerCacheExpiry, resolveComposerContextUsage } from './models/contextWindowModel';
 import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from './models/transcriptScroll';
 import { mergeConversationSummaryMarkers } from './models/conversationSummaryModel';
@@ -66,7 +67,14 @@ export function QuickChatPanel({
   const [scratchThreadId, setScratchThreadId] = useState(quickChatMemory.threadId);
   const scratchThreadIdRef = useRef(quickChatMemory.threadId);
   const [isSending, setIsSending] = useState(false);
+  // A reply this panel did not send (joined as a spectator) still owns the
+  // thread. Quick chat has no queue controls, so it waits instead of sending
+  // into that reply; it never cancels it.
+  const isSpectatingReply = Boolean(scratchThreadId) && !isSending && generatingChatIds.includes(scratchThreadId);
+  const isReplyRunning = isSending || isSpectatingReply;
   const [error, setError] = useState('');
+  // Thread requested by Chat's "Open in Quick Chat" while its history loads.
+  const [adoptingThreadId, setAdoptingThreadId] = useState(null);
   const [composerSeed, setComposerSeed] = useState({ key: 0, message: '' });
   const [liveTurnStore] = useState(createLiveAssistantTurnStore);
   const liveTurnRef = useRef(null);
@@ -77,7 +85,13 @@ export function QuickChatPanel({
   const isPinnedToBottomRef = useRef(true);
   const messagesScrollFrameRef = useRef(null);
   const sessionPromiseRef = useRef(null);
-  const pendingRehydrateRef = useRef(null);
+  // History page waiters keyed by request ID. Only the newest load is
+  // current; starting a load or leaving the panel settles older waiters so a
+  // late or missing page event can never strand them.
+  const pendingRehydratesRef = useRef(new Map());
+  const historyLoadSeqRef = useRef(0);
+  // Identifies the "Open in Quick Chat" load that owns the loading state.
+  const adoptionLoadRef = useRef(0);
   const lastPersistedThreadIdRef = useRef(null);
   const hasInitializedThreadRef = useRef(false);
   const lastSentPageContextRef = useRef(null);
@@ -136,21 +150,24 @@ export function QuickChatPanel({
         // A persisted quick-chat thread's messages, fetched directly (not
         // through the shared `chats` slice, which would clobber the main
         // Chat page's active-session state) to resume it after a reload.
-        const pendingRehydrate = pendingRehydrateRef.current;
-        if (
-          pendingRehydrate
-          && event?.type === UI_EVENT.CHAT_MESSAGES_PAGE_LOADED
-          && event?.payload?.request_id === pendingRehydrate.requestId
-        ) {
-          pendingRehydrateRef.current = null;
+        const pendingRehydrate = event?.type === UI_EVENT.CHAT_MESSAGES_PAGE_LOADED
+          ? pendingRehydratesRef.current.get(event?.payload?.request_id)
+          : null;
+        if (pendingRehydrate) {
+          pendingRehydratesRef.current.delete(event.payload.request_id);
           pendingRehydrate.resolve(event.payload);
-          return false;
         }
 
         return undefined;
       },
     );
   }, [uiEventQueue]);
+
+  const settlePendingRehydrates = useCallback(() => {
+    const waiters = [...pendingRehydratesRef.current.values()];
+    pendingRehydratesRef.current.clear();
+    waiters.forEach((waiter) => waiter.reject(new Error('Quick chat history load superseded')));
+  }, []);
 
   // Local-only draft: the session document is created by Postgres when the
   // first user message is checkpointed.
@@ -168,22 +185,28 @@ export function QuickChatPanel({
   // Returns true once resumed (even with zero messages, e.g. a thread that
   // was created but never sent to), or false if it couldn't be resumed
   // (deleted/archived elsewhere) so the caller falls back to a fresh thread.
-  const rehydrateFromPersistedThread = useCallback(async (persistedThreadId) => {
+  // `preserveLiveTurn` loads the committed transcript beneath a reply that is
+  // still streaming (joined as a spectator) without discarding its live turn.
+  const rehydrateFromPersistedThread = useCallback(async (persistedThreadId, { preserveLiveTurn = false } = {}) => {
+    settlePendingRehydrates();
+    historyLoadSeqRef.current += 1;
+    const loadSeq = historyLoadSeqRef.current;
     const epoch = quickChatEpochRef.current;
     const expectedActiveStreamId = activeStreamIdRef.current;
     const expectedThreadId = scratchThreadIdRef.current;
     const isCurrent = () => isQuickChatMountedRef.current
       && quickChatEpochRef.current === epoch
-      && activeStreamIdRef.current === expectedActiveStreamId
+      && historyLoadSeqRef.current === loadSeq
+      && (preserveLiveTurn || activeStreamIdRef.current === expectedActiveStreamId)
       && scratchThreadIdRef.current === expectedThreadId;
     let normalizedMessages;
     let loadedSummaryMarkers = [];
     try {
       normalizedMessages = await loadQuickChatHistory(async (beforeMessageId) => {
         const requestId = createUuid();
-        let resolvePage;
-        const pagePromise = new Promise((resolve) => { resolvePage = resolve; });
-        pendingRehydrateRef.current = { requestId, resolve: resolvePage };
+        const pagePromise = new Promise((resolve, reject) => {
+          pendingRehydratesRef.current.set(requestId, { resolve, reject });
+        });
         try {
           await dispatch(fetchChatMessages({
             chatsUrl: getApiUrl('chats'),
@@ -194,9 +217,7 @@ export function QuickChatPanel({
           })).unwrap();
           return await pagePromise;
         } finally {
-          if (pendingRehydrateRef.current?.requestId === requestId) {
-            pendingRehydrateRef.current = null;
-          }
+          pendingRehydratesRef.current.delete(requestId);
         }
       }, isCurrent, (markers) => {
         loadedSummaryMarkers = mergeConversationSummaryMarkers(loadedSummaryMarkers, markers);
@@ -205,7 +226,7 @@ export function QuickChatPanel({
       return !isCurrent();
     }
     if (!normalizedMessages || !isCurrent()) return true;
-    setLiveAssistantTurn(null);
+    if (!preserveLiveTurn) setLiveAssistantTurn(null);
     setHistory(normalizedMessages);
     setSummaryMarkers((current) => mergeConversationSummaryMarkers(current, loadedSummaryMarkers));
     scratchThreadIdRef.current = persistedThreadId;
@@ -213,7 +234,7 @@ export function QuickChatPanel({
     sessionPromiseRef.current = Promise.resolve(persistedThreadId);
     lastPersistedThreadIdRef.current = persistedThreadId;
     return true;
-  }, [dispatch, getApiUrl, setLiveAssistantTurn]);
+  }, [dispatch, getApiUrl, setLiveAssistantTurn, settlePendingRehydrates]);
 
   // Spectator support: render every rich stream frame for a generation this
   // panel did not dispatch. Completion first freezes the same rich local
@@ -253,6 +274,17 @@ export function QuickChatPanel({
       return;
     }
 
+    // The thread moved on to its next request (for example a queued message):
+    // keep the partial reply already shown as its own row until the canonical
+    // reload replaces it.
+    const previousStreamId = spectatedRequestIdRef.current ? `spectate_${spectatedRequestIdRef.current}` : null;
+    const previousTurn = previousStreamId && liveTurnRef.current?.streamId === previousStreamId ? liveTurnRef.current : null;
+    const frozen = previousTurn
+      ? finalizeLiveAssistantTurn(previousTurn, { status: 'unknown', now: Date.now() })
+      : null;
+    if (frozen) {
+      setHistory((current) => (current.some((message) => message.id === frozen.id) ? current : current.concat(frozen)));
+    }
     spectatorCleanupRef.current?.();
     const streamId = `spectate_${requestId}`;
     spectatedRequestIdRef.current = requestId;
@@ -339,6 +371,7 @@ export function QuickChatPanel({
 
   useEffect(() => {
     isQuickChatMountedRef.current = true;
+    const pendingRehydrates = pendingRehydratesRef.current;
     return () => {
       quickChatEpochRef.current += 1;
       activeStreamIdRef.current = null;
@@ -349,14 +382,71 @@ export function QuickChatPanel({
       // the "already decided" guard below so a remount (a real popover
       // reopen, or React StrictMode's dev-only double-invoke of mount
       // effects) starts over instead of treating the aborted attempt as done.
-      if (pendingRehydrateRef.current) {
+      if (pendingRehydrates.size > 0) {
         hasInitializedThreadRef.current = false;
       }
-      pendingRehydrateRef.current?.resolve([]);
-      pendingRehydrateRef.current = null;
+      settlePendingRehydrates();
       isQuickChatMountedRef.current = false;
     };
-  }, [setLiveAssistantTurn]);
+  }, [setLiveAssistantTurn, settlePendingRehydrates]);
+
+  // Continue a Chat conversation here: switch to its canonical thread and load
+  // its checkpointed history, beneath its running reply when one is joined as
+  // a spectator. Never sends, cancels, or replaces the panel's own reply.
+  const threadTarget = normalizedConfig.threadTarget;
+  useEffect(() => {
+    const decision = resolveQuickChatThreadAdoption({
+      target: threadTarget,
+      adoptedTargetId: quickChatMemory.adoptedTargetId,
+      currentThreadId: scratchThreadId,
+      ownStreamActive: Boolean(ownStreamIdRef.current),
+    });
+    if (decision === 'ignore') return;
+    quickChatMemory.adoptedTargetId = threadTarget.id;
+    // The requested thread replaces the mount-time resume decision below.
+    hasInitializedThreadRef.current = true;
+    if (decision === 'busy') {
+      setError('Quick chat is still replying. Stop it, then open the conversation again.');
+      return;
+    }
+    const { threadId } = threadTarget;
+    // A newer request owns the loading state; an earlier load still settling
+    // must neither clear nor keep it.
+    adoptionLoadRef.current += 1;
+    const adoptionLoad = adoptionLoadRef.current;
+    setAdoptingThreadId(null);
+    if (decision === 'adopt') {
+      quickChatEpochRef.current += 1;
+      spectatorCleanupRef.current?.();
+      spectatorCleanupRef.current = null;
+      spectatedRequestIdRef.current = null;
+      activeStreamIdRef.current = null;
+      setLiveAssistantTurn(null);
+      quickChatMemory.history = [];
+      quickChatMemory.threadId = threadId;
+      lastSentPageContextRef.current = null;
+      setHistory([]);
+      setSummaryMarkers([]);
+      // Set before the load below so its thread guard treats it as current.
+      scratchThreadIdRef.current = threadId;
+      setScratchThreadId(threadId);
+      sessionPromiseRef.current = Promise.resolve(threadId);
+    }
+    setError('');
+    // The panel's own reply on this thread keeps its live transcript and
+    // reconciles when it ends. Otherwise load the committed transcript now; a
+    // reply joined by the spectator effect stays live above it and reloads
+    // the canonical history again on completion.
+    if (ownStreamIdRef.current) return;
+    setAdoptingThreadId(threadId);
+    void rehydrateFromPersistedThread(threadId, { preserveLiveTurn: true }).then((resumed) => {
+      if (!isQuickChatMountedRef.current || adoptionLoadRef.current !== adoptionLoad) return;
+      setAdoptingThreadId(null);
+      if (!resumed) {
+        setError('Could not load that conversation. Open it from Chat and try again.');
+      }
+    });
+  }, [rehydrateFromPersistedThread, scratchThreadId, setLiveAssistantTurn, threadTarget]);
 
   // Decide the thread once per mount. A pinned quick chat's QuickChatPanel
   // mounts as soon as the shell adopts the pinned panel from its fast
@@ -397,7 +487,7 @@ export function QuickChatPanel({
 
   const submit = useCallback(async (message, attachments = [], onSettled) => {
     const text = message.trim();
-    if ((!text && attachments.length === 0) || isSending) return;
+    if ((!text && attachments.length === 0) || isReplyRunning) return;
     quickChatEpochRef.current += 1;
 
     const now = Date.now();
@@ -524,15 +614,15 @@ export function QuickChatPanel({
       }
       onSettled?.(terminalStatus, terminalError);
     }
-  }, [ensureQuickThread, history, isSending, location.pathname, rehydrateFromPersistedThread, sendMessageStream, setLiveAssistantTurn]);
+  }, [ensureQuickThread, history, isReplyRunning, location.pathname, rehydrateFromPersistedThread, sendMessageStream, setLiveAssistantTurn]);
   useEffect(() => {
-    if (!isSending || !pendingSubmission?.inline || consumedSubmissionIdRef.current === pendingSubmission.id) return;
+    if (!isReplyRunning || !pendingSubmission?.inline || consumedSubmissionIdRef.current === pendingSubmission.id) return;
     consumedSubmissionIdRef.current = pendingSubmission.id;
     onSubmissionConsumed?.(pendingSubmission.id);
     onInlineSubmissionSettled?.(pendingSubmission.clientId, 'failed', 'Quick chat is busy. Try again when it finishes.');
-  }, [isSending, pendingSubmission, onSubmissionConsumed, onInlineSubmissionSettled]);
+  }, [isReplyRunning, pendingSubmission, onSubmissionConsumed, onInlineSubmissionSettled]);
   useEffect(() => {
-    if (!pendingSubmission?.message || isSending || consumedSubmissionIdRef.current === pendingSubmission.id) {
+    if (!pendingSubmission?.message || isReplyRunning || consumedSubmissionIdRef.current === pendingSubmission.id) {
       return;
     }
 
@@ -542,7 +632,7 @@ export function QuickChatPanel({
     void submit(pendingSubmission.message, [], pendingSubmission.inline
       ? (status, error) => onInlineSubmissionSettled?.(pendingSubmission.clientId, status, error)
       : undefined);
-  }, [isSending, onInlineSubmissionSettled, onSubmissionConsumed, pendingSubmission, submit]);
+  }, [isReplyRunning, onInlineSubmissionSettled, onSubmissionConsumed, pendingSubmission, submit]);
   useEffect(() => {
     if (!pendingComposerDraft?.message) return;
     onComposerDraftConsumed?.(pendingComposerDraft.id);
@@ -581,6 +671,9 @@ export function QuickChatPanel({
     quickChatMemory.history = [];
     quickChatMemory.threadId = null;
     quickChatMemory.handoff = null;
+    settlePendingRehydrates();
+    adoptionLoadRef.current += 1;
+    setAdoptingThreadId(null);
     setHistory([]);
     setSummaryMarkers([]);
     sessionPromiseRef.current = null;
@@ -588,7 +681,7 @@ export function QuickChatPanel({
     setError('');
     setComposerSeed((current) => ({ key: current.key + 1, message: '' }));
     startFreshQuickThread();
-  }, [cancelStream, setLiveAssistantTurn, startFreshQuickThread]);
+  }, [cancelStream, setLiveAssistantTurn, settlePendingRehydrates, startFreshQuickThread]);
 
   const selectPrompt = useCallback((prompt) => {
     setComposerSeed((current) => ({ key: current.key + 1, message: prompt }));
@@ -641,9 +734,12 @@ export function QuickChatPanel({
           messagesContainerRef={messagesContainerRef}
           isPinnedToBottomRef={isPinnedToBottomRef}
         />
-        {error ? <div className="qchat-error">{error}</div> : null}
+        {adoptingThreadId && history.length === 0 ? (
+          <div className="qchat-loading muted" role="status">Loading conversation…</div>
+        ) : null}
+        {error ? <div className="qchat-error" role="alert">{error}</div> : null}
       </div>
-      {history.length === 0 && !hasLiveTurn && !isSending && !error ? (
+      {history.length === 0 && !hasLiveTurn && !isSending && !error && !adoptingThreadId ? (
         <div className="qchat-pane__hints" aria-label="Quick chat suggestions">
           {normalizedConfig.prompts.map((prompt) => (
             <button key={prompt} type="button" className="qchat-chip" onClick={() => selectPrompt(prompt)}>
@@ -659,7 +755,7 @@ export function QuickChatPanel({
         onSend={submit}
         onStop={stopQuickChat}
         isGenerating={isSending}
-        disabled={false}
+        disabled={Boolean(adoptingThreadId) || isSpectatingReply}
         enableSlashCommands={false}
         allowStop
         autoFocus={!isBackground}

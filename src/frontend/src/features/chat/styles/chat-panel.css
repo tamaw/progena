@@ -624,10 +624,6 @@
 }
 
 /* Message Metadata */
-.message-token-count {
-    color: inherit;
-}
-
 .message-meta-separator {
     width: 4px;
     height: 4px;

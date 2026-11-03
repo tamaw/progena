@@ -13,4 +13,6 @@ export const quickChatMemory = {
   threadId: null,
   mode: null,
   handoff: null,
+  // Last "Open in Quick Chat" request already applied (see quickChatThreadTarget).
+  adoptedTargetId: null,
 };

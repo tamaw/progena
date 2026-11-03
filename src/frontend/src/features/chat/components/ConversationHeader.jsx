@@ -1,8 +1,6 @@
 import { memo, useMemo, useSyncExternalStore } from 'react';
 import StreamFilterMenu from './StreamFilterMenu';
 import DetailHeader, { DetailHeaderAction, DetailHeaderActions } from '../../../components/layout/DetailHeader';
-import EditableDetailTitle from '../../../components/EditableDetailTitle';
-import InlineFailure from '../../../components/InlineFailure';
 import { formatStartedTime } from '../models/conversationModel';
 import { conversationUsageDisplay } from '../models/conversationUsageModel';
 import { STREAM_EVENT_CATEGORIES, countCategorizedEvents } from '../models/streamFilters';
@@ -22,10 +20,8 @@ export const LiveConversationHeader = memo(function LiveConversationHeader({
   updateStreamFilters,
   threadId,
   chatStatus,
-  titleEditor,
   chatActions,
   title,
-  canRename,
 }) {
   const liveHeaderSnapshot = useSyncExternalStore(
     liveTurnStore.subscribeHeader,
@@ -58,15 +54,11 @@ export const LiveConversationHeader = memo(function LiveConversationHeader({
       <DetailHeader
         className="chat-detail-header"
         titleClassName="chat-detail-header__title"
+        // Renaming is the "AI Rename" action; the title itself is read-only.
         title={(
-          <EditableDetailTitle
-            title={isContentLoading ? '' : isRouteDetailError ? 'Conversation unavailable' : (isEmptyConversationPane ? 'No conversation selected' : title)}
-            editor={titleEditor}
-            maxLength={120}
-            ariaLabel="Conversation title"
-            entityLabel="conversation"
-            disabled={!canRename}
-          />
+          <span className="detail-header__title-text chat-detail-header__title-text">
+            {isContentLoading ? '' : isRouteDetailError ? 'Conversation unavailable' : (isEmptyConversationPane ? 'No conversation selected' : title)}
+          </span>
         )}
         actions={(
           <DetailHeaderActions menuLabel="Conversation actions">
@@ -97,7 +89,6 @@ export const LiveConversationHeader = memo(function LiveConversationHeader({
           threadId ? <span key="id" className="chat-session-id">{threadId}</span> : null,
         ]}
       />
-      {titleEditor.error ? <InlineFailure failure={titleEditor.error} operation="Rename conversation" /> : null}
       {!isContentLoading && !isEmptyConversationPane && showEventFilters && (
         <StreamFilterMenu
           filters={streamFilters}

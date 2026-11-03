@@ -15,6 +15,7 @@ import { Header } from './Header';
 import { PrimaryNav } from './PrimaryNav';
 import { PanelHost } from './PanelHost';
 import { quickChatMemory } from '../features/chat/models/quickChatMemory';
+import { createQuickChatThreadTarget } from '../features/chat/models/quickChatThreadTarget';
 import { BROWSER_EVENT, BROWSER_STORAGE_KEY, dispatchQuickChatInlineStatus } from '../lib/browserContracts';
 
 
@@ -44,7 +45,8 @@ export function AppRuntimeShell() {
   const realtime = useSelector(selectRealtime);
   const preferences = useSelector(selectPreferences);
   const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
-  const { getApiUrl } = useConfig();
+  const { config, getApiUrl } = useConfig();
+  const headerFieldMode = config.headerField.default;
   const preferencesUrl = getApiUrl('preferences');
 
   // Seed the whole profile once per app load - theme (useTheme), nav-collapse,
@@ -90,7 +92,9 @@ export function AppRuntimeShell() {
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [quickChatConfig, setQuickChatConfig] = useState(defaultQuickChatConfig);
-  const searchQuery = '';
+  // Header Search mode hands its query to the search panel. The id remounts the
+  // panel so a new submission replaces the query even while it is open.
+  const [searchRequest, setSearchRequest] = useState({ id: 0, query: '' });
   const [quickChatSubmission, setQuickChatSubmission] = useState(null);
   const [quickChatDraft, setQuickChatDraft] = useState(null);
   const quickChatSubmissionIdRef = useRef(0);
@@ -265,8 +269,14 @@ export function AppRuntimeShell() {
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'q') {
         event.preventDefault();
-        quickChatInputRef.current?.focus();
-        quickChatInputRef.current?.select();
+        if (quickChatInputRef.current) {
+          quickChatInputRef.current.focus();
+          quickChatInputRef.current.select();
+        } else {
+          // Header field hidden: Ctrl+Q still reaches Ask via Quick Chat.
+          setQuickChatConfig(defaultQuickChatConfig);
+          setActivePanel('quickChat');
+        }
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
         event.preventDefault();
@@ -279,6 +289,15 @@ export function AppRuntimeShell() {
 
   useEffect(() => {
     const handleOpenQuickChat = (event) => {
+      // Chat's "Open in Quick Chat" names its canonical thread; the panel
+      // continues that conversation in the default mode. Anything invalid
+      // opens a normal quick chat instead.
+      if (event.detail && Object.hasOwn(event.detail, 'threadId')) {
+        const threadTarget = createQuickChatThreadTarget(event.detail);
+        setQuickChatConfig(threadTarget ? { ...defaultQuickChatConfig, threadTarget } : defaultQuickChatConfig);
+        setActivePanel('quickChat');
+        return;
+      }
       const nextConfig = normalizeQuickChatConfig(event.detail);
       const prompt = normalizeAiPrompt(event.detail?.prompt);
       const inline = event.detail?.inline === true;
@@ -344,6 +363,13 @@ export function AppRuntimeShell() {
     setQuickChatConfig(defaultQuickChatConfig);
     setActivePanel('quickChat');
   }, []);
+  const handleSearchSubmit = useCallback((event) => {
+    event.preventDefault();
+    const query = String(new FormData(event.currentTarget).get('query') || '').trim();
+    event.currentTarget.reset();
+    setSearchRequest((current) => ({ id: current.id + 1, query }));
+    setActivePanel('search');
+  }, []);
   const handleQuickChatSubmissionConsumed = useCallback((id) => {
     if (pendingQuickChatRef.current?.id === id) pendingQuickChatRef.current = null;
     setQuickChatSubmission((current) => current?.id === id ? null : current);
@@ -380,7 +406,9 @@ export function AppRuntimeShell() {
       <Header
         activePanel={activePanel}
         setActivePanel={setActivePanel}
+        fieldMode={headerFieldMode}
         onSubmitQuickChat={handleQuickChatSubmit}
+        onSubmitSearch={handleSearchSubmit}
         onOpenPanel={handleOpenPanel}
         onOpenQuickChat={() => {
           setQuickChatConfig(defaultQuickChatConfig);
@@ -402,7 +430,8 @@ export function AppRuntimeShell() {
         setSettingsOpen={setSettingsOpen}
         onQuickChatSubmissionConsumed={handleQuickChatSubmissionConsumed}
         onQuickChatDraftConsumed={handleQuickChatDraftConsumed}
-        searchQuery={searchQuery}
+        searchQuery={searchRequest.query}
+        searchKey={searchRequest.id}
         setActivePanel={setActivePanel}
         isPinned={isPinned}
         onTogglePin={handleTogglePin}

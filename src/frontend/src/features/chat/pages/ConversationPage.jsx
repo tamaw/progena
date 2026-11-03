@@ -8,8 +8,7 @@ import { useConfig } from '../../../context/ConfigContext';
 import { useNotifications } from '../../../context/NotificationContext';
 import { useChatStream } from '../hooks/useChatStream';
 import { useChatQueue } from '../hooks/useChatQueue';
-import useInlineTitleEditor from '../../../hooks/useInlineTitleEditor';
-import useUiAction from '../../../hooks/useUiAction';
+import useAiRename, { aiRenameBlockedReason, createAiRenameAction } from '../hooks/useAiRename';
 import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
 import { reportFailure } from '../../../lib/failures';
 import { createUuid } from '../../../lib/uuid';
@@ -39,8 +38,9 @@ import { useConversationAttachments } from '../hooks/useConversationAttachments'
 import { latestContextUsage, resolveComposerCacheExpiry, resolveComposerContextUsage } from '../models/contextWindowModel';
 import { quickChatMemory } from '../models/quickChatMemory';
 import { mergeConversationSummaryMarkers, normalizeConversationSummaryMarkers } from '../models/conversationSummaryModel';
-import { BROWSER_EVENT } from '../../../lib/browserContracts';
+import { BROWSER_EVENT, dispatchQuickChatOpen } from '../../../lib/browserContracts';
 import { reconcileIncomingChatEvent } from '../models/chatEventReconciliation';
+import { QuickChatIcon } from '../../../components/navIcons';
 
 function alignSummaryMarkerAnchors(markers, canonicalMessages, renderedMessages) {
   if (!Array.isArray(markers) || !Array.isArray(canonicalMessages) || !Array.isArray(renderedMessages)) {
@@ -128,53 +128,12 @@ function ConversationPage() {
   );
   const chatTitle = threadSession?.title || derivedChatTitle;
   const [selectedBackendChatId, setSelectedBackendChatId] = useState(() => urlThreadId || null);
-  // Rename only the session that is both open and selected: opening another chat
-  // changes the selection before its detail replaces `threadId`, and the previous
-  // session's draft, pending rename or failure must not surface under it.
+  // Thread-scoped header actions (AI Rename, Open in Quick Chat) target only the
+  // session that is both open and selected: opening another chat changes the
+  // selection before its detail replaces `threadId`.
   const titleScopeKey = threadSession && threadSession.thread_id === selectedBackendChatId
     ? threadSession.thread_id
     : null;
-  const titleAction = useUiAction(titleScopeKey);
-  const { run: runTitleAction } = titleAction;
-  const commitTitle = useCallback((nextTitle, { ticket, trackSave, failSave }) => {
-    if (!titleScopeKey) {
-      failSave(ticket, 'Conversation is no longer selected. Please try again.');
-      return Promise.resolve({ ok: false, stale: true });
-    }
-
-    let dispatched = false;
-    return runTitleAction('Rename conversation', async () => {
-      dispatched = true;
-      const operation = dispatch(updateChatSessionMetadata({
-        chatsUrl: getApiUrl('chats'),
-        threadId: titleScopeKey,
-        patch: { title: nextTitle },
-      }));
-      trackSave(ticket, {
-        requestId: operation.requestId,
-        events: [UI_EVENT.CHAT_SESSION_METADATA_UPDATED, UI_EVENT.CHAT_SESSIONS_SNAPSHOT],
-      });
-      try {
-        return await operation.unwrap();
-      } catch (commitError) {
-        // The stale UI-action fence must not leave the originating title
-        // ticket pending after the user moved to another conversation.
-        failSave(ticket, commitError);
-        throw commitError;
-      }
-    }).then((result) => {
-      if (!dispatched && !result.ok) {
-        failSave(ticket, result.error || 'Conversation is no longer selected. Please try again.');
-      }
-      return result;
-    });
-  }, [dispatch, getApiUrl, runTitleAction, titleScopeKey]);
-  const titleEditor = useInlineTitleEditor({
-    kind: 'chat',
-    scopeKey: titleScopeKey,
-    title: chatTitle,
-    onCommit: commitTitle,
-  });
   const [streamFilters, setStreamFilters] = useState(() =>
     loadStreamFilters(config.storage.streamFilters),
   );
@@ -1444,7 +1403,35 @@ function ConversationPage() {
   // Conversation actions, shared between the inline header icon row (desktop)
   // and the collapsed "⋮" dropdown (narrow / mobile widths).
   const isPinned = currentSessionItem?.pinned === true;
+  const aiRenameBlocked = aiRenameBlockedReason({
+    threadId: titleScopeKey,
+    isGenerating,
+    isClearingSession,
+    connectionState,
+    isContentLoading,
+    isEmptyConversationPane,
+  });
+  const getSelectedThreadId = useCallback(() => selectedBackendChatIdRef.current, []);
+  const aiRename = useAiRename({
+    threadId: titleScopeKey,
+    blockedReason: aiRenameBlocked,
+    send: sendAndFollow,
+    getSelectedThreadId,
+  });
   const chatActions = [
+    createAiRenameAction({ pending: aiRename.pending, blockedReason: aiRenameBlocked, onRequest: aiRename.request }),
+    {
+      key: 'quick-chat',
+      label: 'Open in Quick Chat',
+      role: 'menuitem',
+      // Only a persisted, selected conversation has a canonical thread to continue.
+      disabled: isContentLoading || isEmptyConversationPane || !titleScopeKey,
+      onClick: () => {
+        if (!titleScopeKey) return;
+        dispatchQuickChatOpen({ threadId: titleScopeKey });
+      },
+      icon: <QuickChatIcon />,
+    },
     {
       key: 'filters',
       label: showEventFilters ? 'Hide filters' : 'Show filters',
@@ -1553,10 +1540,8 @@ function ConversationPage() {
           updateStreamFilters={updateStreamFilters}
           chatStatus={currentSessionItem?.status || 'idle'}
           threadId={threadId}
-          titleEditor={titleEditor}
           chatActions={chatActions}
           title={chatTitle}
-          canRename={Boolean(titleScopeKey)}
         />
 
         <div

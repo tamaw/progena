@@ -387,13 +387,18 @@ export default function DetailHeader({
   className = '',
   titleClassName = '',
 }) {
+  // Plain titles get the shared truncating text node; composed titles (such as
+  // EditableDetailTitle) render their own `detail-header__title-text`.
+  const plainTitle = typeof title === 'string' || typeof title === 'number';
   return (
     <header className={`detail-header ${className}`.trim()}>
       {eyebrow ? <p className="detail-header__eyebrow">{eyebrow}</p> : null}
       <div className="detail-header__title-row">
         {avatar ? <span className="detail-header__avatar">{avatar}</span> : null}
         <div className="detail-header__title-stack">
-          <h1 className={`detail-header__title ${titleClassName}`.trim()}>{title}</h1>
+          <h1 className={`detail-header__title ${titleClassName}`.trim()}>
+            {plainTitle ? <span className="detail-header__title-text">{title}</span> : title}
+          </h1>
           {subtitle ? <p className="detail-header__subtitle">{subtitle}</p> : null}
         </div>
         <span className="detail-header__spacer" />

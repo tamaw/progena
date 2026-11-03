@@ -21,8 +21,10 @@ const settingsSections = [
   { id: 'about', label: 'About', icon: <SettingsAboutIcon /> },
 ];
 
+const HEADER_FIELD_LABELS = { ask: 'Ask', search: 'Search', hidden: 'Hidden' };
+
 export function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetLiveUiState }) {
-  const { config, getApiUrl, resetSettings, setIdleTimeoutMinutes, setDensity } = useConfig();
+  const { config, getApiUrl, resetSettings, setIdleTimeoutMinutes, setDensity, setHeaderField } = useConfig();
   const idleTimeoutMinutes = config.session.idleTimeoutMinutes;
   const dispatch = useDispatch();
   const preferences = useSelector(selectPreferences);
@@ -151,7 +153,7 @@ export function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetL
               <section className="set-section is-active">
                 <header className="set-section__head">
                   <h3>Appearance</h3>
-                  <p>Density and font preferences.</p>
+                  <p>Density, font and header preferences.</p>
                 </header>
 
                 <div className="set-row">
@@ -169,6 +171,26 @@ export function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetL
                         onClick={() => setDensity(option)}
                       >
                         {option.charAt(0).toUpperCase() + option.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="set-row">
+                  <div className="set-row__label">
+                    <div className="set-row__title">Header field</div>
+                    <div className="set-row__sub">Ask the agent, search the workspace, or hide the field. Ctrl+Q focuses it, or opens Quick Chat when hidden.</div>
+                  </div>
+                  <div className="set-seg" role="group" aria-label="Header field">
+                    {config.headerField.options.map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        className={`set-seg__btn${config.headerField.default === option ? ' is-active' : ''}`}
+                        aria-pressed={config.headerField.default === option}
+                        onClick={() => setHeaderField(option)}
+                      >
+                        {HEADER_FIELD_LABELS[option]}
                       </button>
                     ))}
                   </div>
