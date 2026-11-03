@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   nextUuid: 0,
   generatingChatIds: [],
   requestIdByThreadId: {},
+  uiEventQueue: [],
 }));
 
 vi.mock('react-redux', () => ({
@@ -38,7 +39,7 @@ vi.mock('@frontend/features/chat/hooks/useChatApi', () => ({
   }),
 }));
 vi.mock('@frontend/features/chat/state/chats', () => ({
-  fetchChatMessages: vi.fn(),
+  fetchChatMessages: vi.fn((args) => ({ type: 'test/fetchChatMessages', args })),
   selectGeneratingChatIds: () => mocks.generatingChatIds,
   selectRequestIdByThreadId: () => mocks.requestIdByThreadId,
 }));
@@ -58,10 +59,7 @@ vi.mock('@frontend/features/settings/state/modelProfiles', () => ({
   selectModelProfiles: () => [],
 }));
 vi.mock('@frontend/realtime/realtimeSlice', () => ({
-  selectUiEventQueue: () => [],
-}));
-vi.mock('@frontend/realtime/eventQueue', () => ({
-  consumeUiEventQueue: (_queue, sequence) => sequence,
+  selectUiEventQueue: () => mocks.uiEventQueue,
 }));
 vi.mock('@frontend/lib/uuid', () => ({
   createUuid: () => `quick-id-${++mocks.nextUuid}`,
@@ -93,6 +91,7 @@ import { quickChatMemory } from '@frontend/features/chat/models/quickChatMemory'
 import { defaultQuickChatConfig } from '@frontend/features/chat/models/quickChatConfig';
 import { createQuickChatThreadTarget } from '@frontend/features/chat/models/quickChatThreadTarget';
 import { BROWSER_EVENT } from '@frontend/lib/browserContracts';
+import { UI_EVENT } from '@frontend/realtime/eventVocabulary';
 
 let host;
 let root;
@@ -146,6 +145,7 @@ beforeEach(() => {
   mocks.pendingCallbacks = null;
   mocks.generatingChatIds = [];
   mocks.requestIdByThreadId = {};
+  mocks.uiEventQueue = [];
   quickChatMemory.history = [];
   quickChatMemory.threadId = null;
   quickChatMemory.handoff = null;
@@ -340,15 +340,18 @@ describe('QuickChatPanel "Open in Quick Chat" thread adoption', () => {
     expect(mocks.sendMessageStream).not.toHaveBeenCalled();
   });
 
-  it('joins a running reply on the target thread instead of loading or sending', async () => {
+  it('joins a running reply beneath the committed transcript without sending', async () => {
     mocks.generatingChatIds = ['thread-a'];
     mocks.requestIdByThreadId = { 'thread-a': 'req-live' };
     mocks.observeResponseStream.mockReturnValue(() => {});
     await mountQuickChat(targetConfig('thread-a'));
     await flush();
 
+    expect(mocks.observeResponseStream).toHaveBeenCalledTimes(1);
     expect(mocks.observeResponseStream).toHaveBeenCalledWith('req-live', expect.any(Object));
-    expect(mocks.loadQuickChatHistory).not.toHaveBeenCalled();
+    expect(mocks.loadQuickChatHistory).toHaveBeenCalledTimes(1);
+    expect(transcript()).toEqual(['Canonical hello']);
+    expect(latestChatMessages().liveTurnStore.getSnapshot()).not.toBeNull();
     expect(mocks.sendMessageStream).not.toHaveBeenCalled();
     expect(mocks.cancelStream).not.toHaveBeenCalled();
   });
@@ -413,5 +416,151 @@ describe('QuickChatPanel "Open in Quick Chat" thread adoption', () => {
     await flush();
     expect(mocks.loadQuickChatHistory).not.toHaveBeenCalled();
     expect(quickChatMemory.threadId).toBe('quick-id-1');
+  });
+});
+
+describe('QuickChatPanel request-correlated history loads', () => {
+  const fetches = [];
+  let sequence = 0;
+  const targetConfig = (threadId) => ({
+    ...defaultQuickChatConfig,
+    threadTarget: createQuickChatThreadTarget({ threadId }),
+  });
+  const flush = () => act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve();
+  });
+  const rerender = async (panelConfig) => {
+    await act(async () => {
+      root.render(<QuickChatPanel onClose={vi.fn()} panelConfig={panelConfig} />);
+      await Promise.resolve();
+    });
+    await flush();
+  };
+  const transcript = () => (latestChatMessages()?.messages || []).map((message) => message.content);
+  const composer = () => host.querySelector('[data-testid="quick-chat-send"]');
+  const fetchesFor = (threadId) => fetches.filter((request) => request.threadId === threadId);
+  const settled = (promise) => Promise.race([
+    promise.then(() => 'settled', () => 'settled'),
+    new Promise((resolve) => { setTimeout(() => resolve('pending'), 20); }),
+  ]);
+  // Delivers the backend's correlated page event through the real UI queue.
+  const deliverPage = async (request, contents, panelConfig) => {
+    mocks.uiEventQueue = [...mocks.uiEventQueue, {
+      sequence: ++sequence,
+      event: {
+        type: UI_EVENT.CHAT_MESSAGES_PAGE_LOADED,
+        payload: {
+          request_id: request.requestId,
+          thread_id: request.threadId,
+          messages: contents.map((content, index) => ({ id: `${request.requestId}-${index}`, role: 'user', content })),
+          has_more: false,
+          summary_markers: [],
+        },
+      },
+    }];
+    await rerender(panelConfig);
+  };
+
+  beforeEach(async () => {
+    const actual = await vi.importActual('@frontend/features/chat/models/quickChatStreamModel');
+    mocks.loadQuickChatHistory.mockImplementation(actual.loadQuickChatHistory);
+    fetches.length = 0;
+    sequence = 0;
+    mocks.observeResponseStream.mockReturnValue(() => {});
+    mocks.dispatch.mockImplementation((action) => {
+      if (action?.type === 'test/fetchChatMessages') fetches.push(action.args);
+      return { unwrap: () => Promise.resolve({}) };
+    });
+  });
+
+  it('recovers when loading A is superseded by generating B that completes before late A', async () => {
+    const configA = targetConfig('thread-a');
+    await mountQuickChat(configA);
+    await flush();
+    expect(fetchesFor('thread-a')).toHaveLength(1);
+    expect(composer().disabled).toBe(true);
+    const loadA = mocks.loadQuickChatHistory.mock.results[0].value;
+
+    mocks.generatingChatIds = ['thread-b'];
+    mocks.requestIdByThreadId = { 'thread-b': 'req-b' };
+    const configB = targetConfig('thread-b');
+    await rerender(configB);
+    expect(mocks.observeResponseStream).toHaveBeenCalledWith('req-b', expect.any(Object));
+    // The committed transcript is requested beneath the joined live reply.
+    expect(fetchesFor('thread-b')).toHaveLength(1);
+    expect(await settled(loadA)).toBe('settled');
+
+    // B finishes before any page event: the spectator reloads canonical B.
+    mocks.generatingChatIds = [];
+    mocks.requestIdByThreadId = {};
+    await rerender(configB);
+    expect(fetchesFor('thread-b')).toHaveLength(2);
+
+    await deliverPage(fetchesFor('thread-a')[0], ['Late A'], configB);
+    await deliverPage(fetchesFor('thread-b')[0], ['Stale B'], configB);
+    expect(transcript()).not.toContain('Late A');
+    expect(transcript()).not.toContain('Stale B');
+
+    await deliverPage(fetchesFor('thread-b')[1], ['B question', 'B answer'], configB);
+    expect(transcript()).toEqual(['B question', 'B answer']);
+    expect(quickChatMemory.threadId).toBe('thread-b');
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    expect(composer().disabled).toBe(false);
+    expect(mocks.sendMessageStream).not.toHaveBeenCalled();
+    expect(mocks.cancelStream).not.toHaveBeenCalled();
+  });
+
+  it('shows the committed transcript beneath a joined live reply and keeps it live', async () => {
+    mocks.generatingChatIds = ['thread-b'];
+    mocks.requestIdByThreadId = { 'thread-b': 'req-b' };
+    const configB = targetConfig('thread-b');
+    await mountQuickChat(configB);
+    await flush();
+
+    await deliverPage(fetchesFor('thread-b')[0], ['Earlier question', 'Earlier answer', 'Current question'], configB);
+    expect(transcript()).toEqual(['Earlier question', 'Earlier answer', 'Current question']);
+    expect(latestChatMessages().liveTurnStore.getSnapshot()).not.toBeNull();
+    expect(composer().disabled).toBe(false);
+    expect(mocks.observeResponseStream).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessageStream).not.toHaveBeenCalled();
+  });
+
+  it('ignores a late page for the previous thread after switching to an idle thread', async () => {
+    const configA = targetConfig('thread-a');
+    await mountQuickChat(configA);
+    await flush();
+    const configB = targetConfig('thread-b');
+    await rerender(configB);
+
+    await deliverPage(fetchesFor('thread-b')[0], ['B only'], configB);
+    await deliverPage(fetchesFor('thread-a')[0], ['Late A'], configB);
+    expect(transcript()).toEqual(['B only']);
+    expect(composer().disabled).toBe(false);
+  });
+
+  it('settles the in-flight load on New chat and ignores its late page', async () => {
+    const configA = targetConfig('thread-a');
+    await mountQuickChat(configA);
+    await flush();
+    const loadA = mocks.loadQuickChatHistory.mock.results[0].value;
+
+    await act(async () => host.querySelector('button[label="New chat"]').click());
+    await flush();
+    expect(await settled(loadA)).toBe('settled');
+    expect(composer().disabled).toBe(false);
+
+    await deliverPage(fetchesFor('thread-a')[0], ['Late A'], configA);
+    expect(transcript()).toEqual([]);
+    expect(quickChatMemory.threadId).not.toBe('thread-a');
+  });
+
+  it('settles the in-flight load when the panel unmounts (e.g. a workspace remount)', async () => {
+    await mountQuickChat(targetConfig('thread-a'));
+    await flush();
+    const loadA = mocks.loadQuickChatHistory.mock.results[0].value;
+
+    await act(async () => root.unmount());
+    root = null;
+    expect(await settled(loadA)).toBe('settled');
   });
 });
