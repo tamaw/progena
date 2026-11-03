@@ -520,7 +520,10 @@ describe('QuickChatPanel request-correlated history loads', () => {
     await deliverPage(fetchesFor('thread-b')[0], ['Earlier question', 'Earlier answer', 'Current question'], configB);
     expect(transcript()).toEqual(['Earlier question', 'Earlier answer', 'Current question']);
     expect(latestChatMessages().liveTurnStore.getSnapshot()).not.toBeNull();
-    expect(composer().disabled).toBe(false);
+    // The loading state has settled; sending stays off only while the joined
+    // reply runs (see "spectated replies" below).
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    expect(composer().disabled).toBe(true);
     expect(mocks.observeResponseStream).toHaveBeenCalledTimes(1);
     expect(mocks.sendMessageStream).not.toHaveBeenCalled();
   });
@@ -562,5 +565,107 @@ describe('QuickChatPanel request-correlated history loads', () => {
     await act(async () => root.unmount());
     root = null;
     expect(await settled(loadA)).toBe('settled');
+  });
+});
+
+describe('QuickChatPanel spectated replies', () => {
+  const observed = new Map();
+  const targetConfig = (threadId) => ({
+    ...defaultQuickChatConfig,
+    threadTarget: createQuickChatThreadTarget({ threadId }),
+  });
+  const flush = () => act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve();
+  });
+  const rerender = async (panelConfig, props = {}) => {
+    await act(async () => {
+      root.render(<QuickChatPanel onClose={vi.fn()} panelConfig={panelConfig} {...props} />);
+      await Promise.resolve();
+    });
+    await flush();
+  };
+  const composer = () => host.querySelector('[data-testid="quick-chat-send"]');
+
+  beforeEach(() => {
+    observed.clear();
+    mocks.loadQuickChatHistory.mockResolvedValue([{ id: 'm1', role: 'user', content: 'Canonical hello' }]);
+    mocks.observeResponseStream.mockImplementation((requestId, callbacks) => {
+      observed.set(requestId, callbacks);
+      return vi.fn();
+    });
+    mocks.generatingChatIds = ['thread-a'];
+    mocks.requestIdByThreadId = { 'thread-a': 'req-a' };
+  });
+
+  it('freezes the partial reply when the thread moves on to its next queued request', async () => {
+    const config = targetConfig('thread-a');
+    await mountQuickChat(config);
+    await flush();
+    await act(async () => observed.get('req-a').onChunk('Partial A'));
+
+    mocks.requestIdByThreadId = { 'thread-a': 'req-b' };
+    await rerender(config);
+
+    expect(mocks.observeResponseStream).toHaveBeenLastCalledWith('req-b', expect.any(Object));
+    const contents = latestChatMessages().messages.map((message) => message.content);
+    expect(contents).toEqual(['Canonical hello', 'Partial A']);
+    expect(latestChatMessages().liveTurnStore.getSnapshot()?.streamId).toBe('spectate_req-b');
+    expect(mocks.cancelStream).not.toHaveBeenCalled();
+    expect(mocks.sendMessageStream).not.toHaveBeenCalled();
+  });
+
+  it('does not send while only spectating a reply, then allows sending once it ends', async () => {
+    const config = targetConfig('thread-a');
+    await mountQuickChat(config);
+    await flush();
+    expect(composer().disabled).toBe(true);
+    await act(async () => composer().click());
+    expect(mocks.sendMessageStream).not.toHaveBeenCalled();
+
+    const onInlineSubmissionSettled = vi.fn();
+    const onSubmissionConsumed = vi.fn();
+    await rerender(config, {
+      pendingSubmission: { id: 7, message: 'Edit this', inline: true, clientId: 'client-1' },
+      onInlineSubmissionSettled,
+      onSubmissionConsumed,
+    });
+    expect(onSubmissionConsumed).toHaveBeenCalledWith(7);
+    expect(onInlineSubmissionSettled).toHaveBeenCalledWith('client-1', 'failed', expect.stringMatching(/busy/));
+    expect(mocks.sendMessageStream).not.toHaveBeenCalled();
+
+    mocks.generatingChatIds = [];
+    mocks.requestIdByThreadId = {};
+    await rerender(config);
+    expect(composer().disabled).toBe(false);
+    const request = pendingSend();
+    await sendQuickChat();
+    expect(mocks.sendMessageStream).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessageStream.mock.calls[0][6].thread_id).toBe('thread-a');
+    await act(async () => {
+      request.resolve();
+      await Promise.resolve();
+    });
+  });
+
+  it('defers a header prompt until the spectated reply ends instead of sending into it', async () => {
+    const config = targetConfig('thread-a');
+    await mountQuickChat(config);
+    await flush();
+    const onSubmissionConsumed = vi.fn();
+    const submission = { id: 8, message: 'Follow up' };
+    await rerender(config, { pendingSubmission: submission, onSubmissionConsumed });
+    expect(onSubmissionConsumed).not.toHaveBeenCalled();
+    expect(mocks.sendMessageStream).not.toHaveBeenCalled();
+
+    mocks.generatingChatIds = [];
+    mocks.requestIdByThreadId = {};
+    const request = pendingSend();
+    await rerender(config, { pendingSubmission: submission, onSubmissionConsumed });
+    expect(onSubmissionConsumed).toHaveBeenCalledWith(8);
+    expect(mocks.sendMessageStream).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      request.resolve();
+      await Promise.resolve();
+    });
   });
 });

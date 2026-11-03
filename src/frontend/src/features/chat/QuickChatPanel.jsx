@@ -67,6 +67,11 @@ export function QuickChatPanel({
   const [scratchThreadId, setScratchThreadId] = useState(quickChatMemory.threadId);
   const scratchThreadIdRef = useRef(quickChatMemory.threadId);
   const [isSending, setIsSending] = useState(false);
+  // A reply this panel did not send (joined as a spectator) still owns the
+  // thread. Quick chat has no queue controls, so it waits instead of sending
+  // into that reply; it never cancels it.
+  const isSpectatingReply = Boolean(scratchThreadId) && !isSending && generatingChatIds.includes(scratchThreadId);
+  const isReplyRunning = isSending || isSpectatingReply;
   const [error, setError] = useState('');
   // Thread requested by Chat's "Open in Quick Chat" while its history loads.
   const [adoptingThreadId, setAdoptingThreadId] = useState(null);
@@ -269,6 +274,17 @@ export function QuickChatPanel({
       return;
     }
 
+    // The thread moved on to its next request (for example a queued message):
+    // keep the partial reply already shown as its own row until the canonical
+    // reload replaces it.
+    const previousStreamId = spectatedRequestIdRef.current ? `spectate_${spectatedRequestIdRef.current}` : null;
+    const previousTurn = previousStreamId && liveTurnRef.current?.streamId === previousStreamId ? liveTurnRef.current : null;
+    const frozen = previousTurn
+      ? finalizeLiveAssistantTurn(previousTurn, { status: 'unknown', now: Date.now() })
+      : null;
+    if (frozen) {
+      setHistory((current) => (current.some((message) => message.id === frozen.id) ? current : current.concat(frozen)));
+    }
     spectatorCleanupRef.current?.();
     const streamId = `spectate_${requestId}`;
     spectatedRequestIdRef.current = requestId;
@@ -471,7 +487,7 @@ export function QuickChatPanel({
 
   const submit = useCallback(async (message, attachments = [], onSettled) => {
     const text = message.trim();
-    if ((!text && attachments.length === 0) || isSending) return;
+    if ((!text && attachments.length === 0) || isReplyRunning) return;
     quickChatEpochRef.current += 1;
 
     const now = Date.now();
@@ -598,15 +614,15 @@ export function QuickChatPanel({
       }
       onSettled?.(terminalStatus, terminalError);
     }
-  }, [ensureQuickThread, history, isSending, location.pathname, rehydrateFromPersistedThread, sendMessageStream, setLiveAssistantTurn]);
+  }, [ensureQuickThread, history, isReplyRunning, location.pathname, rehydrateFromPersistedThread, sendMessageStream, setLiveAssistantTurn]);
   useEffect(() => {
-    if (!isSending || !pendingSubmission?.inline || consumedSubmissionIdRef.current === pendingSubmission.id) return;
+    if (!isReplyRunning || !pendingSubmission?.inline || consumedSubmissionIdRef.current === pendingSubmission.id) return;
     consumedSubmissionIdRef.current = pendingSubmission.id;
     onSubmissionConsumed?.(pendingSubmission.id);
     onInlineSubmissionSettled?.(pendingSubmission.clientId, 'failed', 'Quick chat is busy. Try again when it finishes.');
-  }, [isSending, pendingSubmission, onSubmissionConsumed, onInlineSubmissionSettled]);
+  }, [isReplyRunning, pendingSubmission, onSubmissionConsumed, onInlineSubmissionSettled]);
   useEffect(() => {
-    if (!pendingSubmission?.message || isSending || consumedSubmissionIdRef.current === pendingSubmission.id) {
+    if (!pendingSubmission?.message || isReplyRunning || consumedSubmissionIdRef.current === pendingSubmission.id) {
       return;
     }
 
@@ -616,7 +632,7 @@ export function QuickChatPanel({
     void submit(pendingSubmission.message, [], pendingSubmission.inline
       ? (status, error) => onInlineSubmissionSettled?.(pendingSubmission.clientId, status, error)
       : undefined);
-  }, [isSending, onInlineSubmissionSettled, onSubmissionConsumed, pendingSubmission, submit]);
+  }, [isReplyRunning, onInlineSubmissionSettled, onSubmissionConsumed, pendingSubmission, submit]);
   useEffect(() => {
     if (!pendingComposerDraft?.message) return;
     onComposerDraftConsumed?.(pendingComposerDraft.id);
@@ -739,7 +755,7 @@ export function QuickChatPanel({
         onSend={submit}
         onStop={stopQuickChat}
         isGenerating={isSending}
-        disabled={Boolean(adoptingThreadId)}
+        disabled={Boolean(adoptingThreadId) || isSpectatingReply}
         enableSlashCommands={false}
         allowStop
         autoFocus={!isBackground}
