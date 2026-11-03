@@ -166,6 +166,39 @@ async def test_async_completion_returns_to_active_chat_not_stale_state(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_continued_task_completion_returns_to_new_chat_not_previous_object_owner(
+    monkeypatch,
+) -> None:
+    client = _Client([_payload(state="completed")])
+    monkeypatch.setattr("src.progena.a2a.tasks.A2AClient", lambda: client)
+    prior = A2ATaskRecord(
+        task_id="task-1",
+        agent_name="builder",
+        status="input-required",
+        request_metadata={
+            "thread_id": "old-object-checkpoint",
+            "owner": {"protocol": "object_agent", "thread_id": "old-owner"},
+        },
+    )
+    state = _State([prior])
+    token = set_current_thread_id("new-chat")
+    try:
+        result = await A2ASendAsyncTool().execute(
+            _context(
+                state, _registry(), {"agent": "builder", "message": "continue", "task_id": "task-1"}
+            )
+        )
+    finally:
+        reset_current_thread_id(token)
+
+    assert result.success
+    queues = MagicMock()
+    queues.enqueue_input = AsyncMock(return_value=True)
+    assert await enqueue_completion_followup(state, queues, state.records["task-1"])
+    assert queues.enqueue_input.await_args.kwargs["metadata"]["thread_id"] == "new-chat"
+
+
+@pytest.mark.asyncio
 async def test_send_followup_carries_task_and_context_ids(monkeypatch) -> None:
     client = _Client([_payload("task-1", "input-required", "ctx-1")])
     monkeypatch.setattr("src.progena.a2a.tasks.A2AClient", lambda: client)

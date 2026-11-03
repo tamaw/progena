@@ -269,10 +269,9 @@ async def _send(context: ToolContext, *, blocking: bool, source: str) -> ToolRes
             "thread_id": thread_id,
         }
     )
-    if owner is not None:
-        metadata["owner"] = owner.as_metadata()
-    else:
-        metadata.pop("owner", None)
+    # Explicitly clear a prior object-agent owner when continuing from a chat.
+    # Omitting the key would retain the previous owner during task upsert.
+    metadata["owner"] = owner.as_metadata() if owner is not None else None
     progress_callback = (
         _make_progress_callback(context.tool_call_id, resolved_name) if blocking else None
     )
