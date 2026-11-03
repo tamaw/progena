@@ -12,6 +12,7 @@ import { extractA2ASummary } from './messageRenderUtils';
 import { deriveChatStatus } from './chatStatus';
 import { normalizeContextUsage } from './contextWindowModel';
 import { normalizeInterruptionReason } from './interruptionReasonModel';
+import { isRoutineResultFailure } from './toolFailureModel';
 export function compareSessionItems(left, right) {
   const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
   if (pinnedDelta !== 0) {
@@ -66,7 +67,7 @@ function buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp) {
       metadata: {
         subagent_name: subagentName,
         tool_call_id: toolCallId,
-        success: true,
+        success: tc.failed !== true && !isRoutineResultFailure(result, subagentName),
         result_preview: images ? `${images.length} image${images.length !== 1 ? 's' : ''}` : result,
         ...(taskSummary ? { task_summary: taskSummary } : {}),
         source: 'checkpoint',
@@ -299,6 +300,8 @@ export function normalizeBackendChatMessage(message, index) {
     timestamp,
     // Never reuse the display timestamp's Date.now() fallback for cache age.
     responseTimestamp: role === 'assistant' && content.trim() && responseStatus === 'completed'
+      ? toValidTimestamp(createdAt) : null,
+    workEndedAt: role === 'assistant' && !['running', 'unknown'].includes(responseStatus)
       ? toValidTimestamp(createdAt) : null,
     tokenCount: normalizeOutputTokenCount(message.token_count),
     finalCallTokenCount: normalizeOutputTokenCount(message.final_call_token_count),

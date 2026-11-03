@@ -366,6 +366,76 @@ async def test_task_tool_events_emit_outer_rows_and_subagent_events():
 
 
 @pytest.mark.asyncio
+async def test_task_routine_failure_result_marks_only_that_attempt_failed():
+    graph = _FakeGraph(
+        [
+            (
+                "custom",
+                {
+                    "event_type": "tool_start",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "failed-attempt",
+                        "subagent_type": "routine-alpha",
+                    },
+                },
+            ),
+            (
+                "custom",
+                {
+                    "event_type": "tool_result",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "failed-attempt",
+                        "success": True,
+                        "result_preview": "Routine 'routine-alpha' failed: upstream unavailable",
+                    },
+                },
+            ),
+            (
+                "custom",
+                {
+                    "event_type": "tool_start",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "retry-attempt",
+                        "subagent_type": "routine-alpha",
+                    },
+                },
+            ),
+            (
+                "custom",
+                {
+                    "event_type": "tool_result",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "retry-attempt",
+                        "success": True,
+                        "result_preview": "The routine completed successfully.",
+                    },
+                },
+            ),
+        ]
+    )
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
+
+    items = await _collect_items(bridge)
+    results = {
+        item["metadata"]["tool_call_id"]: item["metadata"]
+        for item in items
+        if item.get("event_type") == "subagent_result"
+    }
+
+    assert results["failed-attempt"]["success"] is False
+    assert results["failed-attempt"]["result_preview"] == "Routine 'routine-alpha' failed: upstream unavailable"
+    assert results["retry-attempt"]["success"] is True
+
+
+@pytest.mark.asyncio
 async def test_task_tool_start_uses_fallback_summary_when_args_preview_is_truncated():
     """A dedicated summary field keeps task cards readable after args collapse."""
     summary_source = "  Review   the README\n and report findings " + ("x" * 200)

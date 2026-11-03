@@ -1,0 +1,26 @@
+.earlier {
+  padding: .2rem 0 .3rem 38px;
+}
+.earlier button {
+  min-height: 28px;
+  text-align: left;
+}
+.reasoningTitle {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+.toggle {
+  width: 100%;
+  flex-wrap: wrap;
+}
+.toggle .title {
+  flex: 1 1 100px;
+}
+.toggle .settledTitle {
+  flex: 0 0 auto;
+}
+.toggle .trailing {
+  flex: 0 0 auto;
+  margin-left: auto;
+}

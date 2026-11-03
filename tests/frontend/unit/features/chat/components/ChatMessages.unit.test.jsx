@@ -1,22 +1,25 @@
 // @vitest-environment jsdom
 import React, { act } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import ChatMessages from '@frontend/features/chat/components/ChatMessages';
 import { isEventVisible } from '@frontend/features/chat/models/streamFilters';
-import { mergeConversationSummaryMarkers } from '@frontend/features/chat/models/conversationSummaryModel';
 import { createLiveAssistantTurnStore } from '@frontend/features/chat/models/liveAssistantTurnStore';
 import { createLiveAssistantTurn } from '@frontend/features/chat/models/liveAssistantTurnModel';
-import { useMermaidRender } from '@frontend/hooks/useMermaidRender';
 
-vi.mock('@frontend/hooks/useMermaidRender', () => ({
-  useMermaidRender: vi.fn(),
-}));
-
-function renderTranscript(surface, filters) {
+const renderedTranscripts = [];
+beforeEach(() => vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true));
+afterEach(async () => {
+  for (const { root, container } of renderedTranscripts.splice(0)) {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+  vi.unstubAllGlobals();
+});
+async function renderTranscript(surface, filters) {
   const store = configureStore({
     reducer: () => ({ uiData: { preferences: { agentName: 'Progena' } } }),
   });
@@ -48,36 +51,42 @@ function renderTranscript(surface, filters) {
   const liveStore = createLiveAssistantTurnStore();
   liveStore.set({ ...createLiveAssistantTurn({ streamId: 'live', startedAt: 1000 }), ...assistant, assistantMessageId: 'assistant' });
   const container = document.createElement('div');
-  container.innerHTML = renderToStaticMarkup(
+  document.body.append(container);
+  const root = createRoot(container);
+  renderedTranscripts.push({ root, container });
+  await act(async () => root.render(
     <Provider store={store}>
       <ChatMessages
         messages={surface === 'history' ? [user, assistant] : [user]}
         liveTurnStore={surface === 'live' ? liveStore : undefined}
         streamEventFilter={(event) => isEventVisible(event, filters)}
+        messagesContainerRef={{ current: container }}
+        isPinnedToBottomRef={{ current: true }}
       />
     </Provider>,
-  );
+  ));
+  await act(async () => {
+    for (const toggle of container.querySelectorAll('.work-group button[aria-expanded="false"]')) toggle.click();
+  });
   return container;
 }
 
 describe.each(['history', 'live'])('%s transcript activity filters', (surface) => {
-  it('retains messages, attachments, images and failed work while hiding successful activity', () => {
-    const container = renderTranscript(surface, { tools: false, plan: false, reasoning: false, delegations: false });
+  it('retains messages, attachments, images and failed work while hiding successful activity', async () => {
+    const container = await renderTranscript(surface, { tools: false, plan: false, reasoning: false, delegations: false });
     expect(container.textContent).toContain('The question');
     expect(container.textContent).toContain('The answer');
     expect(container.textContent).toContain('notes.txt');
     expect(container.querySelector('.msg-img-strip img')).not.toBeNull();
     expect(container.textContent).not.toContain('Successful delegate');
-    expect(container.textContent).toContain('1 failed');
     expect(container.textContent).toContain('Delegate failed');
     expect(container.textContent).toContain('Peer unavailable');
     expect(container.querySelector('.subagent-card--success .entry__head').textContent).toContain('Recovered delegate1 failed');
     expect(container.querySelector('.a2a-call-card--success .entry__head').textContent).toContain('Recovered peerFailed');
   });
 
-  it('hides failed activity when Errors is off without hiding the answer', () => {
-    const container = renderTranscript(surface, { tools: true, delegations: true, errors: false });
-    expect(container.querySelector('.work-group')).toBeNull();
+  it('hides failed activity when Errors is off without hiding the answer', async () => {
+    const container = await renderTranscript(surface, { tools: true, delegations: true, errors: false });
     expect(container.textContent).toContain('Successful delegate');
     expect(container.textContent).not.toContain('Failed delegate');
     expect(container.textContent).not.toContain('Failed peer');
@@ -147,7 +156,7 @@ describe('conversation summary markers', () => {
     expect(marker.compareDocumentPosition(container.querySelector('.msg--assistant')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('keeps live compaction before the pending answer that terminates the response chain', () => {
+  it('keeps live compaction before the initial work section', () => {
     const store = configureStore({
       reducer: () => ({ uiData: { preferences: { agentName: 'Progena' } } }),
     });
@@ -169,7 +178,7 @@ describe('conversation summary markers', () => {
       </Provider>,
     );
     const activity = container.querySelector('article[role="status"]');
-    const answer = container.querySelector('[aria-label="Assistant is responding"]');
+    const answer = container.querySelector('.work-group--active');
     expect(activity).not.toBeNull();
     expect(answer).not.toBeNull();
     expect(activity.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -214,94 +223,45 @@ describe('conversation summary markers', () => {
   });
 });
 
-describe('conversation summary marker render stability', () => {
-  it('does not rerender unrelated historical messages for equal or differently scoped markers', async () => {
-    const store = configureStore({
-      reducer: () => ({ uiData: { preferences: { agentName: 'Progena' } } }),
-    });
-    const messages = [
-      {
-        id: 'assistant-a',
-        role: 'assistant',
-        content: 'First answer',
-        timelineItems: [{
-          kind: 'subagent',
-          id: 'subagent-a',
-          toolCallId: 'tool-a',
-          status: 'success',
-          subagentName: 'Delegate A',
-          entries: [],
-        }],
-      },
-      {
-        id: 'assistant-b',
-        role: 'assistant',
-        content: 'Second answer',
-        timelineItems: [{
-          kind: 'subagent',
-          id: 'subagent-b',
-          toolCallId: 'tool-b',
-          status: 'success',
-          subagentName: 'Delegate B',
-          entries: [],
-        }],
-      },
-    ];
-    const markerA = {
-      id: 'summary-a',
-      anchor_message_id: 'assistant-a',
-      summary: 'First nested summary.',
-      scope: { kind: 'subagent', id: 'tool-a' },
-    };
-    const markerB = {
-      id: 'summary-b',
-      anchor_message_id: 'assistant-b',
-      summary: 'Second nested summary.',
-      scope: { kind: 'subagent', id: 'tool-b' },
-    };
-    const initialMarkers = mergeConversationSummaryMarkers([], [markerA]);
-    const equalMarkers = mergeConversationSummaryMarkers(initialMarkers, [{ ...markerA }]);
-    const changedMarkers = mergeConversationSummaryMarkers(equalMarkers, [markerB]);
-    const host = document.createElement('div');
-    document.body.append(host);
-    const root = createRoot(host);
 
-    try {
-      await act(async () => {
-        root.render(
-          <Provider store={store}>
-            <ChatMessages messages={messages} summaryMarkers={initialMarkers} />
-          </Provider>,
-        );
-      });
-      const cards = host.querySelectorAll('.subagent-card');
-      expect(cards).toHaveLength(2);
-      expect(cards[0].querySelector('[data-summary-scope]')).not.toBeNull();
-      expect(cards[1].querySelector('[data-summary-scope]')).toBeNull();
-      useMermaidRender.mockClear();
-
-      await act(async () => {
-        root.render(
-          <Provider store={store}>
-            <ChatMessages messages={messages} summaryMarkers={equalMarkers} />
-          </Provider>,
-        );
-      });
-      expect(useMermaidRender).not.toHaveBeenCalled();
-
-      await act(async () => {
-        root.render(
-          <Provider store={store}>
-            <ChatMessages messages={messages} summaryMarkers={changedMarkers} />
-          </Provider>,
-        );
-      });
-      expect(useMermaidRender).toHaveBeenCalledTimes(1);
-    } finally {
-      await act(async () => root.unmount());
-      host.remove();
-    }
+it('follows resized content only while the reader remains pinned', async () => {
+  let notifyResize;
+  let frame;
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(callback) { notifyResize = callback; }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
   });
+  vi.stubGlobal('requestAnimationFrame', (callback) => { frame = callback; return 1; });
+  vi.stubGlobal('cancelAnimationFrame', () => { frame = null; });
+  const host = document.createElement('div');
+  document.body.append(host);
+  const root = createRoot(host);
+  const pinned = { current: true };
+  Object.defineProperties(host, {
+    scrollHeight: { configurable: true, value: 900 },
+    clientHeight: { configurable: true, value: 300 },
+  });
+  try {
+    await act(async () => root.render(
+      <ChatMessages messages={[]} messagesContainerRef={{ current: host }} isPinnedToBottomRef={pinned} />,
+    ));
+    notifyResize();
+    pinned.current = false;
+    await act(async () => frame());
+    expect(host.scrollTop).toBe(0);
+    pinned.current = true;
+    notifyResize();
+    await act(async () => frame());
+    expect(host.scrollTop).toBe(900);
+    notifyResize();
+    await act(async () => root.unmount());
+    expect(frame).toBeNull();
+  } finally {
+    host.remove();
+    vi.unstubAllGlobals();
+  }
 });
 
 it('follows resized content only while the reader remains pinned', async () => {

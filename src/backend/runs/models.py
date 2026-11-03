@@ -35,6 +35,9 @@ class RunRow(BaseModel):
     status: str
     started_at: str | None = None
     completed_at: str | None = None
+    # Present only for a run launched by a chat; lets chat activity enforce
+    # ownership without exposing workflow internals from its transcript.
+    parent_thread_id: str | None = None
     tokens: int | None = None
     overview: list[Span] = Field(default_factory=list)
     _routine_threads: dict[str, str] = PrivateAttr(default_factory=dict)
@@ -53,6 +56,7 @@ class RunTrace(BaseModel):
 
 class RunsSubscription(BaseModel):
     client_id: str = Field(min_length=1, max_length=64)
+    interest_id: str | None = Field(default=None, min_length=1, max_length=128)
     kind: RunKind | None = None
     run_id: str | None = None
 

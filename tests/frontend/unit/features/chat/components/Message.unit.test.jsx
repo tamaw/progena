@@ -114,44 +114,6 @@ describe('interruption markers', () => {
 
 
 describe('assistant work groups', () => {
-  it('renders every reasoning phase as a top-level work group without a turn wrapper', async () => {
-    await renderMessage(message([
-      tool('generic-start', 'tool_start', 900),
-      {
-        kind: 'stream_event',
-        id: 'reasoning-one',
-        timestamp: 1_000,
-        event: {
-          id: 'reasoning-one',
-          eventType: 'reasoning_delta',
-          timestamp: 1_000,
-          content: '**Inspect files**\n\nRead configuration first.',
-          metadata: {},
-        },
-      },
-      tool('read-start', 'tool_start', 1_100, 'read_file', { tool_call_id: 'read' }),
-      {
-        kind: 'stream_event',
-        id: 'reasoning-two',
-        timestamp: 1_300,
-        event: {
-          id: 'reasoning-two',
-          eventType: 'reasoning_delta',
-          timestamp: 1_300,
-          content: '**Search references**\n\nThen find callers.',
-          metadata: {},
-        },
-      },
-      tool('search-start', 'tool_start', 1_400, 'search_web', { tool_call_id: 'search' }),
-    ]));
-
-    const groups = [...host.querySelectorAll('.work-group')];
-
-    expect(host.querySelector('section[aria-label="Assistant work"]')).toBeNull();
-    expect(groups).toHaveLength(3);
-    expect(groups.map((group) => group.querySelector('.work-group__title')?.textContent))
-      .toEqual(['Worked', 'Inspect files', 'Search references']);
-  });
 
   it('reveals full reasoning and named tool rows with one group expansion', async () => {
     await renderMessage(message([
@@ -179,43 +141,64 @@ describe('assistant work groups', () => {
     expect(host.querySelector('.tool-call-entry__disclosure summary')?.textContent).toContain('Read File');
   });
 
-  it('keeps delegated-agent cards and the answer as siblings of collapsed root work', async () => {
+  it('retains provider-only reasoning detail and summary bodies when text content is empty', async () => {
+    await renderMessage(message([{
+      kind: 'stream_event', id: 'provider-detail', timestamp: 1_000,
+      event: { id: 'provider-detail', eventType: 'reasoning_summary', content: '',
+        metadata: { detail: 'The provider retained an explanation of the result.' }, timestamp: 1_000 },
+    }, {
+      kind: 'stream_event', id: 'provider-summary', timestamp: 1_500,
+      event: { id: 'provider-summary', eventType: 'reasoning_summary', content: '',
+        metadata: { summary: '**Provider check**\n\nThe provider summary also contains substantive reasoning.' }, timestamp: 1_500 },
+    }, answer('Result.', 2_000)]));
+    await act(async () => host.querySelector('.work-group__toggle').click());
+    expect(host.querySelector('.work-group__reasoning-text').textContent)
+      .toContain('The provider retained an explanation of the result.');
+    expect(host.textContent).toContain('The provider summary also contains substantive reasoning.');
+    expect(host.textContent.match(/Provider check/g)).toHaveLength(1);
+  });
+
+
+  it('keeps an interim reply connected between work phases, without a typing cursor', async () => {
     await renderMessage(message([
-      tool('root-start', 'tool_start', 1_000),
-      {
-        kind: 'subagent',
-        id: 'subagent-1',
-        toolCallId: 'subagent-call',
-        subagentName: 'researcher',
-        taskSummary: '',
-        status: 'success',
-        entries: [],
-        resultPreview: 'Research complete',
-      },
-      {
-        kind: 'a2a_call',
-        id: 'a2a-1',
-        agentName: 'remote analyst',
-        status: 'success',
-        messages: [],
-        resultPreview: 'Remote analysis complete',
-      },
-      answer('Final answer remains readable.', 5_000),
+      tool('before', 'tool_result', 1_000),
+      { ...answer('An interim update.', 2_000), id: 'interim' },
+      tool('after', 'tool_start', 3_000),
+    ], { responseStatus: 'running', isStreaming: true, workActive: true }));
+
+    const interim = host.querySelector('.msg--assistant');
+    const groups = host.querySelectorAll('.work-group');
+    expect(groups).toHaveLength(2);
+    expect(groups[0].compareDocumentPosition(interim) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(interim.compareDocumentPosition(groups[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(interim.classList.contains('entry--chain-item')).toBe(true);
+    expect(interim.querySelector('.stream-cursor')).toBeNull();
+    expect(interim.closest('.work-group')).toBeNull();
+  });
+
+  it('ends only the final reply and preserves each intermediate reply after completion', async () => {
+    await renderMessage(message([
+      { ...answer('Checking now.', 1_000), id: 'interim' },
+      tool('check', 'tool_result', 2_000),
+      answer('All checked.', 3_000),
     ]));
+    const replies = host.querySelectorAll('.msg--assistant');
+    expect(replies[0].classList.contains('entry--chain-item')).toBe(true);
+    expect(replies[1].classList.contains('entry--chain-end')).toBe(true);
+    expect(replies[0].textContent).toContain('Checking now.');
+    expect(replies[1].textContent).toContain('All checked.');
+  });
 
-    const work = host.querySelector('.work-group');
-    const subagent = host.querySelector('.subagent-card');
-    const remoteAgent = host.querySelector('.a2a-call-card');
-    const finalAnswer = [...host.querySelectorAll('.msg--assistant')]
-      .find((element) => element.textContent.includes('Final answer remains readable.'));
-
-    expect(work).not.toBeNull();
-    expect(subagent).not.toBeNull();
-    expect(remoteAgent).not.toBeNull();
-    expect(finalAnswer).not.toBeNull();
-    expect(work.contains(subagent)).toBe(false);
-    expect(work.contains(remoteAgent)).toBe(false);
-    expect(work.contains(finalAnswer)).toBe(false);
+  it('keeps a root failure visible when only a successful delegation card remains', async () => {
+    await renderMessage(message([
+      tool('hidden-tool', 'tool_start', 1_000),
+      { kind: 'subagent', id: 'successful-helper', toolCallId: 'helper', subagentName: 'helper', status: 'success', entries: [] },
+    ], { responseStatus: 'failed' }), {
+      streamEventFilter: (event) => event.eventType === 'subagent_start',
+    });
+    await act(async () => host.querySelector('.work-group__toggle').click());
+    expect(host.querySelector('.subagent-card')).not.toBeNull();
+    expect(host.querySelector('.work-group__status')?.textContent).toBe('Failed');
   });
 
   it('keeps failed-tool evidence without calling a completed response failed', async () => {

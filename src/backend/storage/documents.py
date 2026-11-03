@@ -253,6 +253,10 @@ class BackendDocumentStore(Protocol):
 
     def list_documents(self, prefix: str, key_prefix: str) -> list[tuple[str, StoredDocument]]: ...
 
+    def list_active_workflow_run_ids(self, parent_thread_id: str) -> list[str]:
+        """Return compact active workflow identities owned by one chat thread."""
+        ...
+
     def query_workflow_run_page(
         self,
         *,
@@ -479,6 +483,17 @@ class InMemoryDocumentStore:
         return [
             {"key": key, "payload": document.payload, "updated_at": document.updated_at}
             for key, document in rows[:limit]
+        ]
+
+    def list_active_workflow_run_ids(self, parent_thread_id: str) -> list[str]:
+        return [
+            str(payload["run_id"])
+            for _, document in self.list_documents(PROGENA_STATE_PREFIX, "workflow_run:")
+            if isinstance((payload := document.payload), dict)
+            and payload.get("parent_thread_id") == parent_thread_id
+            and payload.get("status") in {"queued", "running", "paused"}
+            and isinstance(payload.get("run_id"), str)
+            and payload["run_id"]
         ]
 
     def query_workflow_run_page(
@@ -1810,6 +1825,31 @@ class PostgresDocumentStore:
             results.append((str(row["key"]), StoredDocument(payload, row.get("updated_at"))))
         return results
 
+    def list_active_workflow_run_ids(self, parent_thread_id: str) -> list[str]:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT value #>> '{payload,run_id}' AS run_id
+                FROM store
+                WHERE prefix = %s
+                  AND key LIKE %s
+                  AND value #>> '{payload,parent_thread_id}' = %s
+                  AND value #>> '{payload,status}' = ANY(%s)
+                ORDER BY COALESCE(
+                    NULLIF(value #>> '{payload,started_at}', ''),
+                    NULLIF(value #>> '{payload,queued_at}', '')
+                ) DESC NULLS LAST, value #>> '{payload,run_id}' DESC
+                """,
+                (
+                    PROGENA_STATE_PREFIX,
+                    _escape_like("workflow_run:") + "%",
+                    parent_thread_id,
+                    ["queued", "running", "paused"],
+                ),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return [run_id for row in rows if isinstance((run_id := row.get("run_id")), str) and run_id]
+
     def query_workflow_run_page(
         self,
         *,
@@ -1946,6 +1986,7 @@ class PostgresDocumentStore:
                 SELECT jsonb_build_object(
                     'run_id', p->'run_id', 'workflow_id', p->'workflow_id',
                     'status', p->'status', 'source', p->'source',
+                    'parent_thread_id', p->'parent_thread_id',
                     'started_at', p->'started_at', 'queued_at', p->'queued_at',
                     'completed_at', p->'completed_at',
                     'completed_node_ids', p->'completed_node_ids',

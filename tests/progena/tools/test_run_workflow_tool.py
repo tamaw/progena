@@ -133,6 +133,7 @@ async def test_execute_resolves_ancestry_from_active_run():
         result = await RunWorkflowTool().execute(_context(state_manager, {"workflow_id": "wf_b"}))
     assert result.success
     assert state_manager.request_workflow_run.await_args.kwargs["ancestry"] == ["wf_a"]
+    assert state_manager.request_workflow_run.await_args.kwargs["parent_thread_id"] == "t1"
 
 
 async def test_execute_rejects_cycle():

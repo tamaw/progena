@@ -13,9 +13,9 @@ beforeEach(async () => {
     snapshot: {
       revision: 4,
       messages: [
-        { id: 'first', text: 'First pending', attachments: [], status: 'queued', send_now: true },
-        { id: 'sending', text: 'Claimed already', attachments: [], status: 'sending' },
-        { id: 'third', text: 'Third pending', attachments: [], status: 'queued' },
+        { id: 'first', text: 'First pending', attachments: [], status: 'queued', send_now: true, created_at: '2026-11-04T08:15:30Z' },
+        { id: 'sending', text: 'Claimed already', attachments: [], status: 'sending', created_at: '2026-11-04T08:16:00Z' },
+        { id: 'third', text: 'Third pending', attachments: [], status: 'queued', created_at: '2026-11-04T08:17:00Z' },
       ],
     },
     isMutating: false,
@@ -40,12 +40,28 @@ describe('ChatQueue', () => {
       host.querySelector('[aria-label="Move queued message later"]').click();
     });
     expect(props.onReorder).toHaveBeenCalledWith(['third', 'first']);
-    expect(host.textContent).toContain('Sending next');
+  });
+
+
+  it('keeps queued content open when its send and cancel actions are used', async () => {
+    await act(async () => {
+      host.querySelector('[aria-label="Send queued message now"]').click();
+      host.querySelector('[aria-label="Cancel queued message"]').click();
+    });
+    expect(host.querySelector('details').open).toBe(true);
+  });
+  it('renders queued content in an initially open native disclosure', async () => {
+    const disclosure = host.querySelector('details');
+    expect(disclosure.open).toBe(true);
+    await act(async () => {
+      disclosure.querySelector('summary').click();
+    });
+    expect(disclosure.open).toBe(false);
   });
 
   it('does not offer mutable controls for a runtime-claimed message', () => {
-    const claimed = [...host.querySelectorAll('li')].find((item) => item.textContent.includes('Claimed already'));
-    expect(claimed.querySelector('[aria-label="Delete queued message"]')).toBeNull();
-    expect(claimed.textContent).toContain('Sending…');
+    const claimed = [...host.querySelectorAll('article')].find((item) => item.textContent.includes('Claimed already'));
+    expect(claimed.querySelector('[aria-label="Cancel queued message"]')).toBeNull();
+    expect(claimed.textContent).toContain('Sending');
   });
 });

@@ -192,6 +192,7 @@ async def _reconcile_workflow_invoke_requests(changed_key: str | None = None) ->
                         source="progena",
                         ancestry=request.ancestry,
                         run_id=request.run_id,
+                        parent_thread_id=request.parent_thread_id,
                     )
             except Exception:
                 logger.exception(

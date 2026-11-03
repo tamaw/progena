@@ -68,6 +68,7 @@ function ChatMessages({
   isGenerating = false,
   className = '',
   children,
+  afterMessages,
 }) {
   // Row heights can change without a parent render (streaming, image load,
   // work disclosure). Observe rows, not the potentially height-capped wrapper.
@@ -172,6 +173,7 @@ function ChatMessages({
         <ConversationSummaryMarker key={marker.id} marker={marker} />
       ))}
       {interruption && !isGenerating ? <InterruptedMarker reason="runtime_restart" /> : null}
+      {afterMessages}
     </div>
   );
 }

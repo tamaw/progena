@@ -9,6 +9,7 @@ import src.backend.agents.store as agents_store
 import src.backend.alerts.routes as alerts_routes
 import src.backend.channels.manager as channels_manager
 import src.backend.channels.routes as channels_routes
+import src.backend.chat.background_tasks as chat_background_tasks
 import src.backend.chat.routes as chat_routes
 import src.backend.events.routes as events_routes
 import src.backend.events.stream as events_stream
@@ -55,6 +56,7 @@ router.include_router(
         get_active_response=chat_routes._get_active_response_for_thread,
     )
 )
+router.include_router(chat_background_tasks.router)
 router.include_router(
     agents_routes.create_agent_profile_router(
         get_agent_store=agents_store.get_agent_store,

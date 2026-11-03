@@ -4,7 +4,7 @@ import { collectMessageImages } from '../models/conversationModel';
 import { hasReasoningContent, isReasoningEvent } from '../models/streamEventsModel';
 import TimelineItem from './TimelineItem';
 import WorkGroup from './WorkGroup';
-import { buildWorkGroups, partitionTurnTimeline, subagentCardToolCallIds, timelineItemKey } from '../models/workGroupModel';
+import { buildWorkGroups, timelineItemKey } from '../models/workGroupModel';
 import { buildDefaultAssistantTimeline } from '../models/liveAssistantTurnModel';
 import MessageImageStrip from './MessageImageStrip';
 import AttachmentFileIcon from './AttachmentFileIcon';
@@ -172,74 +172,60 @@ function MessageView({
       messageId,
       isStreaming,
     });
-    // Visibility is a presentation choice, not a different end to the work.
-    // Skip rows emptied by tool commentary, as the visible answer path does.
-    const answerStarted = fullTimelineItems.some((item) =>
-      item.kind === 'assistant_message' && (item.error || (item.content || '').trim())
-    );
-    const answerStartedAt = fullTimelineItems.find((item) =>
-      item.kind === 'assistant_message' && (item.error || (item.content || '').trim())
-    )?.timestamp ?? null;
-    const turnStillRunning = workResponseStatus === 'running' || workResponseStatus === 'unknown';
+    const turnStillRunning = workResponseStatus === 'running'
+      || (workResponseStatus === 'unknown' && (isStreaming || workActive));
     const visibleTimelineItems = filterTimelineItems(fullTimelineItems, streamEventFilter);
-    const { workItems, cardItems, answerItems: allAnswerItems } = partitionTurnTimeline(visibleTimelineItems);
-    // An answer row whose text all turned out to be tool commentary (see
-    // claimToolCommentary in liveAssistantTurnModel.js) has nothing to show.
-    const answerItems = allAnswerItems.filter((item) => item.error || (item.content || '').trim());
-    const workGroups = buildWorkGroups(workItems);
-    const cardToolCallIds = [...subagentCardToolCallIds(cardItems)].join('\n');
-    // Work filters can hide every tool/reasoning row. Keep the turn's explicit
-    // terminal failure visible without reintroducing any filtered diagnostics.
-    const terminalStatusItems = workResponseStatus === 'failed' && workGroups.length === 0 && answerItems.length === 0
-      ? [{
-        kind: 'assistant_message',
-        id: `${messageId}-failed-status`,
-        content: '',
-        timestamp,
-        isStreaming: false,
-        error: false,
-        responseStatus: 'failed',
-        tokenCount: message.tokenCount,
-        finalCallTokenCount: message.finalCallTokenCount,
-        usageProvenance: message.usageProvenance,
+    const rows = buildWorkGroups(visibleTimelineItems.filter((item) => (
+      item.kind !== 'assistant_message' || item.error || (item.content || '').trim()
+    )));
+    if (turnStillRunning && rows.length === 0) {
+      rows.push({ kind: 'work_group', id: `${messageId}-pending`, heading: null, items: [], startedAt: message.startedAt ?? timestamp });
+    }
+    const lastRowKind = rows.at(-1)?.kind;
+    if (workResponseStatus === 'failed' && !['work_group', 'assistant_message'].includes(lastRowKind)) {
+      rows.push({
+        kind: 'assistant_message', id: `${messageId}-failed-status`,
+        content: '', timestamp, isStreaming: false, responseStatus: 'failed',
         displayAgentName: message.displayAgentName || '',
-        displayModelName: message.displayModelName,
-        displayToolCalls: message.displayToolCalls,
-      }]
-      : [];
+        tokenCount: message.tokenCount, finalCallTokenCount: message.finalCallTokenCount,
+        usageProvenance: message.usageProvenance,
+      });
+    }
     return (
       <div className="chat-entry-chain chat-entry-chain--connected">
-        {workGroups.map((group, index) => {
-          const isLast = index === workGroups.length - 1;
+        {rows.map((item, index) => {
+          const isLast = index === rows.length - 1;
+          if (item.kind === 'work_group') {
+            return (
+              <WorkGroup
+                key={item.id}
+                heading={item.heading}
+                items={item.items}
+                active={turnStillRunning && isLast}
+                startedAt={index === 0 ? message.startedAt ?? item.startedAt : item.startedAt}
+                endedAt={item.endedAt ?? rows[index + 1]?.timestamp ?? message.workEndedAt ?? message.responseTimestamp}
+                terminal={isLast}
+                responseStatus={isLast ? workResponseStatus : undefined}
+                onRegenerate={regenerateMessage}
+                summaryMarkers={summaryMarkers}
+                summaryActivities={summaryActivities}
+              />
+            );
+          }
           return (
-            <WorkGroup
-              key={group.id}
-              heading={group.heading}
-              items={group.items}
-              active={workActive && turnStillRunning && !answerStarted && isLast}
-              endedAt={isLast ? answerStartedAt : workGroups[index + 1].startedAt}
-              terminal={isLast}
-              responseStatus={isLast ? workResponseStatus : undefined}
-              onRegenerate={regenerateMessage}
-              cardToolCallIds={cardToolCallIds}
+            <TimelineItem
+              key={timelineItemKey(item, index)}
+              item={item}
+              contextUsage={item.kind === 'assistant_message' ? message.contextUsage : undefined}
+              itemIndex={index}
+              onRegenerate={isLast ? regenerateMessage : undefined}
               summaryMarkers={summaryMarkers}
               summaryActivities={summaryActivities}
+              showResponseStatus={isLast && !effectiveInterruptionReason}
+              continuesAfter={!isLast || turnStillRunning || Boolean(effectiveInterruptionReason)}
             />
           );
         })}
-        {[...cardItems, ...answerItems, ...terminalStatusItems].map((item, idx, renderedItems) => (
-          <TimelineItem
-            key={timelineItemKey(item, idx)}
-            item={item}
-            contextUsage={item.kind === 'assistant_message' ? message.contextUsage : undefined}
-            itemIndex={idx}
-            onRegenerate={regenerateMessage}
-            summaryMarkers={summaryMarkers}
-            summaryActivities={summaryActivities}
-            showResponseStatus={workGroups.length === 0 && !effectiveInterruptionReason}
-            continuesAfterInterruption={Boolean(effectiveInterruptionReason) && idx === renderedItems.length - 1}
-          />
-        ))}
         {messageImages.length > 0 && (
           <div className="chat-entry-chain__images">
             <MessageImageStrip images={messageImages} />

@@ -56,10 +56,7 @@ export function createLiveAssistantTurn({ streamId, startedAt, assistantIdPrefix
     // 'work' while the latest visible output is a tool/reasoning/plan row,
     // 'text' once answer text is streaming -- drives the live work preview.
     lastActivity: null,
-    // Answer text streamed since the last work row. If a tool call follows,
-    // it was the agent narrating that call, not answering: it moves from the
-    // answer onto the call as its commentary.
-    pendingCommentary: '',
+    // Text segments remain in the timeline when the root model starts tools.
     isStreaming: true,
     error: false,
   };
@@ -290,11 +287,11 @@ function applySubagentEventToItem(item, nextEvent) {
         ...item,
         taskSummary: taskSummary || item.taskSummary || '',
         subagentName: metadata.subagent_name || item.subagentName,
-        status: metadata.success === false ? 'error' : 'success',
+        status: isToolEventFailure(nextEvent) ? 'error' : 'success',
         finishedAt: nextEvent.timestamp ?? item.finishedAt,
         durationMs: durationMs ?? item.durationMs,
         resultPreview: typeof metadata.result_preview === 'string' ? metadata.result_preview : item.resultPreview,
-        error: metadata.success === false ? (metadata.error || '') : item.error,
+        error: isToolEventFailure(nextEvent) ? (metadata.error || '') : item.error,
       };
 
     default:
@@ -531,27 +528,25 @@ export function applyAssistantStreamEvent(turn, streamEvent) {
   if (summaryActivities !== turn.summaryActivities) {
     return { ...turn, summaryActivities };
   }
-  const { turn: base, streamEvent: event } = claimToolCommentary(turn, streamEvent);
-  const next = applyStreamEventToTimeline(base, event);
-  if (next === base || next.timelineItems === base.timelineItems) return next;
+  const next = applyStreamEventToTimeline(turn, streamEvent);
+  if (next === turn || next.timelineItems === turn.timelineItems) return next;
   if (turn.lastActivity === 'text' && PASSIVE_AFTER_TEXT_EVENT_TYPES.has(streamEvent?.event_type)) return next;
-  return { ...next, lastActivity: 'work', pendingCommentary: '' };
-}
-
-// Moves the text streamed since the last work row off the answer and onto
-// the tool call it introduced (the first, when calls run in parallel).
-function claimToolCommentary(turn, streamEvent) {
-  const commentary = turn.pendingCommentary || '';
-  if (streamEvent?.event_type !== 'tool_start' || !commentary.trim()) return { turn, streamEvent };
-  const content = turn.content.slice(0, turn.content.length - commentary.length);
-  const timelineItems = turn.timelineItems.map((item) => (
-    item.kind === 'assistant_message' && item.id === turn.assistantMessageId ? { ...item, content } : item
-  ));
+  // Only root model boundaries close its text. Concurrent delegated-agent
+  // progress must not stop a root reply that is still streaming.
+  const closesText = streamEvent?.event_type === 'tool_start'
+    || streamEvent?.event_type === 'reasoning_delta';
   return {
-    turn: { ...turn, content, timelineItems, pendingCommentary: '' },
-    streamEvent: { ...streamEvent, metadata: { ...(streamEvent.metadata || {}), commentary: commentary.trim() } },
+    ...next,
+    ...(closesText ? {
+      timelineItems: next.timelineItems.map((item) => (
+        item.kind === 'assistant_message' && item.isStreaming
+          ? { ...item, isStreaming: false } : item
+      )),
+    } : {}),
+    lastActivity: 'work',
   };
 }
+
 
 function applyStreamEventToTimeline(turn, streamEvent) {
   const nextEvent = addTaskSummaryMetadata(createStreamEvent(streamEvent));
@@ -601,8 +596,9 @@ function applyStreamEventToTimeline(turn, streamEvent) {
       ...(hasResponseStatus ? { responseStatus: providerResponseStatus(metadata.response_status) } : {}),
     };
     if (!hasUsage && !hasResponseStatus) return next;
-    next.timelineItems = next.timelineItems.map((item) => (
-      item.kind === 'assistant_message'
+    const lastTextIndex = next.timelineItems.findLastIndex((item) => item.kind === 'assistant_message');
+    next.timelineItems = next.timelineItems.map((item, index) => (
+      index === lastTextIndex
         ? {
           ...item,
           ...(hasOutputTokens ? { tokenCount } : {}),
@@ -725,59 +721,36 @@ function applyStreamEventToTimeline(turn, streamEvent) {
 
 /** Apply a text chunk (stream_chunk event). */
 export function applyAssistantChunk(turn, chunk, materialiseAt) {
-  const next = { ...turn, lastActivity: 'text', pendingCommentary: (turn.pendingCommentary || '') + chunk };
-  next.content += chunk;
-
-  // Materialise the assistant row on first text chunk.
+  const next = { ...turn, lastActivity: 'text' };
+  const assistantIndex = turn.timelineItems.findLastIndex((item) => item.kind === 'assistant_message');
+  const current = turn.timelineItems[assistantIndex];
+  const extendsText = current?.isStreaming === true;
+  next.content = extendsText ? turn.content + chunk : chunk;
   if (!next.assistantMessageId) {
     next.assistantMessageId = `${turn.assistantIdPrefix ?? turn.streamId}-assistant`;
     next.assistantTimestamp = materialiseAt;
-    next.timelineItems = [
-      ...next.timelineItems,
-      {
-        kind: 'assistant_message',
-        id: next.assistantMessageId,
-        content: next.content,
-        timestamp: next.assistantTimestamp,
-        isStreaming: true,
-        error: false,
-        displayAgentName: next.displayAgentName || '',
-        displayModelName: next.displayModelName,
-        displayToolCalls: next.displayToolCalls,
-        tokenCount: next.tokenCount,
-        finalCallTokenCount: next.finalCallTokenCount,
-        usageProvenance: next.usageProvenance,
-        responseStatus: next.responseStatus,
-        reasoningTokenCount: next.reasoningTokenCount,
-        reasoningText: next.reasoningText,
-      },
-    ];
-  } else {
-    // Update existing assistant row in timelineItems without rebuilding every item.
-    const timelineItems = next.timelineItems.slice();
-    let assistantIndex = -1;
-    for (let index = 0; index < timelineItems.length; index += 1) {
-      const item = timelineItems[index];
-      if (item.kind === 'assistant_message' && item.id === turn.assistantMessageId) {
-        assistantIndex = index;
-        break;
-      }
-    }
-    if (assistantIndex >= 0) {
-      const item = timelineItems[assistantIndex];
-      timelineItems[assistantIndex] = {
-        ...item,
-        content: next.content,
-        tokenCount: next.tokenCount,
-        finalCallTokenCount: next.finalCallTokenCount,
-        usageProvenance: next.usageProvenance,
-        responseStatus: next.responseStatus,
-        reasoningTokenCount: next.reasoningTokenCount,
-        reasoningText: next.reasoningText,
-      };
-    }
-    next.timelineItems = timelineItems;
   }
+  const item = {
+    kind: 'assistant_message',
+    id: extendsText ? current.id : (assistantIndex < 0
+      ? next.assistantMessageId : `${next.assistantMessageId}-segment-${turn.timelineItems.length}`),
+    content: next.content,
+    timestamp: extendsText ? current.timestamp : materialiseAt,
+    isStreaming: true,
+    error: false,
+    displayAgentName: next.displayAgentName || '',
+    displayModelName: next.displayModelName,
+    displayToolCalls: next.displayToolCalls,
+    tokenCount: next.tokenCount,
+    finalCallTokenCount: next.finalCallTokenCount,
+    usageProvenance: next.usageProvenance,
+    responseStatus: next.responseStatus,
+    reasoningTokenCount: next.reasoningTokenCount,
+    reasoningText: next.reasoningText,
+  };
+  next.timelineItems = extendsText
+    ? [...turn.timelineItems.slice(0, assistantIndex), item, ...turn.timelineItems.slice(assistantIndex + 1)]
+    : [...turn.timelineItems, item];
 
   return next;
 }
@@ -886,7 +859,23 @@ export function buildDefaultAssistantTimeline(message) {
   const insertedAsyncSubagentIds = new Set();
   const insertedA2ACallIds = new Set();
   let todosSeq = 0;
-  for (const event of streamEvents) {
+  for (const originalEvent of streamEvents) {
+    let event = originalEvent;
+    // Checkpoints retain intermediate root text on the declaring tool call.
+    // Promote it once to a sibling message, not a tool disclosure child.
+    const commentary = event?.eventType === 'tool_start' ? event.metadata?.commentary : null;
+    if (typeof commentary === 'string' && commentary.trim()) {
+      items.push({
+        kind: 'assistant_message',
+        id: `${event.id}-message`,
+        content: commentary,
+        timestamp: event.timestamp,
+        isStreaming: false,
+        displayAgentName: message.displayAgentName,
+        displayModelName: message.displayModelName,
+      });
+      event = { ...event, metadata: { ...event.metadata, commentary: undefined } };
+    }
     // Correlated subagent events are folded into one card, seeded by the
     // earliest recoverable event (not only subagent_start). Events missing a
     // usable correlation id are unrecoverable and remain omitted.
@@ -1025,6 +1014,7 @@ export function toCommittedAssistantMessage(turn) {
     role: 'assistant',
     content: turn.content,
     timestamp: turn.assistantTimestamp || turn.startedAt,
+    workEndedAt: turn.workEndedAt ?? null,
     responseTimestamp: turn.responseTimestamp ?? null,
     tokenCount: turn.tokenCount,
     finalCallTokenCount: turn.finalCallTokenCount,
@@ -1107,6 +1097,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage, int
     responseStatus,
     assistantTimestamp: now || turn.startedAt,
     responseTimestamp: responseStatus === 'completed' && hasAnswerText ? now || turn.startedAt : null,
+    workEndedAt: now || turn.startedAt,
     ...(resolvedInterruptionReason ? { interruptionReason: resolvedInterruptionReason } : {}),
   };
 
@@ -1124,9 +1115,6 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage, int
         ? {
           ...item,
           isStreaming: false,
-          tokenCount: finalTurn.tokenCount,
-          finalCallTokenCount: finalTurn.finalCallTokenCount,
-          usageProvenance: finalTurn.usageProvenance,
           responseStatus: finalTurn.responseStatus,
           reasoningTokenCount: finalTurn.reasoningTokenCount,
           reasoningText: finalTurn.reasoningText,
@@ -1240,15 +1228,17 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage, int
 
 
   // Ensure the timeline items reflect the final state.
-  finalTurn.timelineItems = finalTurn.timelineItems.map((item) => {
+  const lastTextIndex = finalTurn.timelineItems.findLastIndex((item) => item.kind === 'assistant_message');
+  finalTurn.timelineItems = finalTurn.timelineItems.map((item, index) => {
     if (item.kind === 'assistant_message') {
       return {
         ...item,
         isStreaming: false,
-        content: finalTurn.content,
-        tokenCount: finalTurn.tokenCount,
-        finalCallTokenCount: finalTurn.finalCallTokenCount,
-        usageProvenance: finalTurn.usageProvenance,
+        ...(index === lastTextIndex ? {
+          tokenCount: finalTurn.tokenCount,
+          finalCallTokenCount: finalTurn.finalCallTokenCount,
+          usageProvenance: finalTurn.usageProvenance,
+        } : {}),
         responseStatus: finalTurn.responseStatus,
         reasoningTokenCount: finalTurn.reasoningTokenCount,
         reasoningText: finalTurn.reasoningText,

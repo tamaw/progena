@@ -43,6 +43,7 @@ from src.progena.sessions.messages import (
     extract_response_status,
     extract_token_usage,
     get_last_ai_message,
+    is_routine_result_failure,
     summarize_message_schema,
 )
 
@@ -835,12 +836,16 @@ class DeepAgentSSEStream:
             return []
 
         if event_type == "tool_result":
+            result_preview = metadata.get("result_preview")
+            success = bool(metadata.get("success", True)) and not is_routine_result_failure(
+                result_preview, subagent_name
+            )
             result_metadata: dict[str, Any] = {
                 "subagent_name": subagent_name,
                 "tool_call_id": tool_call_id,
-                "success": bool(metadata.get("success", True)),
+                "success": success,
                 "duration_ms": metadata.get("duration_ms"),
-                "result_preview": metadata.get("result_preview"),
+                "result_preview": result_preview,
             }
             if task_summary:
                 result_metadata["task_summary"] = task_summary

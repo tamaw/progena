@@ -91,12 +91,12 @@ async def put_runs_subscription(
     request_id = request_correlation_id(request, x_request_id)
     if (body.kind is None) != (body.run_id is None):
         raise HTTPException(status_code=422, detail="kind and run_id must be supplied together")
-    event_types: list[str] = [events_contracts.UiEvent.RUN_SUBSCRIPTION_UPDATED]
     payload = {"kind": body.kind, "run_id": body.run_id}
+    event_types: list[str] = [events_contracts.UiEvent.RUN_SUBSCRIPTION_UPDATED]
     if body.selected():
         assert body.kind is not None and body.run_id is not None
         selected = await runs_events.subscribe(
-            get_default_document_store(), body.client_id, body.kind, body.run_id
+            get_default_document_store(), body.client_id, body.kind, body.run_id, body.interest_id
         )
         stream.broadcast_ui_event(
             events_contracts.UiEvent.RUN_SUBSCRIPTION_UPDATED,
@@ -115,7 +115,7 @@ async def put_runs_subscription(
             )
             event_types.append(events_contracts.UiEvent.RUN_TRACE_UPDATED)
     else:
-        runs_events.unsubscribe(body.client_id)
+        runs_events.unsubscribe(body.client_id, body.interest_id)
         stream.broadcast_ui_event(
             events_contracts.UiEvent.RUN_SUBSCRIPTION_UPDATED,
             payload,

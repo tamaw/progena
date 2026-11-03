@@ -309,8 +309,10 @@ describe('useChatStream queued execution ownership', () => {
         streamEvents: [expect.objectContaining({
           eventType: 'tool_start',
           content: 'Late B tool',
-          metadata: expect.objectContaining({ commentary: 'B initial B late' }),
         })],
+        timelineItems: expect.arrayContaining([
+          expect.objectContaining({ kind: 'assistant_message', content: 'B initial B late', isStreaming: false }),
+        ]),
       }),
       expect.objectContaining({ id: 'human-c', role: 'user' }),
     ]);

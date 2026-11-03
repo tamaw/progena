@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from '@frontend/features/chat/models/transcriptScroll';
+import { followTranscript, inspectTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from '@frontend/features/chat/models/transcriptScroll';
 
 // Minimal scroll container: entries are laid out top to bottom at `top`
 // (content coordinates); their viewport position follows container.scrollTop.
@@ -18,7 +18,9 @@ function transcript(entries, { clientHeight = 500 } = {}) {
       scrollTop = Math.max(0, Math.min(value, container.scrollHeight - clientHeight));
     },
     getBoundingClientRect: () => ({ top: 0 }),
-    querySelectorAll: (selector) => entries.filter((entry) => selector === `.msg--${entry.role}`),
+    querySelectorAll: (selector) => entries.filter((entry) => (
+      selector === '.work-group--active' ? entry.role === 'work' : selector === `.msg--${entry.role}`
+    )),
   };
   entries.forEach((entry, order) => {
     entry.offsetParent = container;
@@ -153,6 +155,32 @@ describe('followTranscript', () => {
     expect(container.scrollTop).toBe(bottom(container));
   });
 
+  it('releases an automatic interim-answer anchor when active work resumes beneath it', () => {
+    const entries = [{ role: 'user', top: 0, height: 60 }, { role: 'assistant', top: 600, height: 700 }];
+    const container = transcript(entries);
+    const pinned = { current: true };
+    followTranscript(container, pinned);
+    expect(pinned.current).toBe(false);
+    const work = { role: 'work', top: 1_320, height: 900 };
+    entries.push(work);
+    followTranscript(container, pinned);
+    expect(pinned.current).toBe(true);
+    expect(container.scrollTop).toBe(bottom(container));
+  });
+  it('does not follow new work while inspecting earlier activity, then resumes on a fresh send', () => {
+    const answer = { role: 'assistant', top: 600, height: 200 };
+    const container = transcript([{ role: 'user', top: 0, height: 60 }, answer]);
+    const pinned = { current: true };
+    followTranscript(container, pinned);
+    const readingPosition = container.scrollTop;
+    inspectTranscript(container);
+    answer.height = 900;
+    followTranscript(container, pinned);
+    expect(container.scrollTop).toBe(readingPosition);
+    pinTranscriptToTail(container, pinned);
+    followTranscript(container, pinned);
+    expect(container.scrollTop).toBeGreaterThan(readingPosition);
+  });
   it('sending drops the reading hold and follows the tail again', () => {
     const answer = { role: 'assistant', top: 600, height: 1200 };
     const container = transcript([{ role: 'user', top: 0, height: 60 }, answer]);

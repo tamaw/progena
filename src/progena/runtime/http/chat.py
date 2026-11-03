@@ -15,6 +15,7 @@ import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, TypeVar, cast
 
 from aiohttp import web
@@ -36,6 +37,7 @@ from src.progena.runtime.http.responses import (
     paginate_items,
 )
 from src.progena.runtime.streaming.deepagent_stream import DeepAgentSSEStream
+from src.progena.runtime.streaming.stream_payloads import extract_stream_chunk_text
 from src.progena.sessions.context import reset_current_thread_id, set_current_thread_id
 from src.progena.sessions.history import (
     ConversationSummary,
@@ -956,20 +958,34 @@ class RuntimeChatService:
         *,
         required: bool = False,
     ) -> list[dict[str, Any]]:
-        """Save what a cancelled turn had streamed as a cancelled assistant message.
+        """Save only uncheckpointed text, plus a durable cancellation marker.
 
-        The interrupted model step never committed, so the thread would
-        otherwise end at the user's message. Writing the partial reply as if
-        the model node had returned it (native ``aupdate_state``) keeps it in
-        history for the user, and as context for the model's next turn
-        ("continue"). Returns the response ``output`` items for this turn.
+        Earlier root model calls may already have committed their text before
+        starting tools. The stream accumulator includes that text too; copying
+        it again would duplicate intermediate messages in history.
         """
-        message = AIMessage(
-            id=f"msg_{response_id}",
-            content=partial_text,
-            response_metadata={"status": CANCELLED_STATUS},
-        )
         try:
+            if partial_text:
+                state = await self.loop_runner.graph.aget_state(
+                    {"configurable": {"thread_id": thread_id}}
+                )
+                committed_text = "".join(
+                    extract_stream_chunk_text(item)
+                    for item in (state.values.get("messages") or [])[before_count:]
+                    if isinstance(item, AIMessage)
+                )
+                # Only remove an exact checkpointed prefix. If the stream and
+                # checkpoint disagree, preserve the visible partial response.
+                if committed_text and partial_text.startswith(committed_text):
+                    partial_text = partial_text[len(committed_text):]
+            message = AIMessage(
+                id=f"msg_{response_id}",
+                content=partial_text,
+                response_metadata={
+                    "status": CANCELLED_STATUS,
+                    "created_at": datetime.now(UTC).isoformat(),
+                },
+            )
             await self.loop_runner.graph.aupdate_state(
                 {"configurable": {"thread_id": thread_id}},
                 {"messages": [message]},

@@ -1,176 +1,120 @@
-/**
- * One collapsible phase of root-agent work. The initial generic phase and
- * each reasoning section are peers in the transcript chain; expanding a
- * reasoning phase reveals its complete reasoning and its following tools.
- */
-
 import { memo, useEffect, useMemo, useState } from 'react';
 import TimelineItem from './TimelineItem';
 import TokenCountIcon from './TokenCountIcon';
 import { renderSafeMarkdown, sanitizeHtmlFragment } from '../../../lib/safeMarkdown';
 import { describeStreamEvent, formatTimestamp, tokenMetaItemsForEvent } from '../models/messageRenderUtils';
+import { isReasoningEvent } from '../models/streamEventsModel';
+import { inspectTranscript } from '../models/transcriptScroll';
 import {
-  buildWorkSteps,
-  mergeToolCallItems,
-  reasoningSectionBody,
-  splitGroupReasoning,
-  summarizeWork,
-  timelineItemKey,
-  workGroupHeader,
+  buildWorkSteps, reasoningSectionBody, selectWorkActivity, splitReasoningSections,
+  summarizeWork, timelineItemKey, workActivityItems, workGroupHeader,
 } from '../models/workGroupModel';
+import styles from './WorkGroup.module.css';
 
-const TICK_MS = 1000;
+const TERMINAL_LABELS = { failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted', unknown: 'Unknown' };
 
-// The group's disclosure is the only reasoning disclosure. Provider detail
-// metadata remains preferred by describeStreamEvent, then all resulting HTML
-// is sanitized before rendering.
 const ReasoningBody = memo(function ReasoningBody({ event }) {
-  const { bodyHtml, reasoningDetailHtml } = useMemo(() => describeStreamEvent({
-    ...event,
-    content: reasoningSectionBody(event.content),
-  }), [event]);
+  const title = splitReasoningSections(event.content).find((section) => section.heading)?.heading || 'Reasoning';
   const html = useMemo(() => {
-    const presentationHtml = `${bodyHtml || ''}${reasoningDetailHtml || ''}`;
-    return presentationHtml
-      ? sanitizeHtmlFragment(presentationHtml)
-      : renderSafeMarkdown(reasoningSectionBody(event.content));
-  }, [bodyHtml, event.content, reasoningDetailHtml]);
-
+    const { bodyHtml, reasoningDetailHtml } = describeStreamEvent({
+      ...event, content: reasoningSectionBody(event.content),
+      metadata: { ...event.metadata, ...(typeof event.metadata?.summary === 'string'
+        ? { summary: reasoningSectionBody(event.metadata.summary) } : {}) },
+    });
+    const presentation = `${bodyHtml || ''}${reasoningDetailHtml || ''}`;
+    return presentation ? sanitizeHtmlFragment(presentation) : renderSafeMarkdown(reasoningSectionBody(event.content));
+  }, [event]);
   return (
-    <div className="work-group__reasoning">
-      <div
-        className="message-content work-group__reasoning-text"
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
+    <div className="chat-entry-chain--item">
+      <article className="entry entry--chain-item work-group__reasoning">
+        <div className="entry__gutter" aria-hidden="true"><span className="entry__badge chat-event-badge--reason" /></div>
+        <div className="entry__main">
+          <div className="entry__head"><span className={`entry__role ${styles.reasoningTitle}`}>{title}</span></div>
+          <div className="message-content work-group__reasoning-text" dangerouslySetInnerHTML={{ __html: html }} />
+        </div>
+      </article>
     </div>
   );
 });
 
-const WorkEntries = memo(function WorkEntries({
-  items,
-  cardToolCallIds,
-  onRegenerate,
-  summaryMarkers,
-  summaryActivities,
-}) {
-  const hiddenToolCallIds = useMemo(() => new Set(cardToolCallIds ? cardToolCallIds.split('\n') : []), [cardToolCallIds]);
-  return mergeToolCallItems(items, { hiddenToolCallIds }).map((item, index) => (
-    <TimelineItem
-      key={timelineItemKey(item, index)}
-      item={item}
-      itemIndex={index}
-      onRegenerate={onRegenerate}
-      summaryMarkers={summaryMarkers}
-      summaryActivities={summaryActivities}
-    />
-  ));
+const WorkEntries = memo(function WorkEntries({ items, onRegenerate, summaryMarkers, summaryActivities }) {
+  return items.map((item, index) => isReasoningEvent(item.event)
+    ? <ReasoningBody key={timelineItemKey(item, index)} event={item.event} />
+    : <TimelineItem key={timelineItemKey(item, index)} item={item} itemIndex={index}
+      onRegenerate={onRegenerate} summaryMarkers={summaryMarkers} summaryActivities={summaryActivities} />);
 });
 
-function terminalStatusLabel(responseStatus) {
-  if (responseStatus === 'failed') return 'Failed';
-  if (responseStatus === 'cancelled') return 'Cancelled';
-  if (responseStatus === 'interrupted') return 'Interrupted';
-  if (responseStatus === 'unknown') return 'Unknown';
-  return '';
-}
-
-function terminalGenericTitle(responseStatus) {
-  if (responseStatus === 'failed') return 'Work failed';
-  if (responseStatus === 'cancelled') return 'Work cancelled';
-  if (responseStatus === 'interrupted') return 'Work interrupted';
-  if (responseStatus === 'unknown') return 'Work';
-  return '';
+function inspectFrom(event) {
+  inspectTranscript(event.currentTarget.closest('.chat-transcript'));
 }
 
 const WorkGroup = memo(function WorkGroup({
-  heading,
-  items,
-  active = false,
-  endedAt,
-  terminal = false,
-  responseStatus,
-  onRegenerate,
-  // Newline-joined ids of `task` calls shown as subagent cards; a string so
-  // this memoized group only re-renders when the set actually changes.
-  cardToolCallIds = '',
-  summaryMarkers,
-  summaryActivities,
+  heading, items, active = false, startedAt, endedAt, terminal = false,
+  responseStatus, onRegenerate, summaryMarkers, summaryActivities,
 }) {
-  // A manual choice only applies to this phase while it retains the same
-  // running state. Finishing work collapses a live group automatically.
+  // Completion always collapses the live stretch; subsequent manual expansion
+  // shows its complete history. New events never reset a reader's choice.
   const [disclosure, setDisclosure] = useState(null);
+  const [showEarlier, setShowEarlier] = useState(false);
   const expanded = disclosure?.active === active ? disclosure.open : active;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return undefined;
-    const timer = setInterval(() => setNow(Date.now()), TICK_MS);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [active]);
 
-  const { reasoningItem, rest } = useMemo(() => splitGroupReasoning(heading, items), [heading, items]);
   const steps = useMemo(() => buildWorkSteps(items), [items]);
   const end = active ? now : endedAt;
-  const summary = useMemo(() => summarizeWork(items, steps, end), [items, steps, end]);
-  const defaultHeader = workGroupHeader({ heading, active, summary });
-  const explicitGenericTitle = terminal && !active && !heading ? terminalGenericTitle(responseStatus) : '';
-  const header = explicitGenericTitle ? { ...defaultHeader, title: explicitGenericTitle } : defaultHeader;
-  const terminalLabel = terminal && !active && !explicitGenericTitle ? terminalStatusLabel(responseStatus) : '';
-  const badgeState = active
-    ? 'running'
-    : (responseStatus === 'failed' ? 'error' : (summary.failedCount > 0 ? 'error' : 'done'));
-  const tokenMeta = reasoningItem ? tokenMetaItemsForEvent(reasoningItem.event) : [];
-  const firstItem = items[0];
-  const time = formatTimestamp(firstItem?.timestamp ?? firstItem?.event?.timestamp);
-
-  const toggle = () => setDisclosure({ active, open: !expanded });
-  const toggleOnKeyDown = (event) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      toggle();
-    }
-  };
-
-  return (
-    <>
-      <div className={`entry entry--chain-item work-group${active ? ' work-group--active' : ''}`}>
-        <div className="entry__gutter" aria-hidden="true">
-          <span className={`entry__badge work-group__badge work-group__badge--${badgeState}${active ? ' activity-dot' : ''}`} />
-        </div>
-        <div className="entry__main">
-          <button
-            type="button"
-            className="entry__head entry-toggle work-group__toggle"
-            aria-expanded={expanded}
-            onClick={toggle}
-            onKeyDown={toggleOnKeyDown}
-          >
-            <span className="entry__role work-group__title">{header.title}</span>
-            {header.meta && <span className="work-group__meta">{header.meta}</span>}
-            {summary.failedCount > 0 && (
-              <span className="work-group__failed">{summary.failedCount} failed</span>
-            )}
-            {terminalLabel && <span className="work-group__status">{terminalLabel}</span>}
-            <span className="msg__head-trailing">
-              {/* Inside the toggle button, so the toggle owns interaction. */}
-              {tokenMeta.map((meta) => <TokenCountIcon key={meta} label={meta} passive />)}
-              {time && <span className="msg__time entry__time">{time}</span>}
-            </span>
-            <span className="tool-event-disclosure__chevron" aria-hidden="true" />
-          </button>
-          {expanded && reasoningItem && <ReasoningBody event={reasoningItem.event} />}
-        </div>
-      </div>
-      {expanded && (
-        <WorkEntries
-          items={rest}
-          cardToolCallIds={cardToolCallIds}
-          onRegenerate={onRegenerate}
-          summaryMarkers={summaryMarkers}
-          summaryActivities={summaryActivities}
-        />
-      )}
-    </>
+  const summary = useMemo(() => summarizeWork(items, steps, end, startedAt), [items, steps, end, startedAt]);
+  const header = workGroupHeader({ heading, active, summary });
+  const activityItems = useMemo(() => workActivityItems(items), [items]);
+  const { visibleItems, hiddenCount } = useMemo(
+    () => selectWorkActivity(activityItems, !active || showEarlier), [activityItems, active, showEarlier],
   );
+  const reasoningEvent = items.findLast((item) => isReasoningEvent(item.event))?.event;
+  const tokenMeta = reasoningEvent ? tokenMetaItemsForEvent(reasoningEvent) : [];
+  const canExpand = activityItems.length > 0;
+  const statusLabel = terminal && !active ? TERMINAL_LABELS[responseStatus] : null;
+  const badgeState = active ? 'running' : (responseStatus === 'failed' || summary.failedCount > 0 ? 'error' : 'done');
+  const time = formatTimestamp(startedAt ?? items[0]?.timestamp ?? items[0]?.event?.timestamp);
+  const toggle = (event) => {
+    if (!expanded) inspectFrom(event);
+    setDisclosure({ active, open: !expanded });
+  };
+  const title = <>
+    <span className={`entry__role work-group__title ${active ? styles.title : styles.settledTitle}`}>{header.title}</span>
+    {header.meta && <span className="work-group__meta">{header.meta}</span>}
+    {summary.failedCount > 0 && <span className="work-group__failed">{summary.failedCount} failed</span>}
+    {statusLabel && <span className="work-group__status">{statusLabel}</span>}
+    <span className={`msg__head-trailing ${styles.trailing}`}>
+      {tokenMeta.map((meta) => <TokenCountIcon key={meta} label={meta} passive />)}
+      {time && <span className="msg__time entry__time">{time}</span>}
+    </span>
+  </>;
+  return <>
+    <div className={`entry entry--chain-item work-group${active ? ' work-group--active' : ''}`}>
+      <div className="entry__gutter" aria-hidden="true">
+        <span className={`entry__badge work-group__badge work-group__badge--${badgeState}${active ? ' activity-dot' : ''}`} />
+      </div>
+      <div className="entry__main">
+        {canExpand ? <button type="button" className={`entry__head entry-toggle work-group__toggle ${styles.toggle}`}
+          aria-expanded={expanded} onClick={toggle}>
+          {title}<span className="tool-event-disclosure__chevron" aria-hidden="true" />
+        </button> : <div className={`entry__head work-group__toggle ${styles.toggle}`}>{title}</div>}
+      </div>
+    </div>
+    {expanded && <>
+      {(hiddenCount > 0 || (active && showEarlier && activityItems.length > 5)) && <div className={styles.earlier}>
+        <button type="button" className="earlier-lines-toggle" aria-expanded={showEarlier} onClick={(event) => {
+          inspectFrom(event);
+          setShowEarlier((previous) => !previous);
+        }}>{showEarlier ? 'Show fewer items' : `Show ${hiddenCount} earlier items`}</button>
+      </div>}
+      <WorkEntries items={visibleItems} onRegenerate={onRegenerate}
+        summaryMarkers={summaryMarkers} summaryActivities={summaryActivities} />
+    </>}
+  </>;
 });
 
 export default WorkGroup;

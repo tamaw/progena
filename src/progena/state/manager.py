@@ -500,6 +500,7 @@ class StateManager:
         workflow_id: str,
         input: dict[str, Any],
         ancestry: list[str],
+        parent_thread_id: str | None,
     ) -> None:
         return await self.workflows.request_workflow_run(
             request_id=request_id,
@@ -507,6 +508,7 @@ class StateManager:
             workflow_id=workflow_id,
             input=input,
             ancestry=ancestry,
+            parent_thread_id=parent_thread_id,
         )
 
     # ==========================================================================

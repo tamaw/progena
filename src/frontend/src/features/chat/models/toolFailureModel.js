@@ -8,6 +8,30 @@ const FAILURE_STATES = new Set(['error', 'failed', 'failure', 'rejected']);
 const EXECUTE_FAILURE = /^\[Command failed with exit code -?\d+\]$/m;
 const JAVASCRIPT_ERROR = /^<error type="/m;
 
+/**
+ * Routine task failures return normally from the enclosing `task` invocation
+ * so the agent can decide whether to retry. Match only the routine wrapper's
+ * exact result protocol and its known delegated name; normal agent prose
+ * mentioning a routine failure is still successful output.
+ */
+export function isRoutineResultFailure(resultPreview, routineName) {
+  if (
+    typeof resultPreview !== 'string'
+    || typeof routineName !== 'string'
+    || !routineName
+  ) return false;
+  const prefix = `Routine '${routineName}' `;
+  return resultPreview.startsWith(`${prefix}failed:`) || resultPreview.startsWith(`${prefix}input error:`);
+}
+
+function routineResultIsFailure(metadata) {
+  return isRoutineResultFailure(
+    metadata?.result_preview,
+    metadata?.subagent_name ?? metadata?.subagent_type,
+  );
+}
+
+
 function isFailureState(value) {
   return typeof value === 'string' && FAILURE_STATES.has(value.toLowerCase());
 }
@@ -33,5 +57,6 @@ export function isToolEventFailure(event) {
     || metadata.success === false
     || isFailureState(metadata.status)
     || isFailureState(metadata.state)
-    || renderedResultIsFailure(metadata);
+    || renderedResultIsFailure(metadata)
+    || routineResultIsFailure(metadata);
 }

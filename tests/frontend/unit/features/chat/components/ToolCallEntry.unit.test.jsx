@@ -2,7 +2,7 @@
 import React from 'react';
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import ToolCallEntry, { ToolNarrationEntry } from '@frontend/features/chat/components/ToolCallEntry';
+import ToolCallEntry from '@frontend/features/chat/components/ToolCallEntry';
 
 if (typeof globalThis.React === 'undefined') {
   globalThis.React = React;
@@ -35,15 +35,6 @@ describe('ToolCallEntry', () => {
     expect(html).toContain('12ms');
   });
 
-  it("renders narration in full as Progena's own row", () => {
-    const html = renderToStaticMarkup(React.createElement(ToolNarrationEntry, {
-      text: 'I’ll check the **config** first, then decide whether the saved routine needs another pass before relaunching it.',
-    }));
-    expect(html).toContain('entry__badge--assistant');
-    expect(html).toContain('<strong>config</strong>');
-    expect(html).toContain('before relaunching it.');
-    expect(html).not.toContain('<details');
-  });
 
   it('marks a call that has not finished as running and a failed call as an error', () => {
     const running = renderToStaticMarkup(React.createElement(ToolCallEntry, {

@@ -456,6 +456,7 @@ def _workflow_row(
         status=status,
         started_at=_time(payload.get("started_at")) or _time(payload.get("queued_at")),
         completed_at=_time(payload.get("completed_at")) if status in _TERMINAL else None,
+        parent_thread_id=_text(payload.get("parent_thread_id")) or None,
         tokens=_token_total(payload.get("tokens")),
     )
     row.overview = _workflow_overview(row, payload, nodes)

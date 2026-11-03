@@ -1367,6 +1367,40 @@ async def test_cancelled_turn_keeps_partial_reply_and_next_turn_continues(
         await _stop_chat_server(server)
 
 
+@pytest.mark.parametrize("suffix", ["", "A fresh partial reply."])
+async def test_cancellation_persists_only_text_not_already_checkpointed(suffix: str) -> None:
+    class State(TypedDict):
+        messages: Annotated[list, add_messages]
+
+    builder = StateGraph(State)
+    builder.add_node("model", lambda _state: {})
+    builder.add_edge(START, "model")
+    builder.add_edge("model", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "cancel-after-commentary"}}
+    commentary = "Preferences inspected; checking the schema next."
+    await graph.aupdate_state(config, {"messages": [
+        HumanMessage(content="Earlier request", id="old-user"),
+        AIMessage(content="Earlier answer", id="old-assistant"),
+        HumanMessage(content="Check preferences and schemas", id="current-user"),
+        AIMessage(content=commentary, id="interim", tool_calls=[
+            {"id": "read-schema", "name": "read_file", "args": {"file_path": "/schemas/routine.json"}},
+        ]),
+    ]}, as_node="model")
+    service = RuntimeChatService(FakeLoopRunner(graph=graph))
+
+    await service._persist_cancelled_turn(
+        "cancel-after-commentary", "cancelled-reply", commentary + suffix, 2,
+    )
+
+    state = await graph.aget_state(config)
+    cancelled = state.values["messages"][-1]
+    assert cancelled.content == suffix
+    assert cancelled.response_metadata["status"] == CANCELLED_STATUS
+    assert state.values["messages"][-2].content == commentary
+    assert state.next == ()
+
+
 async def test_session_renders_of_one_thread_run_in_order(monkeypatch) -> None:
     """A turn finishing mid-render queues one more render instead of racing it,
     so the last merge always reflects the last turn."""

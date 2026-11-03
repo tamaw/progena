@@ -471,7 +471,8 @@ responses never are.
 
 | Domain | Browser routes | Result contract |
 | --- | --- | --- |
-| Chat sessions | `GET/POST /api/ui/chats`; `POST /api/ui/chats/draft`; `GET/PATCH/DELETE /api/ui/chats/{thread_id}`; `GET /api/ui/chats/{thread_id}/messages` | Canonical `ui.event` envelopes: `chat.sessions.snapshot`, `chat.session.created`, `chat.session.metadata.updated`, `chat.session.upserted`, request-correlated `chat.session.selected` (capped to the newest `CHAT_MESSAGE_PAGE_SIZE` messages, with `has_more_messages`), `chat.messages.page.loaded` (older-page pagination), `chat.session.deleted` |
+| Chat sessions | `GET/POST /api/ui/chats`; `POST /api/ui/chats/draft`; `GET/PATCH/DELETE /api/ui/chats/{thread_id}`; `GET /api/ui/chats/{thread_id}/messages` | Canonical `ui.event` envelopes: `chat.sessions.snapshot`, `chat.session.created`, `chat.session.metadata.updated`, `chat.session.upserted`, request-correlated `chat.session.selected` (capped to the newest `CHAT_MESSAGE_PAGE_SIZE` messages, with `has_more_messages` and durable `background_workflow_run_ids` for active runs owned by that chat). Legacy workflow records without parent-chat metadata remain transcript-discovered. `chat.messages.page.loaded` supplies older-page pagination; `chat.session.deleted` removes a session. |
+| Chat background tasks | `GET /api/ui/chats/{thread_id}/background-tasks?client_id=`; `PUT /api/ui/chats/{thread_id}/background-tasks/subscription` | Targeted `chat.background_tasks.snapshot` and `chat.background_tasks.updated` contain `{thread_id,tasks,revision}` from durable `async_subagent_tasks` records. Revisions are monotonic per chat within a backend process; the browser ignores an older in-flight snapshot after a newer update. On `connection.ready`, it resets revision watermarks and resubscribes so a backend restart can replace cached tasks. A browser tab may subscribe to multiple viewed chats concurrently; interests are discarded on disconnect. No polling or full chat-session invalidation occurs. |
 | Generation | `POST /api/ui/responses`; `GET /api/ui/responses/{request_id}/stream`; `PUT /api/ui/responses/{generation_id}/cancel` | Canonical lifecycle envelopes: `chat.response.started`, transition-only `chat.response.activity`, `chat.response.completed`, `chat.response.failed`, `chat.response.cancelled`; dedicated response frames: `chat.response.delta`, `chat.response.event`; dedicated transport-only frames: `chat.response.heartbeat`, `chat.response.resync_required`; cancel acknowledgement declares `chat.response.cancel_requested` |
 | Agent profiles | `GET /api/ui/agent-profiles`; `GET /api/ui/agent-profiles/{agent_id}`; `PATCH /api/ui/agent-profiles/{agent_id}/graph` | Canonical `ui.event` envelopes: `agents.snapshot`, `agent.upserted`, request-correlated `agent.selected`, `agent.graph.updated` |
 | Inbox | `GET /api/ui/inbox`; `POST /api/ui/inbox/{message_id}/read`; `POST /api/ui/inbox/{message_id}/decision`; `DELETE /api/ui/inbox/{message_id}` | Canonical `ui.event` envelopes: `inbox.snapshot`, `inbox.message.upserted`, `inbox.message.deleted` |
@@ -516,13 +517,14 @@ payloads or private checkpoint thread refs.
 
 Trace requests and subscriptions require the caller's active canonical-stream
 `client_id`. Targeted trace envelopes are never retained or replayed globally.
-`PUT /runs/subscription` accepts `{client_id, kind, run_id}` to select a trace,
-or `{client_id}` to clear it. It emits targeted,
-request-correlated `run.subscription.updated`; selection also emits a targeted,
-request-correlated `run.trace.updated`. Checkpoint-driven updates are targeted
-only to current subscribers and carry no request ID. Interests are discarded
-when the stream disconnects; clients resubscribe and reload after
-`connection.ready`.
+`PUT /runs/subscription` accepts `{client_id, kind, run_id}` to select the
+default trace, or an additional stable `interest_id` to hold an independent
+trace interest alongside it; `{client_id, interest_id}` clears just that
+interest. It emits targeted, request-correlated `run.subscription.updated`;
+selection also emits a targeted, request-correlated `run.trace.updated`.
+Checkpoint-driven trace updates are delivered only to current subscribers and
+carry no request ID. Interests are discarded when the stream disconnects;
+clients resubscribe and reload after `connection.ready`.
 
 `RunTrace` contains spans and hierarchy-safe recorded usage. Known descendant
 usage supersedes inclusive parent metadata, including a genuine zero; absent

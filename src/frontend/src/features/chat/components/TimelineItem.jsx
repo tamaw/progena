@@ -13,8 +13,7 @@
  *   - `{ kind: 'a2a_call', ... }` — the remote agent's own submitted/
  *     working/completed self-reporting for an A2A tool invocation, alongside
  *     (not instead of) its plain lifecycle rows above
- *   - `{ kind: 'tool_call' | 'tool_narration', ... }` — a merged tool call
- *     and the agent's narration before it (see mergeToolCallItems)
+ *   - `{ kind: 'tool_call', ... }` — a merged tool lifecycle
  */
 
 import { Fragment, memo } from 'react';
@@ -27,15 +26,12 @@ import A2ACallCard from './A2ACallCard';
 import NormalToolContent from './NormalToolContent';
 import AssistantMessageEntry from './AssistantMessageEntry';
 import { selectAgentName } from '../../settings/state/preferences';
-import ToolCallEntry, { ToolNarrationEntry } from './ToolCallEntry';
+import ToolCallEntry from './ToolCallEntry';
 import TokenCountIcon from './TokenCountIcon';
 
-const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities, showResponseStatus, continuesAfterInterruption = false, contextUsage }) {
+const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities, showResponseStatus, continuesAfter = false, contextUsage }) {
   if (item.kind === 'tool_call') {
     return <ToolCallEntry item={item} />;
-  }
-  if (item.kind === 'tool_narration') {
-    return <ToolNarrationEntry text={item.text} />;
   }
   return <TimelineRow
     item={item}
@@ -45,13 +41,13 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate,
     summaryActivities={summaryActivities}
     showResponseStatus={showResponseStatus}
     contextUsage={contextUsage}
-    continuesAfterInterruption={continuesAfterInterruption}
+    continuesAfter={continuesAfter}
   />;
 });
 
 // Separate component so the tool_call branch above stays hook-free; this
 // one reads the agent name from the store.
-function TimelineRow({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities, showResponseStatus, continuesAfterInterruption, contextUsage }) {
+function TimelineRow({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities, showResponseStatus, continuesAfter, contextUsage }) {
   const agentName = useSelector(selectAgentName);
   if (item.kind === 'subagent' || item.kind === 'async_subagent') {
     const matchingMarkers = (summaryMarkers || []).filter((marker) => (
@@ -72,7 +68,7 @@ function TimelineRow({ item, itemIndex, onRegenerate, summaryMarkers, summaryAct
   }
 
   if (item.kind === 'assistant_message') {
-    return <AssistantMessageEntry item={item} agentName={agentName} onRegenerate={onRegenerate} showResponseStatus={showResponseStatus} continuesAfterInterruption={continuesAfterInterruption} contextUsage={contextUsage} />;
+    return <AssistantMessageEntry item={item} agentName={agentName} onRegenerate={onRegenerate} showResponseStatus={showResponseStatus} continuesAfter={continuesAfter} contextUsage={contextUsage} />;
   }
 
   if (item.kind === 'stream_event') {

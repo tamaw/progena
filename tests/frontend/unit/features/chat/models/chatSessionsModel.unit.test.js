@@ -12,7 +12,6 @@ import { getAgentMentionContext } from '@frontend/features/chat/models/chatInput
 import { groupSessionItems } from '@frontend/features/chat/models/conversationModel';
 import { formatDisplayToolCalls } from '@frontend/features/chat/models/messageDisplayModel';
 import { CHAT_STATUS } from '@frontend/features/chat/models/chatStatus';
-import { mergeToolCallItems } from '@frontend/features/chat/models/workGroupModel';
 import { isToolEventFailure } from '@frontend/features/chat/models/toolFailureModel';
 
 
@@ -307,9 +306,6 @@ describe('normalizeBackendChatMessage', () => {
       success: true,
       result_preview: 'Here is what I found.',
     });
-    const mergedTask = mergeToolCallItems(m.timelineItems)
-      .find((item) => item.kind === 'tool_call' && item.id === 'call-call_1');
-    expect(mergedTask.start.event.metadata.commentary).toBe('I’ll ask a researcher to investigate.');
   });
 
   it('still emits a terminal subagent_result for an image-only task result', () => {
@@ -363,6 +359,53 @@ describe('normalizeBackendChatMessage', () => {
     });
     expect(m.timelineItems.filter((item) => item.kind === 'stream_event')).toHaveLength(2);
     expect(m.timelineItems.some((item) => item.kind === 'assistant_message')).toBe(true);
+  });
+
+  it('keeps a failed routine attempt separate from its successful retry on reload', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'routine-retry',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [
+        {
+          id: 'routine-failed',
+          name: 'task',
+          args: { subagent_type: 'routine-alpha' },
+          result: "Routine 'routine-alpha' failed: upstream unavailable",
+        },
+        {
+          id: 'routine-retry',
+          name: 'task',
+          args: { subagent_type: 'routine-alpha' },
+          result: 'The routine completed successfully.',
+        },
+        {
+          id: 'ordinary-output',
+          name: 'task',
+          args: { subagent_type: 'researcher' },
+          result: "Routine 'routine-alpha' failed: quoted status from another system",
+        },
+      ],
+    }, 1);
+
+    const cardsByCall = Object.fromEntries(
+      m.timelineItems
+        .filter((item) => item.kind === 'subagent')
+        .map((item) => [item.toolCallId, item]),
+    );
+
+    expect(cardsByCall['routine-failed']).toMatchObject({
+      status: 'error',
+      resultPreview: "Routine 'routine-alpha' failed: upstream unavailable",
+    });
+    expect(cardsByCall['routine-retry']).toMatchObject({
+      status: 'success',
+      resultPreview: 'The routine completed successfully.',
+    });
+    expect(cardsByCall['ordinary-output']).toMatchObject({
+      status: 'success',
+      resultPreview: "Routine 'routine-alpha' failed: quoted status from another system",
+    });
   });
 
   it('leaves a task call with no result as a running subagent_start only', () => {

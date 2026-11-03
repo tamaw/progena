@@ -530,18 +530,67 @@ describe('applyAssistantStreamEvent', () => {
     expect(turn.timelineItems.map((item) => item.event.eventType)).toEqual(['reasoning_delta', 'tool_start', 'reasoning_delta']);
   });
 
-  it('moves text streamed just before a tool call off the answer and onto that call as commentary', () => {
-    let turn = baseTurn();
-    turn = applyAssistantChunk(turn, 'I will check the repo first.', NOW);
+  it('keeps interim replies at their positions and closes only their text streaming before tools', () => {
+    let turn = applyAssistantChunk(baseTurn(), 'I will check the repo first.', NOW);
     turn = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', { metadata: { tool_name: 'ls', tool_call_id: 'a' } }));
+    expect(turn.isStreaming).toBe(true);
+    expect(turn.timelineItems[0]).toMatchObject({ content: 'I will check the repo first.', isStreaming: false });
     turn = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', { metadata: { tool_name: 'ls', tool_call_id: 'b' } }));
-    turn = applyAssistantChunk(turn, 'It looks fine.', NOW);
+    turn = applyAssistantChunk(turn, 'It looks ', NOW + 100);
+    turn = applyAssistantChunk(turn, 'fine.', NOW + 101);
+    expect(turn.timelineItems.map((item) => item.kind)).toEqual([
+      'assistant_message', 'stream_event', 'stream_event', 'assistant_message',
+    ]);
+    const committed = finalizeLiveAssistantTurn(turn, { status: 'completed', now: NOW + 200 });
+    expect(committed.timelineItems.filter((item) => item.kind === 'assistant_message').map((item) => ({
+      content: item.content, isStreaming: item.isStreaming, timestamp: item.timestamp,
+    }))).toEqual([
+      { content: 'I will check the repo first.', isStreaming: false, timestamp: NOW },
+      { content: 'It looks fine.', isStreaming: false, timestamp: NOW + 100 },
+    ]);
+  });
 
-    const tools = turn.timelineItems.filter((item) => item.event?.eventType === 'tool_start');
-    // Parallel calls: only the first carries the narration.
-    expect(tools.map((item) => item.event.metadata.commentary)).toEqual(['I will check the repo first.', undefined]);
-    expect(turn.content).toBe('It looks fine.');
-    expect(turn.timelineItems.find((item) => item.kind === 'assistant_message').content).toBe('It looks fine.');
+  it('does not split root text when parallel subagent progress or terminal summary arrives', () => {
+    let turn = applyAssistantChunk(baseTurn(), 'The result ', NOW);
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('subagent_start', {
+      metadata: { subagent_name: 'helper', tool_call_id: 'task-1' },
+    }));
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_summary', { content: '**Review**' }));
+    turn = applyAssistantChunk(turn, 'is ready.', NOW + 100);
+    expect(turn.timelineItems.filter((item) => item.kind === 'assistant_message').map((item) => item.content))
+      .toEqual(['The result is ready.']);
+  });
+
+  it('restores checkpoint commentary as a message before its tools without duplicated narration', () => {
+    const items = buildDefaultAssistantTimeline({
+      id: 'persisted', role: 'assistant', content: 'Finished.', timestamp: NOW + 200,
+      streamEvents: [{
+        id: 'tool-a', eventType: 'tool_start', timestamp: NOW,
+        metadata: { tool_name: 'read_file', tool_call_id: 'a', commentary: 'Checking the repo.' },
+      }],
+    });
+    expect(items.map((item) => item.kind)).toEqual(['assistant_message', 'stream_event', 'assistant_message']);
+    expect(items[0]).toMatchObject({ content: 'Checking the repo.', isStreaming: false, timestamp: NOW });
+    expect(items[1].event.metadata.commentary).toBeUndefined();
+    expect(items[2].content).toBe('Finished.');
+  });
+
+  it('marks a returned routine failure red even from an older successful wrapper, but not its retry', () => {
+    let turn = baseTurn();
+    for (const [callId, result] of [
+      ['failed-attempt', "Routine 'routine-alpha' failed: unsupported expression syntax: Subscript"],
+      ['retry-attempt', 'Review completed.'],
+    ]) {
+      turn = applyAssistantStreamEvent(turn, rawStreamEvent('subagent_start', {
+        metadata: { subagent_name: 'routine-alpha', tool_call_id: callId },
+      }));
+      turn = applyAssistantStreamEvent(turn, rawStreamEvent('subagent_result', {
+        metadata: { subagent_name: 'routine-alpha', tool_call_id: callId, success: true, result_preview: result },
+      }));
+    }
+    const cards = turn.timelineItems.filter((item) => item.kind === 'subagent');
+    expect(cards.map((item) => item.status)).toEqual(['error', 'success']);
+    expect(cards[0].resultPreview).toContain('unsupported expression syntax: Subscript');
   });
 
   // Subagent execution events (nested `task` tool delegation) get their own

@@ -705,11 +705,13 @@ def _build_queued_run(
     ancestry = [str(item) for item in ancestry_raw] if isinstance(ancestry_raw, list) else []
     trigger_node_id = invocation.get("trigger_node_id")
     supplied_run_id = invocation.get("run_id")
+    parent_thread_id = invocation.get("parent_thread_id")
     run_id = supplied_run_id if is_workflow_run_id(supplied_run_id) else new_workflow_run_id()
     return WorkflowRun(
         run_id=run_id,
         workflow_id=workflow_id,
         status="queued",
+        parent_thread_id=str(parent_thread_id) if parent_thread_id else None,
         trigger_event=dict(trigger),
         trigger_node_id=str(trigger_node_id) if trigger_node_id else None,
         source=source,
@@ -1086,6 +1088,7 @@ class WorkflowExecutor:
         ancestry: list[str] | None = None,
         trigger_node_id: str | None = None,
         run_id: str | None = None,
+        parent_thread_id: str | None = None,
     ) -> WorkflowRun | None:
         """Start or queue a run with bounded, cycle-safe ancestry."""
 
@@ -1112,6 +1115,7 @@ class WorkflowExecutor:
                 "ancestry": resolved_ancestry,
                 **({"trigger_node_id": trigger_node_id} if trigger_node_id else {}),
                 **({"run_id": run_id} if run_id else {}),
+                **({"parent_thread_id": parent_thread_id} if parent_thread_id else {}),
             },
         }
 

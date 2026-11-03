@@ -1,0 +1,21 @@
+.sticky { max-height: min(28vh, 12rem); }
+.list { display: grid; gap: 4px; list-style: none; margin: 0; padding: 0; }
+.row :global(.tool-call-entry__title) {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row :global(.msg-action-btn) { text-decoration: none; }
+.details { margin-top: 8px; }
+.metadata {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.metadata dt { color: var(--color-text-muted); }
+.metadata dd { margin: 0; overflow-wrap: anywhere; }
+.history { margin-top: 12px; }
+@media (max-width: 640px) { .sticky { max-height: 20vh; } }

@@ -26,8 +26,10 @@ from src.backend.storage.documents import (
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
 )
+from src.backend.workflows.service import save_workflow_run
 from src.progena.documents.kinds import SESSION_KEY_PREFIX
 from src.progena.sessions.titles import ATTACHMENT_CONTEXT_MARKER
+from src.progena.workflows.models import WorkflowRun
 
 
 class _CountingDocumentStore(InMemoryDocumentStore):
@@ -226,6 +228,55 @@ class TestGetChatDetail:
         assert detail.thread_id == "thread_d"
         assert detail.title == "My Chat"
         assert [m.role for m in detail.messages] == ["user", "assistant"]
+
+    def test_hydrates_only_active_workflow_owned_by_chat_when_start_falls_before_page(self):
+        store = InMemoryDocumentStore()
+        thread_id = "thread_page"
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id=thread_id,
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-11-04T00:00:00Z",
+                messages=[
+                    {"id": f"message-{index}", "type": "ai", "content": "answer"}
+                    for index in range(51)
+                ],
+            )
+        )
+        _store_session(store, thread_id)
+        save_workflow_run(
+            store,
+            WorkflowRun(
+                run_id="workflow-run-owned",
+                workflow_id="workflow-owned",
+                status="running",
+                parent_thread_id=thread_id,
+                queued_at="2026-11-04T00:00:00Z",
+                started_at="2026-11-04T00:00:01Z",
+                updated_at="2026-11-04T00:00:01Z",
+            ),
+        )
+        save_workflow_run(
+            store,
+            WorkflowRun(
+                run_id="workflow-run-other",
+                workflow_id="workflow-other",
+                status="running",
+                parent_thread_id="thread_other",
+                queued_at="2026-11-04T00:00:00Z",
+                started_at="2026-11-04T00:00:01Z",
+                updated_at="2026-11-04T00:00:01Z",
+            ),
+        )
+
+        detail = get_chat_detail(store, thread_id)
+
+        assert detail is not None
+        page, has_more = paginate_chat_messages(detail.messages)
+        assert has_more
+        assert len(page) == 50
+        assert page[0].id == "message-1"
+        assert detail.background_workflow_run_ids == ["workflow-run-owned"]
 
     def test_normalizes_provider_epoch_seconds_and_offset_iso_metadata(self):
         store = InMemoryDocumentStore()
