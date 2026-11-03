@@ -221,6 +221,9 @@ class ChatInterruption(BaseModel):
 class ChatSessionDetail(ChatSessionSummary):
     messages: list[ChatMessage] = Field(default_factory=list)
     summary_markers: list[ConversationSummaryMarker] = Field(default_factory=list)
+    # Active workflow identities come from compact durable run metadata, rather
+    # than the bounded browser transcript.
+    background_workflow_run_ids: list[str] = Field(default_factory=list)
     has_more_messages: bool = False
     active_request_id: str | None = None
     activity: Literal["delegating", "generating"] | None = None
@@ -1051,7 +1054,10 @@ def get_chat_detail(
         usage_totals=_usage_totals_from_checkpoint(snapshot),
     )
     return ChatSessionDetail(
-        **summary.model_dump(), messages=messages, summary_markers=summary_markers
+        **summary.model_dump(),
+        messages=messages,
+        summary_markers=summary_markers,
+        background_workflow_run_ids=store.list_active_workflow_run_ids(thread_id),
     )
 
 

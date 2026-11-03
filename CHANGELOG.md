@@ -13,12 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A2A completion routing**: asynchronous callbacks return to the originating chat or object-agent protocol thread instead of shared runtime state. Busy object agents and unavailable queues retain their pending notifications for retry.
 - **Chat token details**: restore last-call input counts alongside output breakdowns in the token icon's styled tooltip.
 - **Chat icon and metadata consistency**: use a defined action colour, with disclosure-row icons inheriting the same colour as their collapse arrow. Sticky status and duration labels share the conversation's metadata typography.
+- **Background reconnects**: restore task and workflow-trace subscriptions when a connection returns before the previous HTTP acknowledgement finishes, so completion updates reach mounted chat surfaces.
+- **Durable background activity**: delayed task events read current durable state instead of resurrecting completed work. Chat-launched workflows persist their owning conversation and rehydrate active identities independently of transcript pagination.
 
 ### Changed
 - **Bounded inline work**: keep each stretch between Progena replies expanded while running, with a continuously updated status/duration and the latest five completed activity items plus running calls. Earlier activity stays available on demand; the next reply collapses the stretch to “Worked for …” without absorbing the reply. Manual inspection is not pulled back to the live tail.
 - **Sticky chat progress**: show the latest active todo above pending message rows and the composer. Sticky background, todo and queued rows reuse conversation entries, timestamps, disclosures and action-icon styling; background Details and Runs have separate icons. Queued rows use static, disconnected dots with compact send-now/cancel controls; bounded queue and expanded-plan heights keep the composer visible on mobile.
-- **Chat composer typing**: use native content-sized textareas where supported to avoid repeated forced layouts while typing; retain the existing resize behavior on other browsers and the 200px height limit.
-- **Chat interaction rendering**: coalesce metric-tooltip pointer updates and transcript resize-follow work per animation frame while retaining tooltip dismissal and scroll anchoring.
 - **Reasoning details**: display expanded reasoning in smaller, normal-weight text beneath its title.
 
 ### Changed

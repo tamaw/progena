@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
@@ -32,7 +33,10 @@ class BackgroundTaskSubscription(BaseModel):
 class BackgroundTaskEvents:
     """Targeted, versioned snapshots for every chat surface in one browser tab."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self, store_getter: Callable[[], BackendDocumentStore] = get_default_document_store
+    ) -> None:
+        self._store_getter = store_getter
         self.interests: dict[str, set[str]] = defaultdict(set)
         self.revisions: dict[str, int] = defaultdict(int)
         self._snapshot_lock = asyncio.Lock()
@@ -51,7 +55,9 @@ class BackgroundTaskEvents:
     def subscribe(self, client_id: str, thread_id: str) -> None:
         self.interests[client_id].add(thread_id)
 
-    async def snapshot(self, store: BackendDocumentStore, thread_id: str) -> tuple[list[dict[str, Any]], int]:
+    async def snapshot(
+        self, store: BackendDocumentStore, thread_id: str
+    ) -> tuple[list[dict[str, Any]], int]:
         # Serializing against document updates guarantees an older store read
         # cannot arrive after a newer targeted update.
         async with self._snapshot_lock:
@@ -63,7 +69,15 @@ class BackgroundTaskEvents:
         if event.prefix != PROGENA_STATE_PREFIX or event.key != _ASYNC_TASKS_DOCUMENT:
             return
         async with self._snapshot_lock:
-            by_thread = _tasks_by_thread(event.after)
+            # A document event is historical: the durable document may already
+            # contain a terminal state from a later write.
+            document = await asyncio.to_thread(
+                self._store_getter().get_document,
+                PROGENA_STATE_PREFIX,
+                _ASYNC_TASKS_DOCUMENT,
+                [],
+            )
+            by_thread = _tasks_by_thread(document.payload if document is not None else [])
             watched = {thread_id for threads in self.interests.values() for thread_id in threads}
             revisions = {
                 thread_id: max(self.revisions[thread_id] + 1, int(getattr(event, "seq", 0) or 0))
@@ -83,6 +97,7 @@ class BackgroundTaskEvents:
                 session_id=thread_id,
                 client_id=client_id,
             )
+
 
 background_task_events = BackgroundTaskEvents()
 
@@ -160,7 +175,9 @@ async def put_background_tasks_subscription(
     request_id = request_correlation_id(request, x_request_id)
     if body.subscribed:
         background_task_events.subscribe(body.client_id, thread_id)
-        tasks, revision = await background_task_events.snapshot(get_default_document_store(), thread_id)
+        tasks, revision = await background_task_events.snapshot(
+            get_default_document_store(), thread_id
+        )
         stream.broadcast_ui_event(
             events_contracts.UiEvent.CHAT_BACKGROUND_TASKS_SNAPSHOT,
             {"thread_id": thread_id, "tasks": tasks, "revision": revision},

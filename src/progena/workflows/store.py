@@ -94,6 +94,7 @@ class WorkflowStore:
         workflow_id: str,
         input: dict[str, Any],
         ancestry: list[str],
+        parent_thread_id: str | None,
     ) -> None:
         """Persist a durable request for the backend workflow executor."""
         await self._access.save(
@@ -104,6 +105,7 @@ class WorkflowStore:
                 "workflow_id": workflow_id,
                 "input": input,
                 "ancestry": ancestry,
+                "parent_thread_id": parent_thread_id,
                 "requested_at": utcnow_isoformat(),
             },
         )

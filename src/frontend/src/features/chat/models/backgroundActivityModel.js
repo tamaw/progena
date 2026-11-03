@@ -66,6 +66,24 @@ function applyWorkflowResult(activities, event, observedAt) {
   });
 }
 
+function applyHydratedWorkflowRunIds(activities, workflowRunIds) {
+  for (const candidate of Array.isArray(workflowRunIds) ? workflowRunIds : []) {
+    const runId = normalizedId(candidate);
+    if (!runId || activities.has(`workflow:${runId}`)) continue;
+    upsert(activities, `workflow:${runId}`, {
+      key: `workflow:${runId}`,
+      type: 'workflow',
+      runId,
+      status: 'checking',
+      name: 'Workflow',
+      startedAt: null,
+      finishedAt: null,
+      error: '',
+      source: 'workflow',
+    });
+  }
+}
+
 function taskRowsFromResult(event) {
   const toolName = event?.metadata?.tool_name;
   if (!['start_async_task', 'update_async_task', 'check_async_task', 'list_async_tasks', 'cancel_async_task'].includes(toolName)) {
@@ -151,7 +169,7 @@ function requestError(request) {
     : (typeof request.error.message === 'string' ? request.error.message : 'Unable to refresh run status');
 }
 
-function applyRunRows(activities, runRows, runRequests) {
+function applyRunRows(activities, runRows, runRequests, threadId) {
   const rowsById = runRows instanceof Map ? runRows : new Map();
   const requestsById = runRequests instanceof Map ? runRequests : new Map();
   for (const activity of activities.values()) {
@@ -160,6 +178,11 @@ function applyRunRows(activities, runRows, runRequests) {
     if (!row) {
       const error = requestError(requestsById.get(activity.runId));
       if (error) activities.set(activity.key, { ...activity, status: 'unavailable', error });
+      continue;
+    }
+    const parentThreadId = normalizedId(row.parent_thread_id);
+    if (threadId && parentThreadId && parentThreadId !== threadId) {
+      activities.delete(activity.key);
       continue;
     }
     const refreshError = requestError(requestsById.get(activity.runId));
@@ -191,7 +214,7 @@ export function isTerminalBackgroundActivity(activity) {
  * Calls without a durable run/task identity are intentionally ignored.
  */
 export function deriveBackgroundActivities({
-  messages, liveTurn, threadId, runRows, runRequests, asyncTaskRecords,
+  messages, liveTurn, threadId, workflowRunIds, runRows, runRequests, asyncTaskRecords,
 } = {}) {
   const activities = new Map();
   for (const { event, fallback } of allEvents(messages, liveTurn)) {
@@ -200,8 +223,9 @@ export function deriveBackgroundActivities({
     applyAsyncEvent(activities, event, observedAt, threadId);
     for (const task of taskRowsFromResult(event)) applyAsyncTask(activities, task, observedAt, threadId);
   }
+  applyHydratedWorkflowRunIds(activities, workflowRunIds);
   applyAsyncTaskRecords(activities, asyncTaskRecords, threadId);
-  applyRunRows(activities, runRows, runRequests);
+  applyRunRows(activities, runRows, runRequests, threadId);
   const all = [...activities.values()].sort((left, right) => (right.startedAt || 0) - (left.startedAt || 0));
   return {
     active: all.filter((activity) => !isTerminalBackgroundActivity(activity)),
@@ -209,8 +233,8 @@ export function deriveBackgroundActivities({
   };
 }
 
-export function backgroundRunIds(messages, liveTurn) {
-  const { active, history } = deriveBackgroundActivities({ messages, liveTurn });
+export function backgroundRunIds(messages, liveTurn, workflowRunIds) {
+  const { active, history } = deriveBackgroundActivities({ messages, liveTurn, workflowRunIds });
   return [...new Set([...active, ...history]
     .filter((activity) => activity.type === 'workflow')
     .map((activity) => activity.runId))];

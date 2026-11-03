@@ -35,24 +35,32 @@ function runIdsFromKey(runIdsKey) {
   return runIdsKey ? runIdsKey.split('\u0000') : [];
 }
 
-function useTrackedWorkflowRows({ messages, liveActivity, runsUrl, hydrate = true }) {
+function useTrackedWorkflowRows({ messages, liveActivity, workflowRunIds, runsUrl, hydrate = true }) {
   const dispatch = useDispatch();
   const streamReady = useSelector(selectRealtimeStreamReady);
   const runIdsKey = useMemo(
-    () => backgroundRunIds(messages, liveActivity).join('\u0000'),
-    [messages, liveActivity],
+    () => backgroundRunIds(messages, liveActivity, workflowRunIds).join('\u0000'),
+    [messages, liveActivity, workflowRunIds],
   );
   const snapshots = useSelector((state) => state.uiData?.runs?.snapshots || {});
+  const traces = useSelector((state) => state.uiData?.runs?.traces || {});
   const requests = useSelector((state) => state.uiData?.runs?.requests || {});
   const rows = useMemo(() => {
     const result = new Map();
     for (const runId of runIdsFromKey(runIdsKey)) {
       const snapshot = snapshots[runsQueryKey({ kind: 'workflow', q: runId, sort: 'newest' })];
       const row = snapshot?.runs?.find((candidate) => candidate?.run_id === runId);
-      if (row) result.set(runId, row);
+      const trace = traces[`workflow:${runId}`];
+      if (row || trace) {
+        result.set(runId, {
+          ...row,
+          ...trace,
+          parent_thread_id: row?.parent_thread_id,
+        });
+      }
     }
     return result;
-  }, [runIdsKey, snapshots]);
+  }, [runIdsKey, snapshots, traces]);
   const runRequests = useMemo(() => {
     const result = new Map();
     for (const runId of runIdsFromKey(runIdsKey)) {
@@ -80,19 +88,26 @@ function useTrackedWorkflowRows({ messages, liveActivity, runsUrl, hydrate = tru
     if (hydrate) refresh();
   }, [hydrate, refresh]);
 
-  return { rows, runRequests, refresh };
+  return { rows, runRequests, refresh, runIdsKey };
 }
 
 function useActivities({
-  messages, liveTurnStore, threadId, runsUrl, hydrateRuns, asyncTaskRecords, tasksUrl, subscribeTasks,
+  messages, liveTurnStore, threadId, workflowRunIds, runsUrl, hydrateRuns, asyncTaskRecords, tasksUrl, subscribeTasks,
 }) {
   const liveActivity = useLiveBackgroundActivity(liveTurnStore);
-  const { rows, runRequests, refresh } = useTrackedWorkflowRows({
+  const { rows, runRequests, refresh, runIdsKey } = useTrackedWorkflowRows({
     messages,
     liveActivity,
+    workflowRunIds,
     runsUrl,
     hydrate: hydrateRuns,
   });
+  useEffect(() => {
+    if (!runsUrl) return undefined;
+    const releases = runIdsFromKey(runIdsKey)
+      .map((runId) => watchBackgroundRunTrace(`${runsUrl}/subscription`, 'workflow', runId));
+    return () => releases.forEach((release) => release());
+  }, [runIdsKey, runsUrl]);
   useEffect(() => {
     if (!subscribeTasks || !tasksUrl) return undefined;
     return watchBackgroundTasks(tasksUrl);
@@ -102,11 +117,12 @@ function useActivities({
       messages,
       liveTurn: liveActivity,
       threadId,
+      workflowRunIds,
       runRows: rows,
       runRequests,
       asyncTaskRecords,
     }),
-    [asyncTaskRecords, liveActivity, messages, rows, runRequests, threadId],
+    [asyncTaskRecords, liveActivity, messages, rows, runRequests, threadId, workflowRunIds],
   );
   return { ...activities, refresh };
 }
@@ -235,13 +251,13 @@ function useElapsedClock(active) {
 }
 
 /** Sticky, chat-scoped work that survives a root reply ending. */
-export function BackgroundActivity({ messages, liveTurnStore, threadId, runsUrl, chatsUrl }) {
+export function BackgroundActivity({ messages, liveTurnStore, threadId, workflowRunIds, runsUrl, chatsUrl }) {
   const asyncTaskRecords = useSelector((state) => selectBackgroundTasks(state, threadId));
   const tasksUrl = threadId && chatsUrl
     ? `${chatsUrl}/${encodeURIComponent(threadId)}/background-tasks`
     : null;
   const { active, refresh } = useActivities({
-    messages, liveTurnStore, threadId, runsUrl, hydrateRuns: true,
+    messages, liveTurnStore, threadId, workflowRunIds, runsUrl, hydrateRuns: true,
     asyncTaskRecords, tasksUrl, subscribeTasks: true,
   });
   const now = useElapsedClock(active.length > 0);
@@ -252,13 +268,13 @@ export function BackgroundActivity({ messages, liveTurnStore, threadId, runsUrl,
 }
 
 /** Settled work is transcript history, never retained in the composer sticky area. */
-export function BackgroundActivityHistory({ messages, liveTurnStore, threadId, runsUrl, chatsUrl }) {
+export function BackgroundActivityHistory({ messages, liveTurnStore, threadId, workflowRunIds, runsUrl, chatsUrl }) {
   const asyncTaskRecords = useSelector((state) => selectBackgroundTasks(state, threadId));
   const tasksUrl = threadId && chatsUrl
     ? `${chatsUrl}/${encodeURIComponent(threadId)}/background-tasks`
     : null;
   const { history } = useActivities({
-    messages, liveTurnStore, threadId, runsUrl, hydrateRuns: false,
+    messages, liveTurnStore, threadId, workflowRunIds, runsUrl, hydrateRuns: false,
     asyncTaskRecords, tasksUrl, subscribeTasks: false,
   });
   const now = useElapsedClock(false);

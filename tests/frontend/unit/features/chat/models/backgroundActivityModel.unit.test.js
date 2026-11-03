@@ -30,6 +30,71 @@ describe('deriveBackgroundActivities', () => {
     expect(completed.history).toMatchObject([{ key: 'workflow:run-1', status: 'completed', name: 'Nightly workflow' }]);
   });
 
+  it('preserves transcript workflow identity when also discovered from durable ownership', () => {
+    const activities = deriveBackgroundActivities({
+      messages: [{ id: 'launch', timestamp: 1000, streamEvents: [workflowResult()] }],
+      workflowRunIds: ['run-1'],
+    });
+    expect(activities.active).toMatchObject([{
+      key: 'workflow:run-1', name: 'nightly', startedAt: 1000,
+    }]);
+  });
+
+  it('rehydrates a workflow omitted by newest-50 pagination and retains it after terminal trace update', () => {
+    const newestPage = Array.from({ length: 50 }, (_, index) => ({
+      id: `message-${index + 1}`,
+      timestamp: index + 1,
+      streamEvents: [],
+    }));
+    const runningRow = {
+      kind: 'workflow',
+      run_id: 'run-before-page',
+      parent_thread_id: 'chat-1',
+      name: 'Long-running workflow',
+      status: 'running',
+      started_at: '2026-11-03T00:00:00Z',
+    };
+    const checking = deriveBackgroundActivities({
+      messages: newestPage,
+      threadId: 'chat-1',
+      workflowRunIds: ['run-before-page'],
+      runRows: new Map([['run-before-page', runningRow]]),
+    });
+    expect(backgroundRunIds(newestPage, undefined, ['run-before-page'])).toEqual(['run-before-page']);
+    expect(checking.active).toMatchObject([{
+      key: 'workflow:run-before-page',
+      status: 'running',
+      name: 'Long-running workflow',
+    }]);
+
+    const terminal = deriveBackgroundActivities({
+      messages: newestPage,
+      threadId: 'chat-1',
+      workflowRunIds: ['run-before-page'],
+      runRows: new Map([['run-before-page', {
+        ...runningRow,
+        status: 'completed',
+        completed_at: '2026-11-03T00:00:04Z',
+      }]]),
+    });
+    expect(terminal.active).toEqual([]);
+    expect(terminal.history).toMatchObject([{ key: 'workflow:run-before-page', status: 'completed' }]);
+  });
+
+  it('removes a workflow row that belongs to another chat', () => {
+    const activities = deriveBackgroundActivities({
+      messages: [{ id: 'answer-1', timestamp: 1000, streamEvents: [workflowResult('run-other-chat')] }],
+      threadId: 'chat-1',
+      runRows: new Map([['run-other-chat', {
+        run_id: 'run-other-chat',
+        parent_thread_id: 'chat-2',
+        name: 'Other workflow',
+        status: 'running',
+      }]]),
+    });
+    expect(activities).toEqual({ active: [], history: [] });
+  });
+
   it('surfaces a failed run hydration instead of leaving an acknowledgement queued forever', () => {
     const messages = [{ id: 'answer-1', timestamp: 1000, streamEvents: [workflowResult('missing-run')] }];
     const unavailable = deriveBackgroundActivities({

@@ -34,6 +34,17 @@ def _task(task_id: str, parent_thread_id: str, status: str) -> dict[str, object]
     }
 
 
+def _document_event(after: list[dict[str, object]], seq: int = 0) -> SimpleNamespace:
+    return SimpleNamespace(
+        event=SimpleNamespace(
+            prefix="progena.state",
+            key="async_subagent_tasks",
+            after=after,
+            seq=seq,
+        )
+    )
+
+
 def test_background_task_snapshot_acknowledges_and_is_thread_scoped(monkeypatch):
     client = TestClient(app)
     queue: asyncio.Queue = asyncio.Queue()
@@ -42,7 +53,9 @@ def test_background_task_snapshot_acknowledges_and_is_thread_scoped(monkeypatch)
     monkeypatch.setattr(
         background_tasks,
         "get_default_document_store",
-        lambda: _Store([_task("owned", "thread-1", "running"), _task("other", "thread-2", "success")]),
+        lambda: _Store(
+            [_task("owned", "thread-1", "running"), _task("other", "thread-2", "success")]
+        ),
     )
     try:
         response = client.get(
@@ -65,26 +78,51 @@ def test_background_task_snapshot_acknowledges_and_is_thread_scoped(monkeypatch)
     assert [task["task_id"] for task in event.payload["tasks"]] == ["owned"]
 
 
-def test_background_task_document_change_targets_only_the_watched_chat():
+def test_background_task_document_change_reads_current_store_and_targets_watched_chat():
     queue: asyncio.Queue = asyncio.Queue()
+    store = _Store([_task("owned", "thread-1", "error"), _task("other", "thread-2", "running")])
+    events = background_tasks.BackgroundTaskEvents(lambda: store)
     events_stream._ui_stream_subscribers[queue] = None
     events_stream._ui_stream_clients[queue] = "tab-1"
-    background_tasks.background_task_events.subscribe("tab-1", "thread-1")
+    events.subscribe("tab-1", "thread-1")
     try:
-        asyncio.run(background_tasks.background_task_events.document_event(SimpleNamespace(event=SimpleNamespace(
-            prefix="progena.state",
-            key="async_subagent_tasks",
-            after=[_task("owned", "thread-1", "error"), _task("other", "thread-2", "running")],
-        ))))
+        asyncio.run(events.document_event(_document_event([_task("owned", "thread-1", "running")])))
         event = queue.get_nowait()["envelope"]
     finally:
-        background_tasks.background_task_events.unsubscribe("tab-1")
+        events.unsubscribe("tab-1")
         events_stream._ui_stream_subscribers.pop(queue, None)
         events_stream._ui_stream_clients.pop(queue, None)
 
     assert event.type == "chat.background_tasks.updated"
     assert event.payload["thread_id"] == "thread-1"
-    assert [(task["task_id"], task["parent_thread_id"], task["status"]) for task in event.payload["tasks"]] == [
-        ("owned", "thread-1", "error")
-    ]
+    assert [
+        (task["task_id"], task["parent_thread_id"], task["status"])
+        for task in event.payload["tasks"]
+    ] == [("owned", "thread-1", "error")]
     assert isinstance(event.payload["revision"], int)
+
+
+def test_late_background_task_event_does_not_regress_snapshot_state():
+    queue: asyncio.Queue = asyncio.Queue()
+    store = _Store([_task("owned", "thread-1", "success")])
+    events = background_tasks.BackgroundTaskEvents(lambda: store)
+    events_stream._ui_stream_subscribers[queue] = None
+    events_stream._ui_stream_clients[queue] = "tab-1"
+    events.subscribe("tab-1", "thread-1")
+    tasks, revision = asyncio.run(events.snapshot(store, "thread-1"))
+    try:
+        asyncio.run(
+            events.document_event(_document_event([_task("owned", "thread-1", "running")], seq=42))
+        )
+        event = queue.get_nowait()["envelope"]
+    finally:
+        events.unsubscribe("tab-1")
+        events_stream._ui_stream_subscribers.pop(queue, None)
+        events_stream._ui_stream_clients.pop(queue, None)
+
+    assert [(task["task_id"], task["status"]) for task in tasks] == [("owned", "success")]
+    assert revision == 0
+    assert [(task["task_id"], task["status"]) for task in event.payload["tasks"]] == [
+        ("owned", "success")
+    ]
+    assert event.payload["revision"] == 42

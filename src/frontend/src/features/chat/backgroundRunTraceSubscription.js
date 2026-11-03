@@ -24,8 +24,8 @@ function submit(watch, subscribed) {
   return operation;
 }
 
-function subscribe(watch) {
-  if (watch.request) return watch.request;
+function subscribe(watch, reconnect = false) {
+  if (watch.request && !reconnect) return watch.request;
   const request = submit(watch, true);
   watch.request = request;
   request.catch(() => {}).finally(() => {
@@ -36,7 +36,7 @@ function subscribe(watch) {
 
 subscribeUiEvent((event) => {
   if (event.type !== UI_EVENT.CONNECTION_READY) return;
-  for (const watch of watches.values()) void subscribe(watch);
+  for (const watch of watches.values()) void subscribe(watch, true);
 });
 
 export function watchBackgroundRunTrace(subscriptionUrl, kind, runId) {

@@ -65,6 +65,7 @@ def _write_invoke_request(
     ancestry: list[str] | None = None,
     input: dict | None = None,
     run_id: str | None = None,
+    parent_thread_id: str | None = None,
 ) -> str:
     key = workflow_invoke_request_key(request_id)
     payload = {
@@ -76,6 +77,8 @@ def _write_invoke_request(
     }
     if run_id is not None:
         payload["run_id"] = run_id
+    if parent_thread_id is not None:
+        payload["parent_thread_id"] = parent_thread_id
     store.save_document(PROGENA_STATE_PREFIX, key, payload)
     return key
 
@@ -132,7 +135,13 @@ async def test_run_workflow_request_prefers_manual_trigger_and_applies_defaults(
     store = workflow_env
     workflow_id = "workflow_manual_invoke"
     save_workflow_definition(store, _manual_workflow(workflow_id))
-    key = _write_invoke_request(store, "request-manual", workflow_id, input={"run_id": "round-a"})
+    key = _write_invoke_request(
+        store,
+        "request-manual",
+        workflow_id,
+        input={"run_id": "round-a"},
+        parent_thread_id="chat-owned",
+    )
 
     await workflows_runtime._reconcile_workflow_invoke_requests(key)
     run = await _wait_for_completed_run(store, workflow_id)
@@ -141,6 +150,7 @@ async def test_run_workflow_request_prefers_manual_trigger_and_applies_defaults(
     assert run["trigger_node_id"] == "manual"
     assert run["trigger_event"]["run_id"] == "round-a"
     assert run["trigger_event"]["round_count"] == 3
+    assert run["parent_thread_id"] == "chat-owned"
     sent_message = backend_client.send_message.await_args.args[0]
     assert "Run round-a for 3 rounds" in sent_message
     assert store.get_document(PROGENA_STATE_PREFIX, key, None) is None

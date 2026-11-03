@@ -415,6 +415,9 @@ class WorkflowRun(BaseModel):
     # routine thread_id once known, and status (running|paused).
     pending_routine: dict[str, Any] | None = None
     thread_id: str | None = None
+    # Trusted calling-chat identity. Unlike ``thread_id``, this is not the
+    # workflow executor's own thread and never comes from workflow input.
+    parent_thread_id: str | None = None
     trigger_event: dict[str, Any] = Field(default_factory=dict)
     trigger_node_id: str | None = None
     source: WorkflowRunSource = "manual"
@@ -447,6 +450,7 @@ class WorkflowInvokeRequest(BaseModel):
     workflow_id: str
     input: dict[str, Any] = Field(default_factory=dict)
     ancestry: list[str] = Field(default_factory=list)
+    parent_thread_id: str | None = None
     requested_at: str
 
     @field_validator("requested_at")

@@ -1589,6 +1589,7 @@ function ConversationPage() {
                 messages={messages}
                 liveTurnStore={liveTurnStore}
                 threadId={threadId}
+                workflowRunIds={activeBackendChat?.background_workflow_run_ids}
                 runsUrl={getApiUrl('runs')}
                 chatsUrl={getApiUrl('chats')}
               />}
@@ -1633,6 +1634,7 @@ function ConversationPage() {
         <BackgroundActivity
           key={threadId ?? 'draft'}
           messages={messages}
+          workflowRunIds={activeBackendChat?.background_workflow_run_ids}
           liveTurnStore={liveTurnStore}
           threadId={threadId}
           runsUrl={getApiUrl('runs')}

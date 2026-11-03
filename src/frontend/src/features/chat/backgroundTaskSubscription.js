@@ -4,18 +4,26 @@ import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtime
 import { subscribeUiEvent } from '../../realtime/realtimeEvents';
 
 const watches = new Map();
+let requests = Promise.resolve();
 
-async function submit(watch, subscribed) {
-  await waitForRealtimeClient();
-  return requestAcknowledged(`${watch.tasksUrl}/subscription`, {
-    method: 'PUT',
-    requestId: createOperationRequestId(),
-    body: { client_id: realtimeClientId, subscribed },
+function submit(watch, subscribed) {
+  const operation = requests.catch(() => {}).then(async () => {
+    await waitForRealtimeClient();
+    if (subscribed && watches.get(watch.tasksUrl) !== watch) {
+      throw new Error('Background tasks are no longer viewed');
+    }
+    return requestAcknowledged(`${watch.tasksUrl}/subscription`, {
+      method: 'PUT',
+      requestId: createOperationRequestId(),
+      body: { client_id: realtimeClientId, subscribed },
+    });
   });
+  requests = operation;
+  return operation;
 }
 
-function subscribe(watch) {
-  if (watch.request) return watch.request;
+function subscribe(watch, reconnect = false) {
+  if (watch.request && !reconnect) return watch.request;
   const request = submit(watch, true);
   watch.request = request;
   request.catch(() => {}).finally(() => {
@@ -26,7 +34,7 @@ function subscribe(watch) {
 
 subscribeUiEvent((event) => {
   if (event.type !== UI_EVENT.CONNECTION_READY) return;
-  for (const watch of watches.values()) void subscribe(watch);
+  for (const watch of watches.values()) void subscribe(watch, true);
 });
 
 export function watchBackgroundTasks(tasksUrl) {

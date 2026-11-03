@@ -131,6 +131,7 @@ class RunWorkflowTool(BaseSystemTool):
             workflow_id=workflow_id,
             input=input_payload,
             ancestry=ancestry,
+            parent_thread_id=get_current_thread_id(),
         )
         preferences = await context.state_manager.get_preferences_config()
         try:
