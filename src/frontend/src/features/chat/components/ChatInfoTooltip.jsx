@@ -29,6 +29,7 @@ export default function ChatInfoTooltip({ children, content, className = '', onB
   const trigger = useRef(null);
   const bubble = useRef(null);
   const pointer = useRef(null);
+  const pointerFrame = useRef(null);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const [dismissed, setDismissed] = useState(false);
@@ -45,6 +46,10 @@ export default function ChatInfoTooltip({ children, content, className = '', onB
     window.addEventListener('resize', position);
     document.addEventListener('scroll', dismiss, true);
     return () => {
+      if (pointerFrame.current !== null) {
+        cancelAnimationFrame(pointerFrame.current);
+        pointerFrame.current = null;
+      }
       window.removeEventListener('resize', position);
       document.removeEventListener('scroll', dismiss, true);
     };
@@ -64,7 +69,12 @@ export default function ChatInfoTooltip({ children, content, className = '', onB
       }}
       onPointerMove={(event) => {
         pointer.current = { x: event.clientX, y: event.clientY };
-        if (trigger.current && bubble.current) positionTooltip(trigger.current, bubble.current, pointer.current);
+        if (trigger.current && bubble.current && pointerFrame.current === null) {
+          pointerFrame.current = requestAnimationFrame(() => {
+            pointerFrame.current = null;
+            if (trigger.current && bubble.current) positionTooltip(trigger.current, bubble.current, pointer.current);
+          });
+        }
       }}
       onPointerLeave={() => setHovered(false)}
       onFocus={() => {

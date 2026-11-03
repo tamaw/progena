@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **A2A completion routing**: asynchronous callbacks return to the originating chat or object-agent protocol thread instead of shared runtime state. Busy object agents and unavailable queues retain their pending notifications for retry.
 
+### Changed
+- **Chat composer typing**: use native content-sized textareas where supported to avoid repeated forced layouts while typing; retain the existing resize behavior on other browsers and the 200px height limit.
+- **Chat interaction rendering**: coalesce metric-tooltip pointer updates and transcript resize-follow work per animation frame while retaining tooltip dismissal and scroll anchoring.
+
 ### Added
 - **Durable chat message queue**: compose follow-ups with attachments while a conversation is running, reorder or delete pending messages, and use Send now to cancel the current root turn and run the selected message next. Queued turns have independent live streams and Stop targets; durable checkpoint-aware recovery resumes unfinished work after restart. Queue actions remain revisioned and event-correlated, errors are visible, and existing cancellation/subagent presentation is preserved.
 - **Compaction transcript and conversation mount**: native compaction now appears as an expandable amber-dot message showing only the generated summary. Progena's native summarizer subclass owns the prompt/retrieval wrapper while preserving SDK triggering and archives; the cross-conversation virtual mount is `/conversations/` with no `/sessions/` alias. Message token labels omit model names, missing header reasoning displays zero, and compact metric tooltips reuse existing styling at the page top without changing the cursor.

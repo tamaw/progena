@@ -127,7 +127,7 @@ const ChatInput = forwardRef(function ChatInput({
   const isMentionMenuOpen = !disabled && (!isGenerating || allowQueue) && mentionCandidates.length > 0;
 
   useEffect(() => {
-    if (textareaRef.current) {
+    if (textareaRef.current && !globalThis.CSS?.supports?.('field-sizing', 'content')) {
       textareaRef.current.style.height = 'auto';
       textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px';
     }

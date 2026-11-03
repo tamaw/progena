@@ -73,11 +73,18 @@ function ChatMessages({
   // work disclosure). Observe rows, not the potentially height-capped wrapper.
   const observersRef = useRef(null);
   const observeTranscript = useCallback((node) => {
-    observersRef.current?.forEach((observer) => observer.disconnect());
+    observersRef.current?.();
     observersRef.current = null;
     if (!node || !messagesContainerRef || !isPinnedToBottomRef
       || typeof ResizeObserver === 'undefined' || typeof MutationObserver === 'undefined') return;
-    const follow = () => followTranscript(messagesContainerRef.current, isPinnedToBottomRef);
+    let followFrame = null;
+    const follow = () => {
+      if (followFrame !== null) return;
+      followFrame = requestAnimationFrame(() => {
+        followFrame = null;
+        followTranscript(messagesContainerRef.current, isPinnedToBottomRef);
+      });
+    };
     const resizeObserver = new ResizeObserver(follow);
     [...node.children].forEach((child) => resizeObserver.observe(child));
     const mutationObserver = new MutationObserver((records) => {
@@ -91,7 +98,11 @@ function ChatMessages({
       });
     });
     mutationObserver.observe(node, { childList: true });
-    observersRef.current = [resizeObserver, mutationObserver];
+    observersRef.current = () => {
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+      if (followFrame !== null) cancelAnimationFrame(followFrame);
+    };
   }, [messagesContainerRef, isPinnedToBottomRef]);
   const normalizedSummaryMarkers = useMemo(
     () => normalizeConversationSummaryMarkers(summaryMarkers),
