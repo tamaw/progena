@@ -105,6 +105,7 @@ describe('createAiRenameAction', () => {
     const onRequest = vi.fn();
     const action = createAiRenameAction({ pending: false, blockedReason: null, onRequest });
     expect(action).toMatchObject({ key: 'ai-rename', label: 'AI Rename', role: 'menuitem', disabled: false, onClick: onRequest });
+    expect(action.icon.props['aria-hidden']).toBe('true');
     expect(createAiRenameAction({ pending: true, blockedReason: null, onRequest }).disabled).toBe(true);
     expect(createAiRenameAction({ pending: false, blockedReason: 'no-conversation', onRequest }).disabled).toBe(true);
   });

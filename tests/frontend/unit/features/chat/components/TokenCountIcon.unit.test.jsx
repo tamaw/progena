@@ -56,6 +56,8 @@ describe('TokenCountIcon', () => {
   it('renders a passive count inside another control without a nested control', () => {
     const markup = renderToStaticMarkup(<button type="button"><TokenCountIcon label="42 reasoning tokens" passive /></button>);
     expect(markup).toContain('42 reasoning tokens');
+    expect(markup).toContain('<svg width="12" height="12" viewBox="0 0 16 16"');
+    expect(markup).toContain('aria-hidden="true"');
     expect(markup).not.toContain('role="button"');
     expect(markup).not.toContain('tabindex');
   });
