@@ -30,7 +30,7 @@ import { selectAgentName } from '../../settings/state/preferences';
 import ToolCallEntry, { ToolNarrationEntry } from './ToolCallEntry';
 import TokenCountIcon from './TokenCountIcon';
 
-const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities, showResponseStatus, continuesAfterInterruption = false }) {
+const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities, showResponseStatus, continuesAfterInterruption = false, contextUsage }) {
   if (item.kind === 'tool_call') {
     return <ToolCallEntry item={item} />;
   }
@@ -44,13 +44,14 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate,
     summaryMarkers={summaryMarkers}
     summaryActivities={summaryActivities}
     showResponseStatus={showResponseStatus}
+    contextUsage={contextUsage}
     continuesAfterInterruption={continuesAfterInterruption}
   />;
 });
 
 // Separate component so the tool_call branch above stays hook-free; this
 // one reads the agent name from the store.
-function TimelineRow({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities, showResponseStatus, continuesAfterInterruption }) {
+function TimelineRow({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities, showResponseStatus, continuesAfterInterruption, contextUsage }) {
   const agentName = useSelector(selectAgentName);
   if (item.kind === 'subagent' || item.kind === 'async_subagent') {
     const matchingMarkers = (summaryMarkers || []).filter((marker) => (
@@ -71,7 +72,7 @@ function TimelineRow({ item, itemIndex, onRegenerate, summaryMarkers, summaryAct
   }
 
   if (item.kind === 'assistant_message') {
-    return <AssistantMessageEntry item={item} agentName={agentName} onRegenerate={onRegenerate} showResponseStatus={showResponseStatus} continuesAfterInterruption={continuesAfterInterruption} />;
+    return <AssistantMessageEntry item={item} agentName={agentName} onRegenerate={onRegenerate} showResponseStatus={showResponseStatus} continuesAfterInterruption={continuesAfterInterruption} contextUsage={contextUsage} />;
   }
 
   if (item.kind === 'stream_event') {

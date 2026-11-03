@@ -2657,6 +2657,13 @@ pre.mermaid svg {
 .work-group__reasoning-text {
     min-width: 0;
     color: var(--color-text-muted);
+    font-size: 12px;
+    font-weight: 400;
+}
+
+.work-group__reasoning-text strong,
+.work-group__reasoning-text b {
+    font-weight: 400;
 }
 
 .work-group__reasoning-text > :first-child {

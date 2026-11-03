@@ -41,6 +41,11 @@ describe('MessageTokenUsage', () => {
     expect(await tooltipNumbers({ tokenCount: null, finalCallTokenCount: 12 })).toEqual([12]);
   });
 
+  it('shows provider input even when response output is unavailable', async () => {
+    expect(await tooltipNumbers({ tokenCount: null, finalCallTokenCount: null, inputTokenCount: 0 })).toEqual([0]);
+    expect(document.querySelector('[role="tooltip"]').textContent).toContain('OutputUnknown');
+  });
+
   it('does not fabricate counts when neither provider total is available', () => {
     expect(renderToStaticMarkup(React.createElement(MessageTokenUsage, {
       tokenCount: null, finalCallTokenCount: null,

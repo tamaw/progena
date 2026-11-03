@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **A2A completion routing**: asynchronous callbacks return to the originating chat or object-agent protocol thread instead of shared runtime state. Busy object agents and unavailable queues retain their pending notifications for retry.
+- **Chat token details**: restore last-call input counts alongside output breakdowns in the token icon's styled tooltip.
+
+### Changed
+- **Reasoning details**: display expanded reasoning in smaller, normal-weight text beneath its title.
 
 ### Added
 - **Durable chat message queue**: compose follow-ups with attachments while a conversation is running, reorder or delete pending messages, and use Send now to cancel the current root turn and run the selected message next. Queued turns have independent live streams and Stop targets; durable checkpoint-aware recovery resumes unfinished work after restart. Queue actions remain revisioned and event-correlated, errors are visible, and existing cancellation/subagent presentation is preserved.
