@@ -339,26 +339,38 @@ async def cancel_tracked_a2a_task(
 
 
 async def enqueue_completion_followup(
-    state_manager: Any, queues: Any, record: A2ATaskRecord
+    state_manager: Any, queues: Any, record: A2ATaskRecord, *, object_agent_protocol: Any = None
 ) -> bool:
-    """Queue a same-thread follow-up turn for a tracked terminal A2A task."""
-    thread_id = _completion_followup_thread_id(record)
-    if not thread_id:
+    """Queue a follow-up on its owning chat or object-agent protocol thread."""
+    owner = record.request_metadata.get("owner")
+    if isinstance(owner, dict):
+        resume = getattr(object_agent_protocol, "resume_a2a_continuation", None)
+        if not callable(resume):
+            return False
+        queued = await cast(
+            Awaitable[bool],
+            resume(owner, _build_completion_followup_prompt(record), task_id=record.task_id),
+        )
+    else:
+        thread_id = _completion_followup_thread_id(record)
+        if not thread_id:
+            return False
+        queued = await queues.enqueue_input(
+            _build_completion_followup_prompt(record),
+            metadata={
+                "thread_id": thread_id,
+                "notify_on_completion": True,
+                "completion_event_type": "agent_message",
+                "source": "a2a_task_completion_followup",
+                "task_id": record.task_id,
+                "agent": record.agent_name,
+                "a2a_status": record.status,
+                "title": _build_notification_title(record),
+                "level": notification_level(record),
+            },
+        )
+    if not queued:
         return False
-    await queues.enqueue_input(
-        _build_completion_followup_prompt(record),
-        metadata={
-            "thread_id": thread_id,
-            "notify_on_completion": True,
-            "completion_event_type": "agent_message",
-            "source": "a2a_task_completion_followup",
-            "task_id": record.task_id,
-            "agent": record.agent_name,
-            "a2a_status": record.status,
-            "title": _build_notification_title(record),
-            "level": notification_level(record),
-        },
-    )
     await state_manager.update_a2a_task(
         record.task_id,
         {"notification_sent_at": utcnow(), "updated_at": utcnow()},

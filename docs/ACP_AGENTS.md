@@ -96,8 +96,9 @@ Remote HTTP A2A agents use a separate task-session family:
 - `a2a_send(agent, message, ...)` sends a task or follow-up and waits up to
   `wait_seconds` (default 60, maximum 300) for a terminal or `input-required`
   state. It returns the tracked task record even when the wait expires.
-- `a2a_send_async(agent, message, ...)` returns the tracked task immediately
-  and queues a completion follow-up turn.
+- `a2a_send_async(agent, message, ...)` returns the tracked task immediately.
+  Completion resumes the originating chat or object-agent protocol thread;
+  if an object agent is still running, its continuation waits for it to become idle.
 - `a2a_status`, `a2a_cancel`, and `a2a_list` refresh, cancel, and enumerate
   tracked A2A tasks. `a2a_send` and `a2a_status` return
   `build_task_response` records, including persisted `progress_log` entries.

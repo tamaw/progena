@@ -17,10 +17,12 @@ from src.progena.a2a.tasks import (
     dispatch_tracked_a2a_task,
     refresh_tracked_a2a_task,
 )
+from src.progena.async_subagents.protocol import get_current_object_agent_owner
 from src.progena.runtime.streaming.stream_events import (
     build_a2a_call_progress_event,
     emit_stream_event,
 )
+from src.progena.sessions.context import get_current_thread_id
 
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
@@ -253,13 +255,23 @@ async def _send(context: ToolContext, *, blocking: bool, source: str) -> ToolRes
     wait_seconds = _wait_seconds(args.get("wait_seconds"), default=60.0) if blocking else 60.0
     extra_context = args.get("context")
     metadata = dict(extra_context) if isinstance(extra_context, dict) else {}
+    owner = get_current_object_agent_owner()
+    current_thread = get_current_thread_id()
+    thread_id = (
+        owner.checkpoint_thread_id
+        if owner is not None
+        else str(current_thread or (context.state or {}).get("thread_id") or "").strip()
+    ) or None
     metadata.update(
         {
             "caller": "progena",
             "dispatch_mode": "blocking" if blocking else "async",
-            "thread_id": str((context.state or {}).get("thread_id") or "").strip() or None,
+            "thread_id": thread_id,
         }
     )
+    # Explicitly clear a prior object-agent owner when continuing from a chat.
+    # Omitting the key would retain the previous owner during task upsert.
+    metadata["owner"] = owner.as_metadata() if owner is not None else None
     progress_callback = (
         _make_progress_callback(context.tool_call_id, resolved_name) if blocking else None
     )

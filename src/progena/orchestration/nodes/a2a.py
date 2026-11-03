@@ -94,9 +94,15 @@ async def notify_completed_tasks_node(
             runtime.context.state_manager,
             runtime.context.queues,
             record,
+            object_agent_protocol=getattr(runtime.context, "object_agent_protocol", None),
         )
         if sent:
             notified += 1
+            continue
+        if isinstance(record.request_metadata.get("owner"), dict) or record.request_metadata.get(
+            "thread_id"
+        ):
+            # Retry if the destination is busy or the queue is unavailable.
             continue
         await runtime.context.state_manager.update_a2a_task(
             record.task_id,
