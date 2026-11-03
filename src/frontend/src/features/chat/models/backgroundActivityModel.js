@@ -185,8 +185,13 @@ function applyRunRows(activities, runRows, runRequests, threadId) {
       activities.delete(activity.key);
       continue;
     }
-    const refreshError = requestError(requestsById.get(activity.runId));
-    const status = refreshError ? 'unavailable' : activityStatus(row.status, activity.status);
+    // A known terminal row/trace is canonical; a failed ancillary list refresh
+    // must not revive settled work as retryable sticky activity.
+    const rowStatus = activityStatus(row.status, activity.status);
+    const refreshError = TERMINAL_RUN_STATUSES.has(rowStatus)
+      ? ''
+      : requestError(requestsById.get(activity.runId));
+    const status = refreshError ? 'unavailable' : rowStatus;
     const startedAt = timestamp(row.started_at) ?? activity.startedAt;
     const finishedAt = timestamp(row.completed_at)
       ?? (TERMINAL_RUN_STATUSES.has(status) ? activity.finishedAt : null);
