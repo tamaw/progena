@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.progena.a2a.models import A2ATaskRecord
+from src.progena.a2a.tasks import enqueue_completion_followup
+from src.progena.sessions.context import reset_current_thread_id, set_current_thread_id
 from src.progena.tools.a2a_sessions import (
     A2ACancelTool,
     A2AListTool,
@@ -29,6 +31,9 @@ class _State:
 
     async def upsert_a2a_task(self, record: A2ATaskRecord) -> None:
         self.records[record.task_id] = record
+
+    async def update_a2a_task(self, task_id: str, changes: dict) -> None:
+        self.records[task_id] = self.records[task_id].model_copy(update=changes)
 
 
 class _Client:
@@ -132,6 +137,32 @@ async def test_send_async_returns_immediately_and_notifies(monkeypatch) -> None:
     assert result.success
     assert result.data and result.data["notify_on_completion"] is True
     assert client.send_message.await_args.kwargs["blocking"] is False
+
+
+@pytest.mark.asyncio
+async def test_async_completion_returns_to_active_chat_not_stale_state(monkeypatch) -> None:
+    client = _Client([_payload()])
+    monkeypatch.setattr("src.progena.a2a.tasks.A2AClient", lambda: client)
+    state = _State()
+    queues = MagicMock()
+    queues.enqueue_input = AsyncMock(return_value=True)
+    token = set_current_thread_id("active-chat")
+    try:
+        result = await A2ASendAsyncTool().execute(
+            _context(
+                state,
+                _registry(),
+                {"agent": "builder", "message": "build it", "context": {"thread_id": "spoofed"}},
+            )
+        )
+    finally:
+        reset_current_thread_id(token)
+
+    assert result.success
+    record = state.records["task-1"]
+    assert record.request_metadata["thread_id"] == "active-chat"
+    assert await enqueue_completion_followup(state, queues, record)
+    assert queues.enqueue_input.await_args.kwargs["metadata"]["thread_id"] == "active-chat"
 
 
 @pytest.mark.asyncio

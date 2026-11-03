@@ -183,13 +183,19 @@ class ObjectAgentProtocol:
         *,
         task_id: str,
     ) -> bool:
-        """Start the owning object agent's next turn for one ACP material event.
+        """Start the owning object agent's next turn for an ACP material event."""
+        return await self._resume_agent_continuation(owner_metadata, prompt, task_id, "acp_task_id")
 
-        The task's persisted owner identity is verified against both protocol
-        documents before creating a new run.  A live owner run is never
-        interrupted by its callback; the heartbeat will retry that material
-        event after the run becomes idle.
-        """
+    async def resume_a2a_continuation(
+        self, owner_metadata: Any, prompt: str, *, task_id: str
+    ) -> bool:
+        """Start the owning object agent's next turn for an A2A completion."""
+        return await self._resume_agent_continuation(owner_metadata, prompt, task_id, "a2a_task_id")
+
+    async def _resume_agent_continuation(
+        self, owner_metadata: Any, prompt: str, task_id: str, task_key: str
+    ) -> bool:
+        """Verify the owner and wait until its protocol thread is idle."""
         owner = _owner_from_metadata(owner_metadata)
         if (
             owner is None
@@ -228,7 +234,7 @@ class ObjectAgentProtocol:
                 "model_profile": owner_run.get("model_profile"),
                 "status": "running",
                 "continuation_of": owner.run_id,
-                "acp_task_id": task_id,
+                task_key: task_id,
                 "created_at": now,
                 "updated_at": now,
             }

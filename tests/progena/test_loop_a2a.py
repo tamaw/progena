@@ -6,7 +6,10 @@ import pytest
 from langgraph.runtime import Runtime
 
 from src.progena.a2a.models import A2ATaskRecord
-from src.progena.orchestration.nodes.a2a import apply_completed_tasks_node
+from src.progena.orchestration.nodes.a2a import (
+    apply_completed_tasks_node,
+    notify_completed_tasks_node,
+)
 from src.progena.orchestration.nodes.context import HeartbeatContext
 
 
@@ -58,3 +61,34 @@ async def test_a2a_completion_node_avoids_touching_the_loop_thread() -> None:
     # A tool result with no matching model tool call poisons the thread for the
     # provider; the originating thread gets its own follow-up turn instead.
     agent_graph.aupdate_state.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_busy_object_agent_completion_is_retried_without_using_main_queue() -> None:
+    record = A2ATaskRecord(
+        task_id="example-owner",
+        agent_name="example_agent",
+        status="completed",
+        notify_on_completion=True,
+        request_metadata={"owner": {"protocol": "object_agent"}},
+    )
+    manager = MagicMock()
+    manager.update_a2a_task = AsyncMock()
+    queues = MagicMock()
+    queues.enqueue_input = AsyncMock()
+    protocol = MagicMock()
+    protocol.resume_a2a_continuation = AsyncMock(side_effect=[False, True])
+    runtime = Runtime(
+        context=MagicMock(state_manager=manager, queues=queues, object_agent_protocol=protocol)
+    )
+    state = {"a2a_completed_tasks": [record]}
+
+    first = await notify_completed_tasks_node(state, runtime)
+    assert first["a2a_notifications_sent"] == 0
+    manager.update_a2a_task.assert_not_awaited()
+    queues.enqueue_input.assert_not_awaited()
+
+    second = await notify_completed_tasks_node(state, runtime)
+    assert second["a2a_notifications_sent"] == 1
+    manager.update_a2a_task.assert_awaited_once()
+    queues.enqueue_input.assert_not_awaited()
