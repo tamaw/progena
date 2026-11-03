@@ -303,3 +303,43 @@ describe('conversation summary marker render stability', () => {
     }
   });
 });
+
+it('follows resized content only while the reader remains pinned', async () => {
+  let notifyResize;
+  let frame;
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(callback) { notifyResize = callback; }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  });
+  vi.stubGlobal('requestAnimationFrame', (callback) => { frame = callback; return 1; });
+  vi.stubGlobal('cancelAnimationFrame', () => { frame = null; });
+  const host = document.createElement('div');
+  document.body.append(host);
+  const root = createRoot(host);
+  const pinned = { current: true };
+  Object.defineProperties(host, {
+    scrollHeight: { configurable: true, value: 900 },
+    clientHeight: { configurable: true, value: 300 },
+  });
+  try {
+    await act(async () => root.render(
+      <ChatMessages messages={[]} messagesContainerRef={{ current: host }} isPinnedToBottomRef={pinned} />,
+    ));
+    notifyResize();
+    pinned.current = false;
+    await act(async () => frame());
+    expect(host.scrollTop).toBe(0);
+    pinned.current = true;
+    notifyResize();
+    await act(async () => frame());
+    expect(host.scrollTop).toBe(900);
+    notifyResize();
+    await act(async () => root.unmount());
+    expect(frame).toBeNull();
+  } finally {
+    host.remove();
+    vi.unstubAllGlobals();
+  }
+});

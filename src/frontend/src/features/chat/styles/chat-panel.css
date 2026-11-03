@@ -1165,6 +1165,12 @@
     outline: none;
 }
 
+@supports (field-sizing: content) {
+    .chat-input {
+        field-sizing: content;
+    }
+}
+
 .chat-input::placeholder {
     color: var(--color-text-muted);
 }

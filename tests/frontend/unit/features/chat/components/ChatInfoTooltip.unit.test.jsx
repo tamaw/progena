@@ -74,4 +74,27 @@ describe('chat metric tooltip', () => {
     expect(Math.abs(left - 280)).toBeLessThanOrEqual(tooltipRect.width + 8);
     expect(Math.abs(top - 220)).toBeLessThanOrEqual(tooltipRect.height + 8);
   });
+
+  it('positions at the latest pointer location and stays dismissed after leaving', async () => {
+    let frame;
+    vi.stubGlobal('requestAnimationFrame', (callback) => { frame = callback; return 1; });
+    vi.stubGlobal('cancelAnimationFrame', () => { frame = null; });
+    await act(async () => root.render(<ChatInfoTooltip content="125 / 1000">Metric</ChatInfoTooltip>));
+    const trigger = host.querySelector('[tabindex]');
+    await act(async () => trigger.dispatchEvent(new MouseEvent('pointerover', { bubbles: true, clientX: 280, clientY: 220 })));
+    await act(async () => {
+      trigger.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 50, clientY: 60 }));
+      trigger.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 80, clientY: 90 }));
+    });
+    await act(async () => frame());
+    const tooltip = document.querySelector('[role="tooltip"]');
+    expect(tooltip.style.left).toBe('88px');
+    expect(tooltip.style.top).toBe('98px');
+    await act(async () => {
+      trigger.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 100, clientY: 100 }));
+      trigger.dispatchEvent(new MouseEvent('pointerout', { bubbles: true }));
+    });
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+    expect(frame).toBeNull();
+  });
 });
