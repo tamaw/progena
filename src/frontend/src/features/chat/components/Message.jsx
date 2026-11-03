@@ -231,6 +231,7 @@ function MessageView({
           <TimelineItem
             key={timelineItemKey(item, idx)}
             item={item}
+            contextUsage={item.kind === 'assistant_message' ? message.contextUsage : undefined}
             itemIndex={idx}
             onRegenerate={regenerateMessage}
             summaryMarkers={summaryMarkers}

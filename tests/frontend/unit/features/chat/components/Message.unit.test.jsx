@@ -242,6 +242,19 @@ describe('assistant work groups', () => {
 });
 
 
+describe('provider usage tooltip', () => {
+  it('shows the final-call input with the response output when the token icon is focused', async () => {
+    await renderMessage(message([{
+      ...answer('Answer', 2),
+      tokenCount: 125,
+      finalCallTokenCount: 24,
+    }], { contextUsage: { inputTokens: 4321, outputTokens: 24, totalTokens: 4345 } }));
+    await act(async () => host.querySelector('[aria-label="125 output tokens"]').focus());
+    expect(document.querySelector('[role="tooltip"]').textContent).toContain('Input (last call)4,321');
+    expect(document.querySelector('[role="tooltip"]').textContent).toContain('Output125');
+  });
+});
+
 describe('terminal replies without tool work', () => {
   it.each(['failed', 'interrupted'])(
     'keeps provider %s visible even when there are no work groups',

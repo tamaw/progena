@@ -9,7 +9,7 @@ import styles from './AssistantMessageEntry.module.css';
 
 const TERMINAL_LABELS = { failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted' };
 
-export default function AssistantMessageEntry({ item, agentName, onRegenerate, showResponseStatus = true, continuesAfterInterruption = false }) {
+export default function AssistantMessageEntry({ item, agentName, onRegenerate, showResponseStatus = true, continuesAfterInterruption = false, contextUsage }) {
   const contentRef = useRef(null);
   const formattedContent = useMemo(
     () => item.isStreaming ? '' : renderSafeMarkdown(item.content || ''),
@@ -46,7 +46,7 @@ export default function AssistantMessageEntry({ item, agentName, onRegenerate, s
                   {statusLabel}
                 </span>
               )}
-              <MessageTokenUsage tokenCount={item.tokenCount} finalCallTokenCount={item.finalCallTokenCount} />
+              <MessageTokenUsage tokenCount={item.tokenCount} finalCallTokenCount={item.finalCallTokenCount} inputTokenCount={contextUsage?.inputTokens} />
               {Array.isArray(item.displayToolCalls) && item.displayToolCalls.length > 0 && (
                 <span className="msg__model">{formatDisplayToolCalls(item.displayToolCalls)}</span>
               )}
