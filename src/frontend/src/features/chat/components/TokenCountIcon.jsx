@@ -4,8 +4,9 @@ import styles from './TokenCountIcon.module.css';
 
 function TokenIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" aria-hidden="true">
-      <path d="M3 6h10.5M2.5 10H13M6.5 2.5l-1 11M10.5 2.5l-1 11" />
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {/* Lowercase Greek tau (τ) for tokens. */}
+      <path d="M2.5 6.5c.6-.9 1.4-1.3 2.4-1.3h8.6M8.3 5.2v5.9c0 1.3.7 2 1.9 2 .7 0 1.2-.2 1.6-.6" />
     </svg>
   );
 }

@@ -66,8 +66,8 @@ export function createAiRenameAction({ pending, blockedReason, onRequest }) {
     onClick: onRequest,
     icon: (
       <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-        <path d="M6.5 2.5 7.6 5.4l2.9 1.1-2.9 1.1-1.1 2.9-1.1-2.9-2.9-1.1 2.9-1.1z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-        <path d="M11.5 9.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+        <path d="M11 3.2a1.4 1.4 0 0 1 2 2l-7.4 7.4-2.8.7.7-2.8zM9.8 4.4l1.8 1.8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M4 1.8l.5 1.2 1.2.5-1.2.5-.5 1.2-.5-1.2-1.2-.5 1.2-.5z" fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round" />
       </svg>
     ),
   };
