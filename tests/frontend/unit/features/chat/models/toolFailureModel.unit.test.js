@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isToolEventFailure } from '@frontend/features/chat/models/toolFailureModel';
+import { isRoutineResultFailure, isToolEventFailure } from '@frontend/features/chat/models/toolFailureModel';
 
 describe('isToolEventFailure', () => {
   it.each([
@@ -46,5 +46,26 @@ describe('isToolEventFailure', () => {
     },
   ])('leaves successful event %# alone', (event) => {
     expect(isToolEventFailure(event)).toBe(false);
+  });
+});
+
+describe('isRoutineResultFailure', () => {
+  it('recognizes only a failed result for the delegated routine', () => {
+    expect(isRoutineResultFailure(
+      "Routine 'routine-alpha' failed: upstream unavailable",
+      'routine-alpha',
+    )).toBe(true);
+    expect(isRoutineResultFailure(
+      "Routine 'routine-alpha' input error: missing source",
+      'routine-alpha',
+    )).toBe(true);
+  });
+
+  it.each([
+    ["Routine 'routine-alpha' failed: quoted status", 'researcher'],
+    ['The routine failed, but the retry succeeded.', 'routine-alpha'],
+    ["Routine 'routine-alpha' completed: no failure", 'routine-alpha'],
+  ])('does not infer failure from ordinary output %#', (result, routineName) => {
+    expect(isRoutineResultFailure(result, routineName)).toBe(false);
   });
 });

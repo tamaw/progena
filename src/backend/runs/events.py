@@ -29,10 +29,10 @@ TraceResult = tuple[RunTrace, set[str]]
 
 @dataclass
 class _Interest:
+    client_id: str
     kind: RunKind
     run_id: str
     token: object
-
 
 class RunsEvents:
     """Build once per run/version; connection tokens prevent stale deliveries."""
@@ -121,14 +121,23 @@ class RunsEvents:
         self.versions.pop(key, None)
 
     def disconnected(self, client_id: str) -> None:
-        self.unsubscribe(client_id)
+        keys = [key for key, interest in self.interests.items() if interest.client_id == client_id]
+        for key in keys:
+            old = self.interests.pop(key)
+            self._prune((old.kind, old.run_id))
+
+    @staticmethod
+    def _interest_key(client_id: str, interest_id: str | None = None) -> str:
+        return f"{client_id}:{interest_id or 'default'}"
 
     def has_interest(self, client_id: str, token: object) -> bool:
-        interest = self.interests.get(client_id)
-        return interest is not None and interest.token is token
+        return any(
+            interest.client_id == client_id and interest.token is token
+            for interest in self.interests.values()
+        )
 
-    def unsubscribe(self, client_id: str) -> None:
-        old = self.interests.pop(client_id, None)
+    def unsubscribe(self, client_id: str, interest_id: str | None = None) -> None:
+        old = self.interests.pop(self._interest_key(client_id, interest_id), None)
         if old is not None:
             self._prune((old.kind, old.run_id))
 
@@ -177,16 +186,17 @@ class RunsEvents:
                 self._prune(key)
 
     async def subscribe(
-        self, store: Any, client_id: str, kind: RunKind, run_id: str
+        self, store: Any, client_id: str, kind: RunKind, run_id: str, interest_id: str | None = None
     ) -> tuple[RunTrace, object] | None:
-        self.unsubscribe(client_id)
+        interest_key = self._interest_key(client_id, interest_id)
+        self.unsubscribe(client_id, interest_id)
         token = object()
-        self.interests[client_id] = _Interest(kind, run_id, token)
+        self.interests[interest_key] = _Interest(client_id, kind, run_id, token)
         try:
             trace, threads = await self.read_trace(store, kind, run_id)
         except BaseException:
             if self.has_interest(client_id, token):
-                self.unsubscribe(client_id)
+                self.unsubscribe(client_id, interest_id)
             raise
         if not self.has_interest(client_id, token):
             return None
@@ -281,9 +291,9 @@ class RunsEvents:
 
     async def refresh(self, key: TraceKey) -> None:
         viewers = [
-            (client_id, i.token)
-            for client_id, i in self.interests.items()
-            if (i.kind, i.run_id) == key
+            (interest.client_id, interest.token)
+            for interest in self.interests.values()
+            if (interest.kind, interest.run_id) == key
         ]
         if not viewers or self.store is None:
             return
@@ -314,9 +324,9 @@ class RunsEvents:
         stream.broadcast_ui_event(
             events_contracts.UiEvent.RUN_DELETED, {"kind": key[0], "run_id": key[1]}
         )
-        for client_id, interest in tuple(self.interests.items()):
+        for interest_key, interest in tuple(self.interests.items()):
             if (interest.kind, interest.run_id) == key:
-                self.unsubscribe(client_id)
+                self.interests.pop(interest_key, None)
         self._prune(key)
 
     async def document_event(self, typed: TypedDocumentEvent) -> None:

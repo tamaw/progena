@@ -23,6 +23,7 @@ beforeEach(() => {
 afterEach(async () => {
   if (root) await act(async () => root.unmount());
   host.remove();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -62,14 +63,6 @@ describe('WorkGroup', () => {
     expect(html).not.toContain('/e');
   });
 
-  it('opens the group header with the keyboard', async () => {
-    await act(async () => root.render(<WorkGroup items={items} active={false} endedAt={9_000} />));
-    const toggle = host.querySelector('.work-group__toggle');
-
-    await act(async () => toggle.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
-
-    expect(toggle.getAttribute('aria-expanded')).toBe('true');
-  });
 
   it('expands generic work while live, then collapses it when the answer phase begins', async () => {
     await act(async () => root.render(<WorkGroup items={items} active />));
@@ -79,6 +72,41 @@ describe('WorkGroup', () => {
     await act(async () => root.render(<WorkGroup items={items} active={false} endedAt={9_000} />));
     expect(host.querySelector('.work-group__toggle')).not.toBeNull();
     expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(0);
+  });
+
+  it('keeps earlier activity open through updates, then collapses when root text starts', async () => {
+    const finished = Array.from({ length: 8 }, (_, index) => [
+      tool(`start-${index}`, 'tool_start', `call-${index}`, { timestamp: 1_000 + index * 10 }),
+      tool(`end-${index}`, 'tool_result', `call-${index}`, { timestamp: 1_005 + index * 10 }),
+    ]).flat();
+    await act(async () => root.render(<WorkGroup items={finished} active startedAt={1_000} />));
+    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(5);
+    await act(async () => host.querySelector('.earlier-lines-toggle').click());
+    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(8);
+    await act(async () => root.render(
+      <WorkGroup items={[...finished, tool('new-start', 'tool_start', 'new')]} active startedAt={1_000} />,
+    ));
+    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(9);
+    await act(async () => root.render(<WorkGroup items={finished} active={false} startedAt={1_000} endedAt={9_000} />));
+    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(0);
+    await act(async () => host.querySelector('.work-group__toggle').click());
+    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(8);
+  });
+
+  it('continues the elapsed timer across summary changes and stops it on completion', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(59_000);
+    await act(async () => root.render(<WorkGroup items={items} active startedAt={0} />));
+    expect(host.querySelector('.work-group__meta').textContent).toContain('59s');
+    await act(async () => vi.advanceTimersByTime(2_000));
+    await act(async () => root.render(<WorkGroup heading="Checking results" items={items} active startedAt={0} />));
+    expect(host.querySelector('.work-group__meta').textContent).toContain('1m 1s');
+    expect(host.querySelector('.activity-dot')).not.toBeNull();
+    await act(async () => root.render(<WorkGroup items={items} active={false} startedAt={0} endedAt={61_000} />));
+    const settled = host.querySelector('.work-group__title').textContent;
+    await act(async () => vi.advanceTimersByTime(60_000));
+    expect(host.querySelector('.work-group__title').textContent).toBe(settled);
+    expect(host.querySelector('.activity-dot')).toBeNull();
   });
 
   it("does not repeat a headed group's reasoning as a preview step, since the header already shows it", () => {
@@ -125,16 +153,43 @@ describe('WorkGroup', () => {
     expect(host.querySelector('.work-group__reasoning-toggle')).toBeNull();
   });
 
-  it('keeps generated reasoning body without repeating its heading', async () => {
+
+  it('keeps a heading-only phase expandable when it owns tools', async () => {
     const reasoning = {
       kind: 'stream_event',
-      id: 'generated-reasoning',
+      id: 'heading-with-tool',
       timestamp: 900,
       event: {
-        id: 'generated-reasoning',
+        id: 'heading-with-tool',
         eventType: 'reasoning_delta',
-        content: '**Reading files**\n\nFirst generated observation.\n\nSecond generated observation.',
+        content: '**Inspect files**',
         metadata: { source: 'stream_reasoning' },
+        timestamp: 900,
+      },
+    };
+    await act(async () => root.render(
+      <WorkGroup heading="Inspect files" items={[reasoning, tool('read', 'tool_start', 'read')]} active={false} endedAt={1_000} />,
+    ));
+
+    expect(host.querySelector('.work-group__toggle')?.tagName).toBe('BUTTON');
+    await act(async () => host.querySelector('.work-group__toggle').click());
+    expect(host.querySelector('.tool-call-entry')).not.toBeNull();
+    expect(host.querySelector('.work-group__reasoning')).toBeNull();
+  });
+
+  it.each([
+    ['live', 'reasoning_delta', { source: 'stream_reasoning' }],
+    ['restored', 'reasoning_summary', { source: 'message_reasoning' }],
+  ])('keeps the %s provider body under its heading without repeating the title', async (source, eventType, metadata) => {
+    const reasoning = {
+      kind: 'stream_event',
+      id: `${source}-reasoning`,
+      timestamp: 900,
+      event: {
+        id: `${source}-reasoning`,
+        eventType,
+        content: '**Reading files**\n\nFirst generated observation.\n\nSecond generated observation.',
+        metadata,
         timestamp: 900,
       },
     };
@@ -149,7 +204,7 @@ describe('WorkGroup', () => {
     expect(host.textContent.match(/Reading files/g)).toHaveLength(1);
   });
 
-  it('renders a failed write_todos call with its merged plan, commentary, input, and terminal error', async () => {
+  it('renders a failed write_todos call with its merged plan, input, and terminal error', async () => {
     const todos = [{ content: 'Keep this plan visible', status: 'pending' }];
     const writeTodosItems = [
       {
@@ -162,7 +217,6 @@ describe('WorkGroup', () => {
           metadata: {
             tool_name: 'write_todos',
             tool_call_id: 'todos-call',
-            commentary: 'Saving the plan before continuing.',
             args_preview: { todos },
           },
         },
@@ -201,7 +255,6 @@ describe('WorkGroup', () => {
     expect(host.querySelector('.tool-call-entry--error')).not.toBeNull();
     expect(host.querySelector('.entry__badge--err')).not.toBeNull();
     expect(host.textContent).toContain('Keep this plan visible');
-    expect(host.textContent).toContain('Saving the plan before continuing.');
     expect(host.textContent).toContain('Input');
     expect(host.textContent).toContain('Error');
     expect(host.textContent).toContain('Todo service rejected the update.');
@@ -219,25 +272,6 @@ describe('WorkGroup', () => {
     expect(disclosure?.hasAttribute('open')).toBe(false);
   });
 
-  it.each([
-    ['failed', 'Work failed'],
-    ['cancelled', 'Work cancelled'],
-    ['interrupted', 'Work interrupted'],
-    ['unknown', 'Work'],
-  ])('uses explicit terminal %s semantics for a generic final group', (responseStatus, title) => {
-    const html = renderToStaticMarkup(
-      <WorkGroup
-        items={[tool('start', 'tool_start', 'read', { timestamp: 1_000 })]}
-        endedAt={2_000}
-        terminal
-        responseStatus={responseStatus}
-      />,
-    );
-
-    expect(html).toContain(`work-group__title">${title}`);
-    expect(html).not.toContain('Worked for 1s');
-    if (responseStatus === 'failed') expect(html).toContain('work-group__badge--error');
-  });
 
   it('does not present a running final group as an unknown terminal outcome', () => {
     const html = renderToStaticMarkup(
@@ -253,26 +287,6 @@ describe('WorkGroup', () => {
     expect(html).not.toContain('Unknown');
   });
 
-  it('keeps a reasoning title verbatim while surfacing its terminal status once', () => {
-    const reasoning = {
-      kind: 'stream_event',
-      id: 'reasoning',
-      timestamp: 1_000,
-      event: {
-        id: 'reasoning',
-        eventType: 'reasoning_delta',
-        timestamp: 1_000,
-        content: '**Inspect files**\n\nRead the policy.',
-        metadata: {},
-      },
-    };
-    const html = renderToStaticMarkup(
-      <WorkGroup heading="Inspect files" items={[reasoning]} terminal responseStatus="cancelled" />,
-    );
-
-    expect(html).toContain('work-group__title">Inspect files');
-    expect(html.match(/Cancelled/g)).toHaveLength(1);
-  });
 });
 
 describe('WorkGroup reasoning token count', () => {

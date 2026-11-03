@@ -8,10 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Intermediate chat replies**: keep root-agent progress messages in chronological order between work phases, connect them to subsequent activity, and stop each text segment's cursor when its tool call starts. Cancellation saves only text not already checkpointed, avoiding a second copy of earlier progress messages.
+- **Reasoning and routine status**: heading-only reasoning phases use the same provider title live and after reload without an empty disclosure. Routine failures remain visibly failed even when their enclosing task returns normally; later successful attempts keep their own status.
 - **A2A completion routing**: asynchronous callbacks return to the originating chat or object-agent protocol thread instead of shared runtime state. Busy object agents and unavailable queues retain their pending notifications for retry.
 - **Chat token details**: restore last-call input counts alongside output breakdowns in the token icon's styled tooltip.
+- **Chat icon and metadata consistency**: use a defined action colour, with disclosure-row icons inheriting the same colour as their collapse arrow. Sticky status and duration labels share the conversation's metadata typography.
 
 ### Changed
+- **Bounded inline work**: keep each stretch between Progena replies expanded while running, with a continuously updated status/duration and the latest five completed activity items plus running calls. Earlier activity stays available on demand; the next reply collapses the stretch to “Worked for …” without absorbing the reply. Manual inspection is not pulled back to the live tail.
+- **Sticky chat progress**: show the latest active todo above pending message rows and the composer. Sticky background, todo and queued rows reuse conversation entries, timestamps, disclosures and action-icon styling; background Details and Runs have separate icons. Queued rows use static, disconnected dots with compact send-now/cancel controls; bounded queue and expanded-plan heights keep the composer visible on mobile.
+- **Chat composer typing**: use native content-sized textareas where supported to avoid repeated forced layouts while typing; retain the existing resize behavior on other browsers and the 200px height limit.
+- **Chat interaction rendering**: coalesce metric-tooltip pointer updates and transcript resize-follow work per animation frame while retaining tooltip dismissal and scroll anchoring.
 - **Reasoning details**: display expanded reasoning in smaller, normal-weight text beneath its title.
 
 ### Changed
@@ -19,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Chat interaction rendering**: coalesce metric-tooltip pointer updates and transcript resize-follow work per animation frame while retaining tooltip dismissal and scroll anchoring.
 
 ### Added
+- **Chat background activity**: track chat-launched workflow and asynchronous-agent executions separately from the root reply, keep active work above the todo and queue, and retain settled outcomes with details in transcript history. Workflow status follows durable execution records rather than the launch acknowledgement.
 - **Durable chat message queue**: compose follow-ups with attachments while a conversation is running, reorder or delete pending messages, and use Send now to cancel the current root turn and run the selected message next. Queued turns have independent live streams and Stop targets; durable checkpoint-aware recovery resumes unfinished work after restart. Queue actions remain revisioned and event-correlated, errors are visible, and existing cancellation/subagent presentation is preserved.
 - **Compaction transcript and conversation mount**: native compaction now appears as an expandable amber-dot message showing only the generated summary. Progena's native summarizer subclass owns the prompt/retrieval wrapper while preserving SDK triggering and archives; the cross-conversation virtual mount is `/conversations/` with no `/sessions/` alias. Message token labels omit model names, missing header reasoning displays zero, and compact metric tooltips reuse existing styling at the page top without changing the cursor.
 - **Response gutter connections**: compaction and work rows connect through to the assistant dot across row gaps and expanded content. User messages stay standalone; assistant rows never extend below. Live compaction precedes the pending answer cursor instead of appearing after its terminal dot.

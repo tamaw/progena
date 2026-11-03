@@ -15,6 +15,7 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 import src.backend.alerts.routes as alerts_routes
 import src.backend.canvases.events as canvases_events
+import src.backend.chat.background_tasks as chat_background_tasks
 import src.backend.events.contracts as events_contracts
 import src.backend.events.stream as events_stream
 import src.backend.monitoring.status as monitoring_status
@@ -168,6 +169,7 @@ async def _generate_ui_stream(
             workflows_events.routine_events.disconnected(client_id)
             canvases_events.canvas_events.disconnected(client_id)
             runs_events.runs_events.disconnected(client_id)
+            chat_background_tasks.background_task_events.unsubscribe(client_id)
         if current_task:
             events_stream._active_ui_stream_tasks.discard(current_task)
         if not events_stream._ui_stream_subscribers:

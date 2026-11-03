@@ -15,11 +15,18 @@ const mocks = vi.hoisted(() => ({
   generatingChatIds: [],
   requestIdByThreadId: {},
   uiEventQueue: [],
+  reduxState: {
+    realtime: { streamReady: false },
+    uiData: {
+      chatBackgroundTasks: { byThread: {} },
+      runs: { snapshots: {}, requests: {}, traces: {}, traceRequests: {} },
+    },
+  },
 }));
 
 vi.mock('react-redux', () => ({
   useDispatch: () => mocks.dispatch,
-  useSelector: (selector) => selector(),
+  useSelector: (selector) => selector(mocks.reduxState),
 }));
 vi.mock('react-router-dom', () => ({
   useLocation: () => ({ pathname: '/chat' }),
@@ -60,6 +67,7 @@ vi.mock('@frontend/features/settings/state/modelProfiles', () => ({
 }));
 vi.mock('@frontend/realtime/realtimeSlice', () => ({
   selectUiEventQueue: () => mocks.uiEventQueue,
+  selectRealtimeStreamReady: (state) => state.realtime.streamReady,
 }));
 vi.mock('@frontend/lib/uuid', () => ({
   createUuid: () => `quick-id-${++mocks.nextUuid}`,
@@ -146,6 +154,13 @@ beforeEach(() => {
   mocks.generatingChatIds = [];
   mocks.requestIdByThreadId = {};
   mocks.uiEventQueue = [];
+  mocks.reduxState = {
+    realtime: { streamReady: false },
+    uiData: {
+      chatBackgroundTasks: { byThread: {} },
+      runs: { snapshots: {}, requests: {}, traces: {}, traceRequests: {} },
+    },
+  };
   quickChatMemory.history = [];
   quickChatMemory.threadId = null;
   quickChatMemory.handoff = null;

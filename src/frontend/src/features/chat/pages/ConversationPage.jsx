@@ -19,6 +19,8 @@ import { selectModelProfiles } from '../../settings/state/modelProfiles';
 import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
 import ChatInput from '../components/ChatInput';
 import ChatQueue from '../components/ChatQueue';
+import { BackgroundActivity, BackgroundActivityHistory } from '../components/BackgroundActivity';
+import StickyTodoProgress from '../components/StickyTodoProgress';
 import { RegenerateDisabledContext } from '../components/RegenerateDisabledContext';
 import QuickActions from '../components/QuickActions';
 import InlineFailure from '../../../components/InlineFailure';
@@ -1582,6 +1584,14 @@ function ConversationPage() {
               isPinnedToBottomRef={isPinnedToBottomRef}
               interruption={activeBackendChat?.interruption}
               isGenerating={isGenerating}
+              afterMessages={<BackgroundActivityHistory
+                key={threadId ?? 'draft'}
+                messages={messages}
+                liveTurnStore={liveTurnStore}
+                threadId={threadId}
+                runsUrl={getApiUrl('runs')}
+                chatsUrl={getApiUrl('chats')}
+              />}
             >
               {isRouteDetailError ? (
                 <InlineFailure
@@ -1620,6 +1630,19 @@ function ConversationPage() {
             </ChatMessages>
           </div>
         </RegenerateDisabledContext.Provider>
+        <BackgroundActivity
+          key={threadId ?? 'draft'}
+          messages={messages}
+          liveTurnStore={liveTurnStore}
+          threadId={threadId}
+          runsUrl={getApiUrl('runs')}
+          chatsUrl={getApiUrl('chats')}
+        />
+        <StickyTodoProgress
+          liveTurnStore={liveTurnStore}
+          isActive={isGenerating}
+          messages={messages}
+        />
         <ChatQueue
           snapshot={chatQueue.snapshot}
           isMutating={chatQueue.isMutating}

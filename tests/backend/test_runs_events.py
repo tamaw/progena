@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from src.backend.events import stream
 from src.backend.events.documents import TypedDocumentEvent
 from src.backend.runs import events
 from src.backend.runs.models import RunTrace
@@ -49,6 +50,40 @@ def _routine_event(payload, *, seq=1):
 
 
 @pytest.mark.asyncio
+async def test_default_and_background_traces_deliver_independently_for_one_browser():
+    store = InMemoryDocumentStore()
+    store.save_document(PROGENA_STATE_PREFIX, "workflow:smoke", {"title": "Read-only workflow", "graph": {"nodes": {}}})
+    for run_id in ("selected", "background"):
+        store.save_document(PROGENA_STATE_PREFIX, f"workflow_run:{run_id}", {
+            "run_id": run_id, "workflow_id": "smoke", "status": "running",
+            "started_at": "2026-11-03T00:00:00Z",
+        })
+    manager = events.RunsEvents()
+    manager.store = store
+    queue = asyncio.Queue()
+    stream._ui_stream_subscribers[queue] = None
+    stream._ui_stream_clients[queue] = "viewer"
+    try:
+        background = await manager.subscribe(store, "viewer", "workflow", "background", "background:workflow:background")
+        selected = await manager.subscribe(store, "viewer", "workflow", "selected")
+        assert background is not None and selected is not None
+        assert manager.has_interest("viewer", background[1])
+        assert manager.has_interest("viewer", selected[1])
+        manager.unsubscribe("viewer")
+        await manager.refresh(("workflow", "background"))
+        event = queue.get_nowait()
+        assert event["envelope"].payload["trace"]["run_id"] == "background"
+        assert manager.has_interest("viewer", event["interest"])
+        assert not manager.has_interest("another-viewer", event["interest"])
+        manager.disconnected("viewer")
+        assert not manager.has_interest("viewer", event["interest"])
+    finally:
+        stream._ui_stream_subscribers.pop(queue, None)
+        stream._ui_stream_clients.pop(queue, None)
+        await manager.stop()
+
+
+@pytest.mark.asyncio
 async def test_disconnect_keeps_other_viewers_checkpoint_interest(monkeypatch):
     manager = events.RunsEvents()
 
@@ -61,7 +96,6 @@ async def test_disconnect_keeps_other_viewers_checkpoint_interest(monkeypatch):
         await manager.subscribe(object(), "second", "workflow", "shared")
         manager.disconnected("first")
         assert manager.by_thread["shared-thread"] == {("workflow", "shared")}
-        assert manager.interests["second"].run_id == "shared"
         manager.disconnected("second")
         assert "shared-thread" not in manager.by_thread
     finally:
@@ -88,7 +122,6 @@ async def test_slow_previous_selection_cannot_replace_new_selection(monkeypatch)
         release.set()
         assert await old is None
         assert newest is not None and newest[0].run_id == "new"
-        assert manager.interests["viewer"].run_id == "new"
         assert "thread-old" not in manager.by_thread
         assert manager.by_thread["thread-new"] == {("workflow", "new")}
     finally:

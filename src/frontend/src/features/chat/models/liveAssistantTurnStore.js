@@ -41,17 +41,50 @@ function sameHeaderSnapshot(left, right) {
     && left?.reasoningEventCount === right?.reasoningEventCount;
 }
 
+function isBackgroundActivityEvent(event) {
+  const eventType = event?.eventType;
+  if (typeof eventType !== 'string') return false;
+  if (eventType.startsWith('async_subagent_')) return true;
+  if (eventType !== 'tool_result') return false;
+  return [
+    'run_workflow',
+    'start_async_task',
+    'update_async_task',
+    'check_async_task',
+    'list_async_tasks',
+    'cancel_async_task',
+  ].includes(event.metadata?.tool_name);
+}
+
+function createBackgroundActivitySnapshot(turn) {
+  if (!turn) return null;
+  const streamEvents = (Array.isArray(turn.streamEvents) ? turn.streamEvents : [])
+    .filter(isBackgroundActivityEvent);
+  return streamEvents.length ? { startedAt: turn.startedAt, streamEvents } : null;
+}
+
+function sameBackgroundActivitySnapshot(left, right) {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return left.startedAt === right.startedAt
+    && left.streamEvents.length === right.streamEvents.length
+    && left.streamEvents.every((event, index) => event === right.streamEvents[index]);
+}
+
 export function createLiveAssistantTurnStore(initialValue = null) {
   let liveTurn = initialValue;
   let headerSnapshot = createHeaderSnapshot(initialValue);
   let contextUsageSnapshot = createContextUsageSnapshot(initialValue);
+  let backgroundActivitySnapshot = createBackgroundActivitySnapshot(initialValue);
   const listeners = new Set();
   const headerListeners = new Set();
   const contextUsageListeners = new Set();
+  const backgroundActivityListeners = new Set();
   return {
     getSnapshot: () => liveTurn,
     getHeaderSnapshot: () => headerSnapshot,
     getContextUsageSnapshot: () => contextUsageSnapshot,
+    getBackgroundActivitySnapshot: () => backgroundActivitySnapshot,
     subscribe(listener) {
       listeners.add(listener);
       return () => {
@@ -70,6 +103,12 @@ export function createLiveAssistantTurnStore(initialValue = null) {
         contextUsageListeners.delete(listener);
       };
     },
+    subscribeBackgroundActivity(listener) {
+      backgroundActivityListeners.add(listener);
+      return () => {
+        backgroundActivityListeners.delete(listener);
+      };
+    },
     set(nextTurn) {
       if (Object.is(liveTurn, nextTurn)) {
         return;
@@ -77,6 +116,7 @@ export function createLiveAssistantTurnStore(initialValue = null) {
       liveTurn = nextTurn;
       const nextHeaderSnapshot = createHeaderSnapshot(nextTurn);
       const nextContextUsageSnapshot = createContextUsageSnapshot(nextTurn);
+      const nextBackgroundActivitySnapshot = createBackgroundActivitySnapshot(nextTurn);
       if (!sameHeaderSnapshot(headerSnapshot, nextHeaderSnapshot)) {
         headerSnapshot = nextHeaderSnapshot;
         for (const listener of [...headerListeners]) {
@@ -86,6 +126,12 @@ export function createLiveAssistantTurnStore(initialValue = null) {
       if (!sameContextUsage(contextUsageSnapshot, nextContextUsageSnapshot)) {
         contextUsageSnapshot = nextContextUsageSnapshot;
         for (const listener of [...contextUsageListeners]) {
+          listener();
+        }
+      }
+      if (!sameBackgroundActivitySnapshot(backgroundActivitySnapshot, nextBackgroundActivitySnapshot)) {
+        backgroundActivitySnapshot = nextBackgroundActivitySnapshot;
+        for (const listener of [...backgroundActivityListeners]) {
           listener();
         }
       }

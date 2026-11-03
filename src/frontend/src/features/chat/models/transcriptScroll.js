@@ -30,7 +30,7 @@ const PINNED_SLACK_PX = 24;
 function stateFor(container) {
   let entry = state.get(container);
   if (!entry) {
-    entry = { readingOffset: null, lastUserInputAt: -Infinity, lastAnswer: undefined };
+    entry = { readingOffset: null, lastUserInputAt: -Infinity, lastAnswer: undefined, inspecting: false };
     state.set(container, entry);
   }
   return entry;
@@ -49,6 +49,9 @@ function newestAnswer(container) {
   const users = container.querySelectorAll('.msg--user');
   const lastUser = users[users.length - 1];
   if (lastUser && (answer.compareDocumentPosition(lastUser) & DOCUMENT_POSITION_FOLLOWING)) return null;
+  const activeWork = container.querySelectorAll('.work-group--active');
+  const lastWork = activeWork[activeWork.length - 1];
+  if (lastWork && (answer.compareDocumentPosition(lastWork) & DOCUMENT_POSITION_FOLLOWING)) return null;
   return answer;
 }
 
@@ -69,16 +72,22 @@ function contentTop(container, element) {
 export function followTranscript(container, isPinnedToBottomRef) {
   if (!container) return;
   const entry = stateFor(container);
+  if (entry.inspecting) return;
+  const answer = newestAnswer(container);
 
   if (entry.readingOffset !== null) {
-    const answer = newestAnswer(container);
-    if (answer) setScrollTop(container, contentTop(container, answer) - entry.readingOffset);
-    return;
+    if (answer) {
+      setScrollTop(container, contentTop(container, answer) - entry.readingOffset);
+      return;
+    }
+    // An interim reply has handed off to active work. Its automatic reading
+    // anchor must not strand subsequent tool activity below the viewport.
+    entry.readingOffset = null;
+    isPinnedToBottomRef.current = true;
   }
   if (!isPinnedToBottomRef.current) return;
 
   const tail = container.scrollHeight - container.clientHeight;
-  const answer = newestAnswer(container);
   // Collapsing a tall work group can clamp scrollTop past a newly arrived
   // answer. That is not the reader choosing to skip the answer's beginning.
   const answerJustAppeared = entry.lastAnswer === null && answer !== null;
@@ -121,6 +130,7 @@ export function noteTranscriptScroll(container, isPinnedToBottomRef, now = Date.
     isPinnedToBottomRef.current = true;
   }
   if (atBottom) {
+    if (now - entry.lastUserInputAt <= USER_INPUT_WINDOW_MS) entry.inspecting = false;
     // End the old gesture here: subsequent work-collapse scroll events are
     // browser layout adjustments, not fresh input from that gesture.
     entry.lastUserInputAt = -Infinity;
@@ -129,6 +139,18 @@ export function noteTranscriptScroll(container, isPinnedToBottomRef, now = Date.
 
 /** Sending a message: drop any reading anchor and follow the tail again. */
 export function pinTranscriptToTail(container, isPinnedToBottomRef) {
-  if (container) stateFor(container).readingOffset = null;
+  if (container) {
+    stateFor(container).readingOffset = null;
+    stateFor(container).inspecting = false;
+  }
   isPinnedToBottomRef.current = true;
+}
+
+/** Expanding earlier activity is an explicit request to stop following. */
+export function inspectTranscript(container) {
+  if (container) {
+    const entry = stateFor(container);
+    entry.inspecting = true;
+    entry.lastUserInputAt = -Infinity;
+  }
 }

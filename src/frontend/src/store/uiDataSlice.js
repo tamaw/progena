@@ -7,6 +7,7 @@ import { UI_EVENT } from '../realtime/eventVocabulary';
 import { createSelector, createSlice } from '@reduxjs/toolkit';
 import { addKeyedStreamFailureLifecycle } from './async';
 import * as chats from '../features/chat/state/chats';
+import * as backgroundTasks from '../features/chat/state/backgroundTasks';
 import * as agents from '../features/agents/state/agents';
 import * as tasks from '../features/tasks/state';
 import * as knowledge from '../features/knowledge/state';
@@ -33,7 +34,7 @@ import * as search from '../features/search/state';
 import * as insights from '../features/insights/state';
 import * as runs from '../features/runs/state';
 
-const domains = [status, alerts, widgets, schedules, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, providers, canvases, search, insights, runs, channels];
+const domains = [status, alerts, widgets, schedules, mcp, knowledge, instructions, tasks, workflows, agents, chats, backgroundTasks, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, providers, canvases, search, insights, runs, channels];
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
   {},

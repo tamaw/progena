@@ -2,7 +2,6 @@ import { memo, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from '
 import { Message } from './Message';
 import { ConversationSummaryActivity } from './ConversationSummaryMarker';
 import { toCommittedAssistantMessage } from '../models/liveAssistantTurnModel';
-import PendingAssistantCursor from './PendingAssistantCursor';
 import { followTranscript } from '../models/transcriptScroll';
 const LiveAssistantTurn = memo(function LiveAssistantTurn({
   store,
@@ -63,17 +62,11 @@ const LiveAssistantTurn = memo(function LiveAssistantTurn({
     <ConversationSummaryActivity key={`${activity.id}-${activity.scope.kind}-${activity.scope.id}`} activity={activity} />
   ));
 
-  if (liveAssistantTurn.assistantMessageId === null && liveAssistantTurn.timelineItems.length === 0) {
-    return (
-      <>
-        {activityRows}
-        <PendingAssistantCursor />
-      </>
-    );
-  }
+  const hasTimeline = liveAssistantTurn.timelineItems.length > 0;
 
   return (
     <>
+      {!hasTimeline && activityRows}
       <Message
         key={liveAssistantTurn.streamId}
         message={toCommittedAssistantMessage(liveAssistantTurn)}
@@ -81,7 +74,7 @@ const LiveAssistantTurn = memo(function LiveAssistantTurn({
         summaryActivities={nestedSummaryActivities}
         streamEventFilter={streamEventFilter}
       />
-      {activityRows}
+      {hasTimeline && activityRows}
     </>
   );
 });

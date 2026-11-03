@@ -382,9 +382,8 @@
     margin-top: 6px;
 }
 
-/* Merged tool call (ToolCallEntry.jsx): the agent's narration in full, then
-   one line -- name, input summary, duration/time, chevron -- opening to an
-   input box and an output box. */
+/* Merged tool call: name, input summary, duration/time and a chevron,
+   opening to matching input and output boxes. */
 .tool-call-entry__line {
     display: flex;
     gap: 8px;
@@ -646,36 +645,6 @@
 @keyframes blink {
     0%, 100% { opacity: 1; }
     50% { opacity: 0; }
-}
-
-/* Pending cursor — rendered as a bare chat-row shell before any assistant
-   output arrives, so the user sees the assistant is responding without
-   committing to a badge/tag/timestamp for an entry type we don't know yet.
-   The word itself is typed out a character at a time by
-   PendingAssistantCursor.jsx; the trailing cursor reuses .stream-cursor so
-   it sits glued to the end of the word exactly like the real streaming
-   cursor does. */
-.pending-cursor__blink {
-    min-height: 1.4em;
-    padding: 6px 4px;
-}
-.pending-cursor__word {
-    color: var(--color-text-primary);
-}
-
-/* TypingWord with reserveWidth: the invisible longest word and the typed
-   text share one grid cell, so the cell keeps the longest word's width. */
-.typing-word--reserved {
-    display: inline-grid;
-}
-
-.typing-word--reserved > * {
-    grid-area: 1 / 1;
-    white-space: nowrap;
-}
-
-.typing-word__sizer {
-    visibility: hidden;
 }
 
 /* Todo panel -- live plan checklist rendered as the body of a `todos_update`
@@ -2485,8 +2454,7 @@ pre.mermaid svg {
 }
 
 /* Answer dots always receive from above and never continue below. */
-.chat-transcript .msg--assistant > .entry__gutter::after,
-.chat-transcript .pending-cursor > .entry__gutter::after {
+.chat-transcript .msg--assistant > .entry__gutter::after {
     position: absolute;
     top: 0;
     height: var(--entry-dot-center);
@@ -2626,8 +2594,7 @@ pre.mermaid svg {
     transform: rotate(45deg);
 }
 
-/* Work group: one collapsible line per reasoning summary (or headless run
-   of work) in a turn (WorkGroup.jsx). */
+/* One work stretch between actual root-agent messages (WorkGroup.jsx). */
 
 .work-group__toggle .entry__role {
     min-width: 0;
@@ -2638,6 +2605,7 @@ pre.mermaid svg {
     white-space: nowrap;
 }
 
+.entry__meta,
 .work-group__meta {
     flex: 0 0 auto;
     color: var(--color-text-muted);
@@ -2654,8 +2622,7 @@ pre.mermaid svg {
     color: var(--color-error);
 }
 
-/* A group's reasoning belongs to its expanded header entry and is always
-   complete once that group is open. */
+/* Substantive reasoning is a chronological item within expanded work. */
 .work-group__reasoning {
     margin-top: 2px;
 }
@@ -2769,9 +2736,13 @@ pre.mermaid svg {
     font-size: 11px;
     font-weight: 500;
     line-height: 1;
-    color: var(--color-text-tertiary);
+    color: var(--color-text-muted);
     cursor: pointer;
     transition: max-width var(--transition-fast), gap var(--transition-fast), padding var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.tool-call-entry__line .msg-action-btn {
+    color: inherit;
 }
 
 .msg-action-btn:hover,

@@ -53,6 +53,7 @@ class RunTrace(BaseModel):
 
 class RunsSubscription(BaseModel):
     client_id: str = Field(min_length=1, max_length=64)
+    interest_id: str | None = Field(default=None, min_length=1, max_length=128)
     kind: RunKind | None = None
     run_id: str | None = None
 

@@ -153,6 +153,20 @@ def tool_result_failed(tool_name: Any, message: Any, text: str) -> bool:
     return False
 
 
+def is_routine_result_failure(text: Any, routine_id: Any) -> bool:
+    """Whether a routine subagent returned its structured failure result.
+
+    Routine invocation errors are intentionally returned as a normal task-tool
+    result so the enclosing agent can recover. The task stream knows the
+    delegated routine id, which makes this exact protocol check safe without
+    interpreting ordinary subagent prose as a failure.
+    """
+    if not isinstance(text, str) or not isinstance(routine_id, str) or not routine_id:
+        return False
+    prefix = f"Routine '{routine_id}' "
+    return text.startswith(f"{prefix}failed:") or text.startswith(f"{prefix}input error:")
+
+
 def _coerce_to_dict(obj: Any) -> dict[str, Any] | None:
     """Convert a dict or Pydantic model to a plain dict, returning None for other types."""
     if isinstance(obj, dict):

@@ -1,0 +1,3 @@
+.panel {
+  max-height: min(28vh, 14rem);
+}

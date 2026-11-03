@@ -1,20 +1,7 @@
 /**
- * Pure model behind the collapsible "work" lines of an assistant turn.
- *
- * A turn's timeline is split three ways:
- *   - the answer (`assistant_message` items -- one per turn, plus a terminal
- *     error row when the turn failed),
- *   - delegated-agent cards (`subagent` / `async_subagent` / `a2a_call`),
- *     which stay visible as their own lines with a short summary of their
- *     latest activity,
- *   - everything else (tool calls, reasoning, plan updates, graph steps):
- *     the turn's "work", split into groups. Every reasoning section opens a
- *     new group headed by its `**Heading**` text, or by neutral "Reasoning"
- *     when it has no heading. Work before the first reasoning section forms
- *     the generic group ("Working" while live / "Worked for …" once done).
- *
- * While the agent is working, the latest group is expanded. Once answer text
- * starts, every group collapses unless explicitly opened.
+ * Work stretches between actual root-agent messages. Short reasoning
+ * summaries update one live label; tools, delegated cards and substantive
+ * reasoning remain chronological activity inside the stretch.
  */
 
 import { isA2AToolName } from './a2aTools';
@@ -28,21 +15,6 @@ export const CARD_SUMMARY_LINES = 3;
 const CARD_KINDS = new Set(['subagent', 'async_subagent', 'a2a_call']);
 const TOOL_EVENT_TYPES = new Set(['tool_start', 'tool_result', 'tool_error']);
 
-export function partitionTurnTimeline(timelineItems) {
-  const workItems = [];
-  const cardItems = [];
-  const answerItems = [];
-  for (const item of Array.isArray(timelineItems) ? timelineItems : []) {
-    if (item?.kind === 'assistant_message') {
-      answerItems.push(item);
-    } else if (CARD_KINDS.has(item?.kind)) {
-      cardItems.push(item);
-    } else if (item) {
-      workItems.push(item);
-    }
-  }
-  return { workItems, cardItems, answerItems };
-}
 
 // Reasoning rows keep their id while their event type changes (delta ->
 // summary); keying on both remounts the row so its disclosure resets.
@@ -110,6 +82,15 @@ export function buildWorkSteps(workItems) {
   const writeTodosWithPlans = writeTodosCallsWithPlans(workItems);
 
   for (const item of Array.isArray(workItems) ? workItems : []) {
+    if (CARD_KINDS.has(item?.kind)) {
+      steps.push({
+        id: `step-${item.id}`, kind: 'tool',
+        title: item.subagentName || item.agentName || 'Agent',
+        status: item.status === 'error' ? 'error' : item.status === 'running' ? 'running' : 'success',
+        timestamp: itemTimestamp(item), durationMs: item.durationMs ?? null,
+      });
+      continue;
+    }
     const event = item?.event;
     const eventType = typeof event?.eventType === 'string' ? event.eventType : '';
     if (!eventType || eventType === 'node_update') continue;
@@ -219,11 +200,7 @@ export function todoProgress(todos) {
  * write_todos call that has none yet, so it becomes that call's `plan`.
  * Other rows pass through unchanged.
  *
- * Text the agent wrote just before a call (its `commentary`) is Progena
- * speaking, so it becomes its own `{ kind: 'tool_narration' }` row ahead of
- * the call rather than part of the call's entry. Calls in
- * `hiddenToolCallIds` (a `task` call whose subagent card is shown) render
- * only that narration; the card stands in for the call itself.
+ * Calls in `hiddenToolCallIds` are represented by their delegated-agent card.
  */
 export function mergeToolCallItems(items, { hiddenToolCallIds } = {}) {
   const merged = [];
@@ -256,20 +233,10 @@ export function mergeToolCallItems(items, { hiddenToolCallIds } = {}) {
   return merged.flatMap((entry) => {
     if (entry.kind !== 'tool_call') return [entry];
     const { key, ...call } = entry;
-    const commentary = entry.start?.event?.metadata?.commentary;
-    const narration = typeof commentary === 'string' && commentary.trim()
-      ? [{ kind: 'tool_narration', id: `narration-${key}`, text: commentary.trim() }]
-      : [];
-    return hiddenToolCallIds?.has(key) ? narration : [...narration, call];
+    return hiddenToolCallIds?.has(key) ? [] : [call];
   });
 }
 
-/** Tool call ids whose `task` lifecycle a visible subagent card represents. */
-export function subagentCardToolCallIds(cardItems) {
-  return new Set((Array.isArray(cardItems) ? cardItems : [])
-    .filter((item) => item?.kind === 'subagent' && typeof item.toolCallId === 'string' && item.toolCallId)
-    .map((item) => item.toolCallId));
-}
 
 function toolCallName(entry) {
   return (entry.start || entry.end)?.event?.metadata?.tool_name;
@@ -283,16 +250,11 @@ export function selectRecentLines(lines, showAll, limit = CARD_SUMMARY_LINES) {
 }
 
 export function formatElapsed(ms) {
-  const totalSeconds = Math.round(ms / 1000);
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   if (totalSeconds < 60) return `${totalSeconds}s`;
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  if (totalMinutes < 60) {
-    const seconds = totalSeconds % 60;
-    return seconds > 0 ? `${totalMinutes}m ${seconds}s` : `${totalMinutes}m`;
-  }
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) return `${minutes}m ${totalSeconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 /**
@@ -301,13 +263,13 @@ export function formatElapsed(ms) {
  * but it still belongs to the group that started the call and must not extend
  * that earlier phase's duration.
  */
-export function summarizeWork(workItems, steps, endedAt = null) {
+export function summarizeWork(workItems, steps, endedAt = null, startedAt = null) {
   const toolSteps = steps.filter((step) => step.kind === 'tool');
   const timestamps = (Array.isArray(workItems) ? workItems : [])
     .map(itemTimestamp)
     .filter((value) => value !== null);
   const end = itemTimestamp({ timestamp: endedAt });
-  const start = timestamps.length > 0 ? Math.min(...timestamps) : end;
+  const start = itemTimestamp({ timestamp: startedAt }) ?? (timestamps.length > 0 ? Math.min(...timestamps) : end);
   const finish = end ?? (timestamps.length > 0 ? Math.max(...timestamps) : null);
   return {
     elapsedMs: start !== null && finish !== null ? Math.max(0, finish - start) : 0,
@@ -325,23 +287,9 @@ export function summarizeWork(workItems, steps, endedAt = null) {
 export function workGroupHeader({ heading, active, summary }) {
   const elapsed = formatElapsed(summary.elapsedMs);
   const tools = summary.toolCount > 0 ? `${summary.toolCount} tool${summary.toolCount === 1 ? '' : 's'}` : '';
-  if (heading) {
-    const showElapsed = active || summary.elapsedMs >= 1000;
-    return {
-      title: heading,
-      meta: [showElapsed ? elapsed : '', tools].filter(Boolean).join(' · '),
-    };
-  }
-  if (active) {
-    return {
-      title: 'Working',
-      meta: [elapsed, tools].filter(Boolean).join(' · '),
-    };
-  }
-  return {
-    title: summary.elapsedMs >= 1000 ? `Worked for ${elapsed}` : 'Worked',
-    meta: tools,
-  };
+  return active
+    ? { title: heading || 'Working…', meta: [elapsed, tools].filter(Boolean).join(' · ') }
+    : { title: `Worked for ${elapsed}`, meta: tools };
 }
 
 
@@ -355,18 +303,6 @@ export function reasoningSectionBody(text) {
   return (typeof text === 'string' ? text : '').replace(/^\s*\*\*[^*\n]+\*\*[ \t]*\n*/, '').trim();
 }
 
-/**
- * A headed group always opens with the reasoning section that named it; the
- * group header shows that section, so it is split off from the other rows.
- * Returns `{ reasoningItem, rest }` (reasoningItem null for headless groups).
- */
-export function splitGroupReasoning(heading, items) {
-  const first = Array.isArray(items) ? items[0] : null;
-  if (heading && first?.kind === 'stream_event' && isReasoningEvent(first.event)) {
-    return { reasoningItem: first, rest: items.slice(1) };
-  }
-  return { reasoningItem: null, rest: Array.isArray(items) ? items : [] };
-}
 
 /** Split reasoning text into `{ heading, text }` sections (heading null for a preamble). */
 export function splitReasoningSections(text) {
@@ -392,47 +328,81 @@ function reasoningSectionItem(item, section, index, sectionCount) {
 }
 
 /**
- * Split work items into groups, one per reasoning section, each keeping the
- * work that followed it. A lifecycle result stays with the group containing
- * its `tool_start`, even when a later reasoning section arrives first.
- * Returns `{ id, heading, startedAt, items }[]`.
+ * Only actual root text closes a work stretch. Parallel lifecycle results
+ * remain with the call's initiating stretch, even after a progress reply.
  */
-export function buildWorkGroups(workItems) {
-  const groups = [];
-  const groupByToolCall = new Map();
+export function buildWorkGroups(timelineItems) {
+  const rows = [];
+  const ownerByCall = new Map();
   let current = null;
-  const open = (heading, item) => {
-    current = { id: `group-${item.id}`, heading, startedAt: itemTimestamp(item), items: [] };
-    groups.push(current);
-  };
-  const append = (group, item) => {
-    group.items.push(item);
-    const eventType = item?.event?.eventType;
-    const callId = toolCallKey(item);
-    if (eventType === 'tool_start' && callId) groupByToolCall.set(callId, group);
-  };
-
-  for (const item of Array.isArray(workItems) ? workItems : []) {
-    const event = item?.event;
-    if (item?.kind === 'stream_event' && isReasoningEvent(event) && typeof event.content === 'string' && event.content.trim()) {
-      const sections = splitReasoningSections(event.content);
-      sections.forEach((section, index) => {
-        const sectionItem = reasoningSectionItem(item, section, index, sections.length);
-        open(section.heading || 'Reasoning', sectionItem);
-        append(current, sectionItem);
-      });
+  for (const item of Array.isArray(timelineItems) ? timelineItems : []) {
+    if (item?.kind === 'assistant_message') {
+      if (current) current.endedAt = itemTimestamp(item);
+      rows.push(item);
+      current = null;
       continue;
     }
-
-    const eventType = event?.eventType;
+    if (!item) continue;
+    const eventType = item.event?.eventType;
     const callId = toolCallKey(item);
-    const owner = callId && eventType !== 'tool_start' ? groupByToolCall.get(callId) : null;
+    const owner = callId && eventType !== 'tool_start' ? ownerByCall.get(callId) : null;
     if (owner) {
-      append(owner, item);
+      owner.items.push(item);
       continue;
     }
-    if (!current) open(null, item);
-    append(current, item);
+    if (!current) {
+      current = {
+        kind: 'work_group', id: `group-${item.id}`, heading: null,
+        startedAt: itemTimestamp(item), endedAt: null, items: [],
+      };
+      rows.push(current);
+    }
+    if (isReasoningEvent(item.event)) {
+      const text = item.event.content || item.event.metadata?.summary || '';
+      const sections = splitReasoningSections(text);
+      if (sections.length === 0) current.items.push(item);
+      for (const [index, section] of sections.entries()) {
+        if (section.heading) current.heading = section.heading;
+        current.items.push(reasoningSectionItem(item, section, index, sections.length));
+      }
+    } else {
+      current.items.push(item);
+    }
+    if (callId && eventType === 'tool_start') ownerByCall.set(callId, current);
   }
-  return groups;
+  return rows;
+}
+
+/** Heading-only reasoning belongs in the status, not in the activity list. */
+export function hasReasoningBody(event) {
+  return Boolean(reasoningSectionBody(event?.content)
+    || reasoningSectionBody(event?.metadata?.summary)
+    || (typeof event?.metadata?.detail === 'string' && event.metadata.detail.trim()));
+}
+
+export function workActivityItems(items) {
+  const hiddenToolCallIds = new Set(items
+    .filter((item) => CARD_KINDS.has(item?.kind) && item.toolCallId)
+    .map((item) => item.toolCallId));
+  return mergeToolCallItems(items, { hiddenToolCallIds }).filter((item) => (
+    item.event?.eventType !== 'node_update'
+    && (!isReasoningEvent(item.event) || hasReasoningBody(item.event))
+  ));
+}
+
+export function isWorkItemRunning(item) {
+  if (item.kind === 'tool_call') return !item.end;
+  return CARD_KINDS.has(item.kind) && item.status === 'running';
+}
+
+/** Keep every active invocation, alongside a bounded tail of finished items. */
+export function selectWorkActivity(items, showAll, limit = 5) {
+  if (showAll) return { visibleItems: items, hiddenCount: 0 };
+  let completedToSkip = Math.max(0, items.filter((item) => !isWorkItemRunning(item)).length - limit);
+  const visibleItems = items.filter((item) => {
+    if (isWorkItemRunning(item) || completedToSkip === 0) return true;
+    completedToSkip -= 1;
+    return false;
+  });
+  return { visibleItems, hiddenCount: items.length - visibleItems.length };
 }

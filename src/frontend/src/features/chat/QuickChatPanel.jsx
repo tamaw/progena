@@ -12,6 +12,8 @@ import { useChatApi } from './hooks/useChatApi';
 import { createUuid } from '../../lib/uuid';
 import ChatInput from './components/ChatInput';
 import ChatMessages from './components/ChatMessages';
+import { BackgroundActivity, BackgroundActivityHistory } from './components/BackgroundActivity';
+import StickyTodoProgress from './components/StickyTodoProgress';
 import { OpenChatIcon, QuickChatIcon } from '../../components/navIcons';
 import { defaultQuickChatConfig, normalizeQuickChatConfig } from './models/quickChatConfig';
 import { derivePageContext, formatPageContextBlock } from '../../lib/pageContext';
@@ -733,6 +735,14 @@ export function QuickChatPanel({
           liveTurnStore={liveTurnStore}
           messagesContainerRef={messagesContainerRef}
           isPinnedToBottomRef={isPinnedToBottomRef}
+          afterMessages={<BackgroundActivityHistory
+            key={scratchThreadId ?? 'scratch'}
+            messages={history}
+            liveTurnStore={liveTurnStore}
+            threadId={scratchThreadId}
+            runsUrl={getApiUrl('runs')}
+            chatsUrl={getApiUrl('chats')}
+          />}
         />
         {adoptingThreadId && history.length === 0 ? (
           <div className="qchat-loading muted" role="status">Loading conversation…</div>
@@ -748,6 +758,19 @@ export function QuickChatPanel({
           ))}
         </div>
       ) : null}
+      <BackgroundActivity
+        key={scratchThreadId ?? 'scratch'}
+        messages={history}
+        liveTurnStore={liveTurnStore}
+        threadId={scratchThreadId}
+        runsUrl={getApiUrl('runs')}
+        chatsUrl={getApiUrl('chats')}
+      />
+      <StickyTodoProgress
+        liveTurnStore={liveTurnStore}
+        isActive={isSending}
+        messages={history}
+      />
       <ChatInput
         key={composerSeed.key}
         className="qchat-input"

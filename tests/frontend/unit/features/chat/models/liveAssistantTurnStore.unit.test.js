@@ -147,4 +147,29 @@ describe('createLiveAssistantTurnStore', () => {
     expect(snapshots.map((usage) => usage.totalTokens)).toEqual([81000, 12500, 12500]);
     expect(snapshots.at(-1).compaction.freedInputTokens).toBe(68000);
   });
+
+  it('notifies background activity subscribers only for durable launch or async lifecycle events', () => {
+    const store = createLiveAssistantTurnStore();
+    const snapshots = [];
+    store.subscribeBackgroundActivity(() => snapshots.push(store.getBackgroundActivitySnapshot()));
+
+    const textOnlyTurn = { streamId: 'stream-001', startedAt: 1, content: 'Token one', streamEvents: [] };
+    store.set(textOnlyTurn);
+    store.set({ ...textOnlyTurn, content: 'Token two' });
+    expect(snapshots).toEqual([]);
+
+    const launched = {
+      ...textOnlyTurn,
+      streamEvents: [{
+        eventType: 'tool_result',
+        metadata: { tool_name: 'run_workflow', result_preview: '{"run_id":"run-1"}' },
+      }],
+    };
+    store.set(launched);
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].streamEvents).toEqual(launched.streamEvents);
+
+    store.set({ ...launched, content: 'Token three' });
+    expect(snapshots).toHaveLength(1);
+  });
 });
