@@ -344,10 +344,15 @@ export function useChatApi() {
           // leave the fallback reason in place
         }
 
-        markDesynced(reason);
         if (pending.terminalEvent) {
+          // The response already finished; only its replay is unavailable.
+          // Complete it as undelivered so canonical history supplies content.
+          pending.contentDrained = false;
+          closePendingSource(pending);
           scheduleTerminalFinalization(requestId, pending, 0);
+          return;
         }
+        markDesynced(reason);
       });
       source.onerror = () => {
         if (!isCurrent() || pending.eventSource !== source || pending.finalized) {
@@ -357,7 +362,8 @@ export function useChatApi() {
         if (pending.terminalEvent) {
           // After the terminal, the server closes an opened stream only once
           // every retained frame is flushed. A failed connection proves nothing.
-          pending.contentDrained = sourceOpened;
+          // Frames dropped after a Stop request were never delivered.
+          pending.contentDrained = sourceOpened && !pending.cancelRequested;
           closePendingSource(pending);
           scheduleTerminalFinalization(requestId, pending);
           return;

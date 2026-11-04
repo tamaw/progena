@@ -339,6 +339,42 @@ describe('useChatApi dedicated response transport', () => {
     expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: true });
   });
 
+  it('completes as undelivered when the post-terminal replay has expired', async () => {
+    vi.useFakeTimers();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+    const hook = useChatApi();
+    const terminal = hook.sendMessageStream('Long reply', [], vi.fn(), onComplete, onError, vi.fn());
+    await flushMicrotasks();
+
+    publishLifecycle('chat.response.completed');
+    MockEventSource.instances[0].emit('chat.response.resync_required', { request_id: REQUEST_ID, reason: 'cursor_expired' });
+    await vi.runOnlyPendingTimersAsync();
+    await terminal;
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: false });
+  });
+
+  it('does not report frames dropped after Stop as delivered', async () => {
+    vi.useFakeTimers();
+    const onComplete = vi.fn();
+    const hook = useChatApi();
+    const terminal = hook.sendMessageStream('Stop mid-drain', [], vi.fn(), onComplete, vi.fn(), vi.fn());
+    await flushMicrotasks();
+
+    const source = MockEventSource.instances[0];
+    source.emit('chat.response.delta', { delta: 'partial' }, `chat-response:${REQUEST_ID}:1`);
+    publishLifecycle('chat.response.completed');
+    void hook.cancelStream();
+    source.emit('chat.response.delta', { delta: ' dropped' }, `chat-response:${REQUEST_ID}:2`);
+    source.onerror();
+    await vi.advanceTimersByTimeAsync(50);
+    await terminal;
+
+    expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: false });
+  });
+
   it('reopens a stream that is between reconnects to drain it after the terminal', async () => {
     vi.useFakeTimers();
     const onComplete = vi.fn();

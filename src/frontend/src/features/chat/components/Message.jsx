@@ -280,7 +280,8 @@ function MessageView({
   );
   const time = formattedTime && <span className="msg__time entry__time">{formattedTime}</span>;
   // Scheduled prompts are long instructions; their row stays one line until
-  // the reader opens it. Actions sit in the summary without toggling it.
+  // the reader opens it. Actions live in the opened body: interactive
+  // controls must not nest inside the summary's button role.
   const scheduledPreview = isScheduled
     ? (content || '').split('\n').map((line) => line.trim()).find(Boolean) || ''
     : '';
@@ -295,13 +296,11 @@ function MessageView({
             title="Scheduled task"
             text={<span className="tool-call-entry__summary entry__meta">{scheduledPreview}</span>}
             summaryLabel={scheduledPreview ? `Scheduled task: ${scheduledPreview}` : 'Scheduled task'}
-            trailing={<>
-              <span onClick={(event) => event.preventDefault()}>
-                <MessageActions content={content} />
-              </span>
-              <Trailing time={formattedTime} />
-            </>}
+            trailing={<Trailing time={formattedTime} />}
           >
+            <div className="msg__head-trailing scheduled-task__actions">
+              <MessageActions content={content} />
+            </div>
             {messageBody}
           </EntryLine>
         ) : (

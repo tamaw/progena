@@ -375,9 +375,11 @@ flushed every queued retained content frame.
 The canonical terminal can therefore reach the browser before the last content
 frames. A client finalizes the turn when the dedicated stream it opened closes
 after the terminal (reopening from its cursor if it was between connections),
-or after a bounded wait. A turn finalized without that drain proves nothing
-about emptiness: the client defers to canonical history instead of rendering an
-empty-reply placeholder.
+or after a bounded wait. A browser `EventSource` cannot distinguish that close
+from a dropped connection, so the close is treated as the drain signal. A turn
+finalized without it (timeout, failed connection, expired replay or a Stop
+request) is reported as undelivered: the client defers to canonical history
+instead of rendering an empty-reply placeholder or an error.
 
 ## Finite request acknowledgement and correlation
 

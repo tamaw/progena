@@ -2501,6 +2501,12 @@ pre.mermaid svg {
     color: var(--color-scheduled);
 }
 
+/* An opened scheduled prompt keeps its actions beside, not inside, the summary. */
+.scheduled-task__actions {
+    display: flex;
+    margin-bottom: 2px;
+}
+
 .chat-transcript .entry__badge--assistant {
     color: #8b5cf6;
 }

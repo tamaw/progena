@@ -326,16 +326,17 @@ describe('scheduled task input', () => {
     expect(details.open).toBe(false);
   });
 
-  it('copies the full body from the collapsed summary', async () => {
+  it('keeps actions out of the summary and copies the full body', async () => {
     const writeText = vi.fn().mockResolvedValue();
     vi.stubGlobal('navigator', { clipboard: { writeText } });
     await renderMessage(scheduled);
 
     const details = host.querySelector('details.tool-event-disclosure');
-    await act(async () => details.querySelector('button[aria-label="Copy message"]').click());
+    expect(details.querySelector('summary button')).toBeNull();
+    const copy = details.querySelector(':scope > .scheduled-task__actions button[aria-label="Copy message"]');
+    await act(async () => copy.click());
 
     expect(writeText).toHaveBeenCalledWith(scheduled.content);
-    expect(details.open).toBe(false);
   });
 
   it('leaves ordinary user messages expanded with their Message heading', async () => {
