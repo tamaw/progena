@@ -518,11 +518,11 @@ export function QuickChatPanel({
     let terminalReconciliationRequested = false;
     const isStale = () => activeStreamIdRef.current !== streamId;
 
-    const commitLiveTurn = (status, errorMessage = '') => {
+    const commitLiveTurn = (status, errorMessage = '', contentComplete = true) => {
       if (isStale()) return;
       const turn = liveTurnRef.current;
       const committed = turn
-        ? finalizeLiveAssistantTurn(turn, { status, now: Date.now(), errorMessage })
+        ? finalizeLiveAssistantTurn(turn, { status, now: Date.now(), errorMessage, contentComplete })
         : null;
       if (committed) {
         setHistory((current) => current.concat(committed));
@@ -570,10 +570,10 @@ export function QuickChatPanel({
           if (isStale()) return;
           setLiveAssistantTurn((turn) => (turn ? applyAssistantChunk(turn, chunk, Date.now()) : turn));
         },
-        (status) => {
+        (status, { contentComplete = true } = {}) => {
           terminalReceived = true;
           terminalStatus = resolveLiveTurnResponseStatus(liveTurnRef.current, status);
-          commitLiveTurn(status);
+          commitLiveTurn(status, '', contentComplete);
         },
         (streamError) => {
           terminalReceived = true;

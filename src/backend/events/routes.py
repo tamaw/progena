@@ -180,11 +180,16 @@ async def _generate_ui_stream(
 async def ui_stream(
     response: Response,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    after: str | None = Query(default=None, max_length=64),
     client_id: str | None = Query(default=None, max_length=64),
 ) -> AsyncGenerator[ServerSentEvent, None]:
-    """Canonical typed SSE stream for all frontend UI updates."""
+    """Canonical typed SSE stream for all frontend UI updates.
+
+    ``after`` carries the replay cursor for a reconnect that cannot send
+    ``Last-Event-ID`` (a newly constructed browser EventSource); the header wins.
+    """
     response.headers["X-Accel-Buffering"] = "no"
     response.headers["Cache-Control"] = "no-cache"
     response.headers["Connection"] = "keep-alive"
-    async for event in _generate_ui_stream(last_event_id, client_id):
+    async for event in _generate_ui_stream(last_event_id or after, client_id):
         yield event

@@ -89,7 +89,7 @@ function closeCurrentStream(dispatch) {
 realtimeListenerMiddleware.startListening({
   actionCreator: startRealtimeStream,
   effect: async (action, listenerApi) => {
-    const { streamUrl, force = false } = action.payload || {};
+    const { streamUrl, force = false, after = null } = action.payload || {};
     if (!streamUrl || (!force && activeStreamUrl === streamUrl)) {
       return;
     }
@@ -98,7 +98,10 @@ realtimeListenerMiddleware.startListening({
     if (force) failPendingOperations(listenerApi, 'Reconnecting to event stream');
     listenerApi.dispatch(realtimeConnecting());
 
-    const source = new EventSource(withQuery(streamUrl, { client_id: realtimeClientId }));
+    const source = new EventSource(withQuery(streamUrl, {
+      client_id: realtimeClientId,
+      ...(after ? { after } : {}),
+    }));
     eventSource = source;
     activeStreamUrl = streamUrl;
     let lastEventAt = Date.now();
@@ -111,8 +114,11 @@ realtimeListenerMiddleware.startListening({
       if (Date.now() - lastEventAt <= HEARTBEAT_STALE_MS) {
         return;
       }
-      // Deaf stream: tear it down and reconnect from scratch.
+      // Deaf stream: tear it down and reconnect. A new EventSource cannot send
+      // Last-Event-ID, so resume from the last envelope explicitly; otherwise
+      // a terminal broadcast during the gap is never replayed.
       clearInterval(watchdog);
+      const resumeAfter = listenerApi.getState().realtime.lastEventId;
       source.close();
       setRealtimeClientReady(false);
       eventSource = null;
@@ -120,7 +126,7 @@ realtimeListenerMiddleware.startListening({
       const error = 'Realtime stream stale — reconnecting';
       listenerApi.dispatch(realtimeErrored(error));
       failPendingOperations(listenerApi, error);
-      listenerApi.dispatch(startRealtimeStream({ streamUrl }));
+      listenerApi.dispatch(startRealtimeStream({ streamUrl, after: resumeAfter }));
     }, WATCHDOG_POLL_MS);
 
     source.onopen = () => {

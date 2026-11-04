@@ -124,6 +124,23 @@ describe('realtimeListener heartbeat watchdog', () => {
     expect(store.getState().realtime.status).toBe('connecting');
   });
 
+  it('resumes a deaf stream after its last envelope so missed terminals are replayed', async () => {
+    store.dispatch(startRealtimeStream({ streamUrl: STREAM_URL }));
+    await Promise.resolve();
+    const first = MockEventSource.instances[0];
+    const delivered = heartbeatEnvelope();
+    first.emit('ui.event', delivered);
+    const lastId = JSON.parse(delivered).id;
+
+    await vi.advanceTimersByTimeAsync(60000);
+
+    expect(first.closed).toBe(true);
+    expect(MockEventSource.instances).toHaveLength(2);
+    expect(MockEventSource.instances[1].url).toBe(
+      `${STREAM_URL}?client_id=${realtimeClientId}&after=${lastId}`,
+    );
+  });
+
   it('keeps a single stream alive while heartbeats keep arriving', async () => {
     store.dispatch(startRealtimeStream({ streamUrl: STREAM_URL }));
     await Promise.resolve();

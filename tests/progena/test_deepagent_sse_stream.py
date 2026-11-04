@@ -1753,3 +1753,72 @@ async def test_reasoning_only_tail_has_output_but_no_final_answer_count():
     usage = _terminal_usage_metadata(items)
     assert usage["output_tokens"] == 7
     assert usage["final_call_output_tokens"] is None
+
+
+async def test_native_tool_starts_stream_while_each_sequential_call_is_still_running():
+    """Six sequential native reads: each start is consumable before its tool returns."""
+    import asyncio
+
+    from langchain.agents import create_agent
+    from langchain_core.language_models import BaseChatModel
+    from langchain_core.outputs import ChatGeneration, ChatResult
+    from langchain_core.tools import tool
+
+    from src.progena.agent.middleware import ToolTimingMiddleware
+
+    calls = 6
+    gates = {f"/f{index}.txt": asyncio.Event() for index in range(calls)}
+
+    @tool
+    async def read_file(file_path: str) -> str:
+        """Read a file."""
+        await gates[file_path].wait()
+        return f"contents of {file_path}"
+
+    class ScriptedModel(BaseChatModel):
+        replies: Any
+
+        @property
+        def _llm_type(self) -> str:
+            return "scripted"
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            return ChatResult(generations=[ChatGeneration(message=next(self.replies))])
+
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+    replies = [
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "read_file", "args": {"file_path": path}, "id": f"call_{index}"}],
+        )
+        for index, path in enumerate(gates)
+    ] + [AIMessage(content="done")]
+    graph = create_agent(
+        ScriptedModel(replies=iter(replies)), tools=[read_file], middleware=[ToolTimingMiddleware()]
+    )
+    stream = DeepAgentSSEStream(graph, config=_make_config()).stream("read", thread_id="thread-1")
+
+    async def next_tool_event() -> dict:
+        while True:
+            item = await asyncio.wait_for(anext(stream), timeout=5)
+            if item.get("event_type") in {"tool_start", "tool_result"}:
+                return item
+
+    try:
+        for index, gate in enumerate(gates.values()):
+            started = await next_tool_event()
+            assert started["event_type"] == "tool_start"
+            assert started["metadata"]["tool_call_id"] == f"call_{index}"
+            assert not gate.is_set()
+            gate.set()
+            finished = await next_tool_event()
+            assert finished["event_type"] == "tool_result"
+            assert finished["metadata"]["tool_call_id"] == f"call_{index}"
+        remaining = [item async for item in stream]
+        assert any(item.get("type") == "stream_chunk" for item in remaining)
+    finally:
+        for gate in gates.values():
+            gate.set()
+        await stream.aclose()

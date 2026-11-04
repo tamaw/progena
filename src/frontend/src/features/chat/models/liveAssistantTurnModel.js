@@ -1070,7 +1070,9 @@ export function resolveLiveTurnResponseStatus(turn, status) {
  * Interruption markers are durable rows, so user cancellation and a queue
  * boundary retain even an otherwise empty assistant turn.
  */
-export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage, interruptionReason }) {
+export function finalizeLiveAssistantTurn(turn, {
+  status, now, errorMessage, interruptionReason, contentComplete = true,
+}) {
   if (!turn) return null;
 
   const transportStatus = terminalResponseStatus(status);
@@ -1199,6 +1201,8 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage, int
   }
 
   if (responseStatus === 'completed' && !hasVisibleOutput && !preservesEmptyInterruptedTurn) {
+    // Undelivered content is not an empty reply; canonical history supplies it.
+    if (!contentComplete) return null;
     // No text and no visible events — show placeholder so the cursor doesn't vanish.
     finalTurn.content = '(No response text)';
     if (!finalTurn.assistantMessageId) {

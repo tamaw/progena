@@ -161,11 +161,14 @@ describe('useChatApi dedicated response transport', () => {
     expect(source.closed).toBe(false);
 
     publishLifecycle('chat.response.completed');
+    expect(source.closed).toBe(false);
+    // The server closes the drained request stream after the terminal.
+    source.onerror();
     await terminal;
 
     expect(source.closed).toBe(true);
     expect(onComplete).toHaveBeenCalledOnce();
-    expect(onComplete).toHaveBeenCalledWith('completed');
+    expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: true });
     expect(onError).not.toHaveBeenCalled();
     expect(observed).toEqual([
       ['delta', 'First '],
@@ -220,12 +223,14 @@ describe('useChatApi dedicated response transport', () => {
       `${RESPONSES_URL}/${REQUEST_ID}/stream?after=${encodeURIComponent(cursor)}`,
     );
 
+    MockEventSource.instances[1].onopen();
     publishLifecycle('chat.response.completed');
+    MockEventSource.instances[1].onerror();
     await vi.advanceTimersByTimeAsync(50);
     await terminal;
   });
 
-  it('waits through the terminal drain window so late dedicated frames still reach the caller', async () => {
+  it('waits for the request stream to drain so frames behind the terminal still reach the caller', async () => {
     vi.useFakeTimers();
     const observed = [];
     const onComplete = vi.fn((result) => observed.push(['complete', result]));
@@ -253,10 +258,12 @@ describe('useChatApi dedicated response transport', () => {
       metadata: {},
     }, `chat-response:${REQUEST_ID}:3`);
 
-    await vi.advanceTimersByTimeAsync(49);
+    await vi.advanceTimersByTimeAsync(1000);
     expect(onComplete).not.toHaveBeenCalled();
+    expect(source.closed).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(1);
+    source.onerror();
+    await vi.advanceTimersByTimeAsync(50);
     await terminal;
 
     expect(observed).toEqual([
@@ -265,6 +272,96 @@ describe('useChatApi dedicated response transport', () => {
       ['event', 'tool_result', 'arrived after terminal'],
       ['complete', 'completed'],
     ]);
+    expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: true });
+  });
+
+  it('reports undelivered content when the request stream never drains after the terminal', async () => {
+    vi.useFakeTimers();
+    const onComplete = vi.fn();
+    const hook = useChatApi();
+    const terminal = hook.sendMessageStream('Lagging transport', [], vi.fn(), onComplete, vi.fn(), vi.fn());
+    await flushMicrotasks();
+
+    // The canonical terminal overtakes every content frame.
+    publishLifecycle('chat.response.completed');
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(onComplete).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await terminal;
+    expect(MockEventSource.instances[0].closed).toBe(true);
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: false });
+  });
+
+  it('does not treat a failed post-terminal connection as a drained stream', async () => {
+    vi.useFakeTimers();
+    const onComplete = vi.fn();
+    const hook = useChatApi();
+    const terminal = hook.sendMessageStream('Unreachable stream', [], vi.fn(), onComplete, vi.fn(), vi.fn());
+    await flushMicrotasks();
+
+    publishLifecycle('chat.response.completed');
+    MockEventSource.instances[0].onerror();
+    await vi.advanceTimersByTimeAsync(50);
+    await terminal;
+
+    expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: false });
+  });
+
+  it('still opens and drains the request stream when the terminal overtakes the acknowledgement', async () => {
+    vi.useFakeTimers();
+    let acknowledge;
+    fetchMock.mockImplementationOnce((url, options) => new Promise((resolve) => {
+      acknowledge = () => resolve(acceptedResponse(options.headers['X-Operation-Id'], ['chat.response.started']));
+    }));
+    const observed = [];
+    const onComplete = vi.fn();
+    const hook = useChatApi();
+    const terminal = hook.sendMessageStream(
+      'Fast reply', [], (delta) => observed.push(delta), onComplete, vi.fn(), vi.fn(),
+    );
+    await flushMicrotasks();
+
+    publishLifecycle('chat.response.completed');
+    expect(MockEventSource.instances).toHaveLength(0);
+    acknowledge();
+    await flushMicrotasks();
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    const source = MockEventSource.instances[0];
+    source.emit('chat.response.delta', { delta: 'Retained answer' }, `chat-response:${REQUEST_ID}:1`);
+    source.onerror();
+    await vi.advanceTimersByTimeAsync(50);
+    await terminal;
+
+    expect(observed).toEqual(['Retained answer']);
+    expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: true });
+  });
+
+  it('reopens a stream that is between reconnects to drain it after the terminal', async () => {
+    vi.useFakeTimers();
+    const onComplete = vi.fn();
+    const hook = useChatApi();
+    const terminal = hook.sendMessageStream('Blip', [], vi.fn(), onComplete, vi.fn(), vi.fn());
+    await flushMicrotasks();
+
+    const first = MockEventSource.instances[0];
+    const cursor = `chat-response:${REQUEST_ID}:2`;
+    first.emit('chat.response.delta', { delta: 'partial' }, cursor);
+    first.onerror();
+    expect(MockEventSource.instances).toHaveLength(1);
+
+    publishLifecycle('chat.response.completed');
+    expect(MockEventSource.instances).toHaveLength(2);
+    const drain = MockEventSource.instances[1];
+    expect(drain.url).toBe(`${RESPONSES_URL}/${REQUEST_ID}/stream?after=${encodeURIComponent(cursor)}`);
+    drain.onopen();
+    drain.onerror();
+    await vi.advanceTimersByTimeAsync(50);
+    await terminal;
+
+    expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: true });
   });
 
 
@@ -293,7 +390,7 @@ describe('useChatApi dedicated response transport', () => {
     await terminal;
 
     expect(onComplete).toHaveBeenCalledOnce();
-    expect(onComplete).toHaveBeenCalledWith('completed');
+    expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: false });
     expect(onError).not.toHaveBeenCalled();
   });
 
@@ -323,12 +420,13 @@ describe('useChatApi dedicated response transport', () => {
     const source = MockEventSource.instances[0];
     source.emit('chat.response.delta', { delta: 'claimed' }, `chat-response:${REQUEST_ID}:1`);
     publishLifecycle('chat.response.completed');
+    source.onerror();
     await terminal;
 
     expect(adopted).toHaveBeenCalledWith({ humanMessageId: 'local-human' });
     expect(directChunk).not.toHaveBeenCalled();
     expect(queuedChunk).toHaveBeenCalledWith('claimed');
-    expect(queuedComplete).toHaveBeenCalledWith('completed');
+    expect(queuedComplete).toHaveBeenCalledWith('completed', { contentComplete: true });
   });
 
   it('fails desynced quick-chat completions explicitly instead of silently completing empty', async () => {
@@ -395,7 +493,7 @@ describe('useChatApi dedicated response transport', () => {
 
     expect(source.closed).toBe(true);
     expect(onComplete).toHaveBeenCalledOnce();
-    expect(onComplete).toHaveBeenCalledWith('cancelled');
+    expect(onComplete).toHaveBeenCalledWith('cancelled', { contentComplete: false });
   });
 
   it('allows a reopened panel to explicitly cancel an observed active stream', async () => {

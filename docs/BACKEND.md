@@ -83,7 +83,9 @@ has the matching request ID, which these connection events do not.
 ## Canonical replay, reconnect, and resync
 
 The backend retains the most recent **200 broadcast application envelopes** in
-memory. A reconnect may supply `Last-Event-ID: ui-N`; the server replays
+memory. A reconnect may supply `Last-Event-ID: ui-N` (or, from a newly constructed
+`EventSource` that cannot set that header, the `after=ui-N` query parameter;
+the header wins); the server replays
 retained envelopes whose `seq` is greater than `N`, in order, then emits
 `connection.ready`, then delivers new queued events.
 
@@ -369,6 +371,13 @@ The dedicated stream never carries lifecycle ownership. It does **not** emit
 `chat.response.cancelled`. Once the backend knows the request has reached a
 terminal lifecycle outcome, the dedicated stream closes after it has replayed or
 flushed every queued retained content frame.
+
+The canonical terminal can therefore reach the browser before the last content
+frames. A client finalizes the turn when the dedicated stream it opened closes
+after the terminal (reopening from its cursor if it was between connections),
+or after a bounded wait. A turn finalized without that drain proves nothing
+about emptiness: the client defers to canonical history instead of rendering an
+empty-reply placeholder.
 
 ## Finite request acknowledgement and correlation
 

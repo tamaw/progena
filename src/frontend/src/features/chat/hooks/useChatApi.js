@@ -49,6 +49,10 @@ function deriveConnectionState(pendingStreams, emptyState = 'disconnected') {
 
 const FRONTEND_RESPONSE_OPTIONS_KEY = '__frontendResponse';
 const RESPONSE_TERMINAL_DRAIN_MS = 50;
+// The canonical terminal travels on the UI stream and can overtake content
+// still in flight on the request stream. Its close is the drain signal; this
+// bounds the wait when that close never arrives.
+const RESPONSE_TERMINAL_CONTENT_TIMEOUT_MS = 5000;
 const RESPONSE_HEARTBEAT_STALE_MS = 45000;
 const RESPONSE_WATCHDOG_POLL_MS = 15000;
 const RESPONSE_RECONNECT_DELAY_MS = 1000;
@@ -60,16 +64,20 @@ function responseStreamUrl(responsesUrl, requestId, after) {
   return after ? withQuery(url, { after }) : url;
 }
 
-function cleanupPendingTransport(pending) {
+function closePendingSource(pending) {
   pending.eventSource?.close();
   pending.eventSource = null;
-  if (pending.reconnectTimer !== null) {
-    clearTimeout(pending.reconnectTimer);
-    pending.reconnectTimer = null;
-  }
   if (pending.watchdogTimer !== null) {
     clearInterval(pending.watchdogTimer);
     pending.watchdogTimer = null;
+  }
+}
+
+function cleanupPendingTransport(pending) {
+  closePendingSource(pending);
+  if (pending.reconnectTimer !== null) {
+    clearTimeout(pending.reconnectTimer);
+    pending.reconnectTimer = null;
   }
   if (pending.terminalTimer !== null) {
     clearTimeout(pending.terminalTimer);
@@ -166,6 +174,7 @@ export function useChatApi() {
     } else {
       pending.onComplete?.(
         terminalType === UI_EVENT.CHAT_RESPONSE_CANCELLED ? 'cancelled' : 'completed',
+        { contentComplete: pending.contentDrained },
       );
       setConnectionState(deriveConnectionState(pendingStreamsRef.current));
     }
@@ -234,15 +243,16 @@ export function useChatApi() {
     };
 
     const connect = () => {
-      if (!isCurrent() || pending.cancelRequested || pending.desynced || pending.terminalEvent) {
+      if (!isCurrent() || pending.cancelRequested || pending.desynced || pending.finalized) {
         return;
       }
 
-      cleanupPendingTransport(pending);
+      closePendingSource(pending);
       pending.lastEventAt = Date.now();
 
       const streamUrl = responseStreamUrl(responsesUrl, requestId, pending.lastEventId);
       const source = new EventSource(streamUrl);
+      let sourceOpened = false;
       pending.eventSource = source;
 
       const handleContentFrame = (responseType, messageEvent) => {
@@ -263,6 +273,7 @@ export function useChatApi() {
         }
 
         rememberResponseFrameId(pending, frameId);
+        sourceOpened = true;
         pending.lastEventId = frameId || pending.lastEventId;
         pending.lastEventAt = Date.now();
         pending.openedOnce = true;
@@ -278,16 +289,13 @@ export function useChatApi() {
         } else {
           pending.onStreamEvent?.(payload);
         }
-
-        if (pending.terminalEvent) {
-          scheduleTerminalFinalization(requestId, pending);
-        }
       };
 
       source.onopen = () => {
         if (!isCurrent() || pending.eventSource !== source || pending.finalized) {
           return;
         }
+        sourceOpened = true;
         pending.lastEventAt = Date.now();
       };
       source.addEventListener(CHAT_CONTENT_EVENT.DELTA, (event) => {
@@ -328,6 +336,10 @@ export function useChatApi() {
         }
 
         if (pending.terminalEvent) {
+          // After the terminal, the server closes an opened stream only once
+          // every retained frame is flushed. A failed connection proves nothing.
+          pending.contentDrained = sourceOpened;
+          closePendingSource(pending);
           scheduleTerminalFinalization(requestId, pending);
           return;
         }
@@ -348,7 +360,21 @@ export function useChatApi() {
       }, RESPONSE_WATCHDOG_POLL_MS);
     };
 
+    pending.connect = connect;
     connect();
+  }, [scheduleTerminalFinalization]);
+
+  // Finalize a terminal response only after its request stream has drained,
+  // reopening it from the last cursor when it is between connections.
+  const awaitTerminalContent = useCallback((requestId, pending) => {
+    if (pending.eventSource === null) {
+      if (pending.reconnectTimer !== null) {
+        clearTimeout(pending.reconnectTimer);
+        pending.reconnectTimer = null;
+      }
+      if (pending.acknowledged) pending.connect?.();
+    }
+    scheduleTerminalFinalization(requestId, pending, RESPONSE_TERMINAL_CONTENT_TIMEOUT_MS);
   }, [scheduleTerminalFinalization]);
 
   const consumeStreamEvent = useCallback((event) => {
@@ -378,13 +404,13 @@ export function useChatApi() {
     pending.streamObserved = true;
     pending.terminalEvent = { type, payload };
 
-    if (pending.desynced || pending.eventSource === null || pending.cancelRequested) {
+    if (pending.desynced || pending.cancelRequested) {
       scheduleTerminalFinalization(requestId, pending, 0);
       return;
     }
 
-    scheduleTerminalFinalization(requestId, pending);
-  }, [scheduleTerminalFinalization]);
+    awaitTerminalContent(requestId, pending);
+  }, [awaitTerminalContent, scheduleTerminalFinalization]);
 
   useEffect(() => subscribeUiEvent(consumeStreamEvent), [consumeStreamEvent]);
 
@@ -395,11 +421,11 @@ export function useChatApi() {
       const url = getApiUrl('responses');
       const { backendMetadata, allowDesyncedCompletion } = splitResponseMetadata(metadata);
 
+      const acknowledgementController = new AbortController();
       let resolveTerminal;
       const terminal = new Promise((resolve) => {
         resolveTerminal = resolve;
       });
-      const acknowledgementController = new AbortController();
       const pending = {
         onChunk,
         onComplete,
@@ -425,6 +451,9 @@ export function useChatApi() {
         terminalEvent: null,
         finalized: false,
         receivedFrameIds: [],
+        // Set when the request stream closed after the terminal: all content arrived.
+        contentDrained: false,
+        connect: null,
       };
 
       // Register before dispatch: the backend can broadcast `started` before
@@ -449,9 +478,11 @@ export function useChatApi() {
         if (activeAcknowledgementRef.current?.requestId === requestId) {
           activeAcknowledgementRef.current = null;
         }
-        if (pendingStreamsRef.current.get(requestId) === pending && !pending.cancelRequested && !pending.terminalEvent) {
+        if (pendingStreamsRef.current.get(requestId) === pending && !pending.cancelRequested && !pending.finalized) {
           pending.acknowledged = true;
           setConnectionState(deriveConnectionState(pendingStreamsRef.current));
+          // A terminal that overtook the acknowledgement still has retained
+          // content to replay; its close then completes the request.
           openResponseStream(requestId, pending, url);
         }
       } catch (error) {
@@ -522,6 +553,7 @@ export function useChatApi() {
       reconnectTimer: null, watchdogTimer: null, terminalTimer: null, lastEventAt: null,
       lastEventId: null, connectAttempts: 0, openedOnce: false, desynced: false,
       desyncReason: null, terminalEvent: null, finalized: false, receivedFrameIds: [],
+      contentDrained: false, connect: null,
     };
     pendingStreamsRef.current.set(requestId, pending);
     activeStreamRequestIdRef.current = requestId;

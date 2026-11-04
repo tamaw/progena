@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Live chat streaming and terminal handoff**: finish a reply only after its request content stream has drained, reopening it from the last cursor when needed, so a terminal that overtakes content no longer shows a transient “(No response text)” or truncated text; undrained turns defer to canonical history. A stale realtime connection resumes from its last event (`after` cursor on `/api/ui/stream`) so terminal events are replayed instead of leaving the generating cursor stuck. Frontend nginx forwards `X-Accel-Buffering` so a host reverse proxy can stream SSE frames unbuffered.
 - **Intermediate chat replies**: keep root-agent progress messages in chronological order between work phases, connect them to subsequent activity, and stop each text segment's cursor when its tool call starts. Cancellation saves only text not already checkpointed, avoiding a second copy of earlier progress messages.
 - **Reasoning and routine status**: heading-only reasoning phases use the same provider title live and after reload without an empty disclosure. Routine failures remain visibly failed even when their enclosing task returns normally; later successful attempts keep their own status.
 - **A2A completion routing**: asynchronous callbacks return to the originating chat or object-agent protocol thread instead of shared runtime state. Busy object agents and unavailable queues retain their pending notifications for retry.

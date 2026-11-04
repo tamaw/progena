@@ -380,6 +380,54 @@ describe('useChatStream', () => {
     expect(dispatch).toHaveBeenCalledWith(markChatGenerating('thread-a'));
   });
 
+  it('defers an undrained empty completion to canonical history instead of showing no response', () => {
+    const scheduledFrames = [];
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback) => {
+      scheduledFrames.push(callback);
+      return scheduledFrames.length;
+    }));
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+
+    let onComplete;
+    let committed = [];
+    const setMessages = vi.fn((update) => {
+      committed = update(committed);
+    });
+    const requestForegroundReconciliation = vi.fn();
+    const hook = useChatStream({
+      messages: [],
+      setMessages,
+      activeBackendChat: { thread_id: 'thread-a' },
+      selectedBackendChatId: 'thread-a',
+      threadId: 'thread-a',
+      sendMessageStream: vi.fn((content, history, nextOnChunk, nextOnComplete) => {
+        onComplete = nextOnComplete;
+        return new Promise(() => {});
+      }),
+      cancelStream: vi.fn(),
+      dispatch: vi.fn(),
+      getApiUrl: vi.fn(),
+      show: vi.fn(),
+      selectedBackendChatIdRef: { current: 'thread-a' },
+      reloadOpenChat: vi.fn(),
+      onForegroundStreamStarted: vi.fn(),
+      requestForegroundReconciliation,
+    });
+
+    void hook.handleSend('Hello');
+    // The terminal overtook every content frame on the request stream.
+    onComplete('completed', { contentComplete: false });
+    while (scheduledFrames.length) scheduledFrames.shift()();
+
+    expect(committed.map(({ role, content }) => [role, content])).toEqual([['user', 'Hello']]);
+    expect(JSON.stringify(hook.liveTurnStore.getSnapshot() ?? null)).not.toContain('No response text');
+    expect(requestForegroundReconciliation).toHaveBeenCalledWith({
+      threadId: 'thread-a',
+      streamId: expect.any(String),
+      forceCanonical: true,
+    });
+  });
+
   it('keeps a foreground completed turn visible through a paint before committing it locally', () => {
     const scheduledFrames = [];
     vi.stubGlobal('requestAnimationFrame', vi.fn((callback) => {
@@ -489,6 +537,7 @@ describe('useChatStream', () => {
     expect(requestForegroundReconciliation).toHaveBeenCalledWith({
       threadId: 'thread-a',
       streamId: expect.any(String),
+      forceCanonical: false,
     });
     expect(messagesAtReconciliation).toEqual([
       expect.objectContaining({ role: 'user', content: 'Hello' }),

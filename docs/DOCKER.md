@@ -185,6 +185,13 @@ reverse proxy outside this Compose project. Forward requests to
 `http://127.0.0.1:8081`; keep certificates and authentication credentials outside
 the repository.
 
+The browser's chat streams are Server-Sent Events (`/api/ui/stream` and
+`/api/ui/responses/{request_id}/stream`). The reverse proxy must deliver them
+unbuffered and uncompressed: honour the forwarded `X-Accel-Buffering: no` header
+(nginx does by default) or set `proxy_buffering off`, and do not gzip
+`text/event-stream`. A buffering proxy holds small frames such as tool starts
+until the response ends, so live activity appears only after completion.
+
 When upgrading from the old HTTPS containers, switch the reverse-proxy upstream
 from HTTPS to HTTP together with the frontend container port change from 443 to
 80. Public client traffic should remain HTTPS.
