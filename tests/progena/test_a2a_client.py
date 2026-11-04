@@ -76,6 +76,48 @@ async def test_send_message_includes_follow_up_identifiers(monkeypatch) -> None:
     assert captured["message"].reference_task_ids == ["task-1"]
 
 
+async def test_send_message_context_only_continuation_omits_task_identifiers(
+    monkeypatch,
+) -> None:
+    """A2A contract corrections continue a context without resuming a task."""
+    client = A2AClient()
+    captured = {}
+
+    class _Sender:
+        def send_message(self, message, **_kwargs):
+            captured["message"] = message
+
+            async def _stream():
+                yield {"kind": "message", "role": "agent", "parts": [], "contextId": "ctx-1"}
+
+            return _stream()
+
+    class _Context:
+        async def __aenter__(self):
+            return _Sender()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(client, "_sdk_client", lambda *_args, **_kwargs: _Context())
+    result = await client.send_message(
+        {"url": "http://example.test"},
+        "correct",
+        blocking=True,
+        context={"thread_id": "routine-thread"},
+        task_id=None,
+        context_id="ctx-1",
+    )
+
+    assert result["success"] is True
+    message = captured["message"]
+    assert message.context_id == "ctx-1"
+    assert message.task_id is None
+    assert message.reference_task_ids is None
+    # The routine thread is caller metadata only, never the protocol context.
+    assert message.metadata == {"thread_id": "routine-thread"}
+
+
 def test_task_response_marks_legacy_naive_timestamps_as_utc() -> None:
     response = build_task_response(
         A2ATaskRecord(

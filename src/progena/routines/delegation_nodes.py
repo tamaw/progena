@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import json
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -24,6 +25,15 @@ from .approvals import approval_decision_id
 from .control_nodes import _foreach_items
 from .graph import RoutineNode
 from .messages import _message_with_usage, extract_json_object, normalize_message_content
+from .response_contracts import (
+    A2AContractConfigError,
+    A2AContractTerminalError,
+    A2AReplyNotCompletedError,
+    ResponseContract,
+    build_correction_request,
+    classify_reply,
+    is_declined_correction,
+)
 from .state import (
     RoutineState,
     _emit,
@@ -151,10 +161,19 @@ def _build_object_agent_node(
     return run
 
 
-def _build_a2a_node(node: RoutineNode, *, tool_registry: Any, timeout: float | None = None) -> Any:
+def _build_a2a_node(
+    node: RoutineNode,
+    *,
+    tool_registry: Any,
+    timeout: float | None = None,
+    defs: dict[str, dict[str, Any]] | None = None,
+) -> Any:
     """One-shot delegation to a registered Agent2Agent-protocol peer, resolved
     the same way the ``@agent_name request`` direct-call chat shortcut does
-    (see ``DirectA2AFastPathMiddleware``)."""
+    (see ``DirectA2AFastPathMiddleware``).
+
+    A node with ``response_schema`` runs the opt-in contract path instead
+    (:func:`_run_contracted_a2a`); without one, behavior is unchanged."""
     from src.progena.a2a.client import A2AClient
     from src.progena.a2a.payloads import extract_message_text, summarize_task_payload
 
@@ -165,6 +184,16 @@ def _build_a2a_node(node: RoutineNode, *, tool_registry: Any, timeout: float | N
     template = config.get("prompt_template")
     if not template:
         raise ValueError(f"a2a node {node.id}: config needs 'prompt_template'")
+    # Contract configuration is checked at compile time, before any dispatch,
+    # so a bad schema or missing validator never consumes a correction.
+    contract: ResponseContract | None = None
+    schema = _resolve_response_schema(node.id, "a2a", config, defs)
+    if schema is not None:
+        try:
+            contract = ResponseContract(schema, defs)
+        except A2AContractConfigError as exc:
+            raise A2AContractConfigError(f"a2a node {node.id}: {exc}") from exc
+    max_corrections = int((config.get("response_correction") or {}).get("max_attempts") or 0)
 
     def _extract_reply_text(payload: Any) -> str:
         if isinstance(payload, dict):
@@ -204,6 +233,22 @@ def _build_a2a_node(node: RoutineNode, *, tool_registry: Any, timeout: float | N
         effective_timeout = (
             timeout if timeout is not None and timeout > 0 else _A2A_NO_LIMIT_TIMEOUT
         )
+        if contract is not None:
+            return await _run_contracted_a2a(
+                node_id=node.id,
+                agent_name=agent_name,
+                agent_config=cfg,
+                request=rendered,
+                metadata={
+                    "caller": "routine",
+                    "routing_mode": "routine_node",
+                    "thread_id": thread_id,
+                },
+                contract=contract,
+                max_corrections=max_corrections,
+                timeout=effective_timeout,
+                output_key=output_key,
+            )
         response = await A2AClient().send_message(
             cfg,
             rendered,
@@ -222,6 +267,149 @@ def _build_a2a_node(node: RoutineNode, *, tool_registry: Any, timeout: float | N
         return {"messages": [AIMessage(content=text)], "data": output}
 
     return run
+
+
+_A2A_CONTINUITY_NOTE = (
+    "corrections continue the peer's returned A2A contextId; whether the peer "
+    "remembers prior content or refrains from tools is not verified by the client"
+)
+
+
+async def _run_contracted_a2a(
+    *,
+    node_id: str,
+    agent_name: str,
+    agent_config: dict[str, Any],
+    request: str,
+    metadata: dict[str, Any],
+    contract: ResponseContract,
+    max_corrections: int,
+    timeout: float,
+    output_key: str,
+) -> dict[str, Any]:
+    """Original dispatch plus at most ``max_corrections`` same-content corrections.
+
+    The original request is sent exactly once. Every correction goes to the same
+    peer and returned protocol context with fixed instructions and sanitized
+    diagnostics, never the original prompt. One deadline bounds every send.
+    Raw replies are kept only in the returned/raised ``a2a_contract`` record,
+    which the instrumentation persists into the run's own ``run_meta``.
+    """
+    from src.progena.a2a.client import A2AClient
+
+    client = A2AClient()
+    deadline = time.monotonic() + timeout
+    record: dict[str, Any] = {
+        "node": node_id,
+        "peer": agent_name,
+        "max_correction_attempts": max_corrections,
+        "continuity": _A2A_CONTINUITY_NOTE,
+        "attempts": [],
+        "outcome": "pending",
+    }
+
+    def finish(outcome: str) -> dict[str, Any]:
+        record["outcome"] = outcome
+        return record
+
+    def terminal(code: str, detail: str) -> A2AContractTerminalError:
+        return A2AContractTerminalError(
+            f"a2a node {node_id}: response contract failed ({code}): {detail}",
+            code=code,
+            record=finish(code),
+        )
+
+    context_id: str | None = None
+    previous_diagnostics: list[dict[str, Any]] = []
+    for attempt in range(max_corrections + 1):
+        is_correction = attempt > 0
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise terminal("deadline_exceeded", "node time budget exhausted before correction")
+        if is_correction:
+            assert context_id is not None
+            response = await client.send_message(
+                agent_config,
+                build_correction_request(contract, previous_diagnostics),
+                blocking=True,
+                timeout=remaining,
+                context={**metadata, "contract_correction": attempt},
+                # Never resume a completed task ID: continue the context only.
+                task_id=None,
+                context_id=context_id,
+            )
+        else:
+            response = await client.send_message(
+                agent_config, request, blocking=True, timeout=remaining, context=metadata
+            )
+        entry: dict[str, Any] = {
+            "attempt": attempt,
+            "kind": "correction" if is_correction else "original",
+        }
+        record["attempts"].append(entry)
+        if not response.get("success"):
+            entry["send_failed"] = True
+            if is_correction:
+                # The peer rejected or failed continuation; never fall back to
+                # a fresh original request.
+                raise terminal("correction_send_failed", "peer did not accept the correction")
+            record["outcome"] = "send_failed"
+            error = ValueError(f"a2a node {node_id}: {response.get('error') or 'unknown error'}")
+            error.a2a_contract = record  # type: ignore[attr-defined]
+            raise error
+
+        reply = classify_reply(response.get("result"))
+        entry.update(
+            reply_kind=reply.kind,
+            task_state=reply.state,
+            task_id=reply.task_id,
+            context_id=reply.context_id,
+            reply_message_id=reply.message_id,
+            reply=reply.text,
+        )
+        if not reply.completed:
+            # Failure, cancellation, input-required and incomplete snapshots are
+            # never contract violations, so they never become corrections.
+            if is_correction:
+                raise terminal("correction_not_completed", f"peer task state '{reply.state}'")
+            raise A2AReplyNotCompletedError(
+                f"a2a node {node_id}: peer reply not completed (state '{reply.state}'); "
+                "not eligible for contract correction",
+                record=finish("not_completed"),
+            )
+        if is_correction and reply.context_id != context_id:
+            raise terminal("context_mismatch", "correction reply left the original A2A context")
+        if is_correction and is_declined_correction(reply.text):
+            entry["valid"] = False
+            entry["declined"] = True
+            raise terminal("correction_declined", "peer could not correct without new work")
+
+        check = contract.check(reply.text)
+        entry["valid"] = check.valid
+        if not check.valid:
+            entry["diagnostics"] = check.diagnostics
+        if check.valid:
+            assert check.value is not None
+            return {
+                "messages": [AIMessage(content=reply.text)],
+                "data": {output_key: reply.text, f"{output_key}_json": check.value},
+                "_a2a_contract": finish("accepted"),
+            }
+        if not is_correction:
+            context_id = reply.context_id
+        previous_diagnostics = check.diagnostics
+        if attempt >= max_corrections:
+            break
+        if context_id is None:
+            raise terminal("no_protocol_context", "peer reply carried no A2A contextId to continue")
+
+    codes = sorted({d.get("code", "") for d in previous_diagnostics})
+    if max_corrections == 0:
+        raise terminal("contract_violation", f"reply violated the contract ({', '.join(codes)})")
+    raise terminal(
+        "corrections_exhausted",
+        f"{max_corrections} correction(s) did not satisfy the contract ({', '.join(codes)})",
+    )
 
 
 def _build_foreach_node(node: RoutineNode, *, object_agent_registry: dict[str, Any]) -> Any:

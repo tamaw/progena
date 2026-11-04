@@ -291,9 +291,19 @@
         "agent_name": { "type": "string", "minLength": 1 },
         "prompt_template": { "type": "string", "minLength": 1 },
         "prompt_file": { "type": "string", "minLength": 1 },
+        "response_schema": { "$ref": "#/$defs/responseSchema", "description": "Opt-in reply contract: the peer's completed reply must be exactly one JSON object (whitespace only around it) that validates against this local JSON Schema. Validated object is written to <output_key>_json. Without it the node keeps its lenient legacy behavior." },
+        "response_correction": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Bounded same-content correction exchange after a contract violation. Requires response_schema. Corrections continue the peer's returned A2A context; the original request is never repeated.",
+          "properties": {
+            "max_attempts": { "type": "integer", "minimum": 0, "maximum": 3, "default": 0, "description": "Correction sends allowed after the original request (0 disables correction)." }
+          }
+        },
         "retry": { "$ref": "#/$defs/retryPolicy" },
-        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit. With a response contract it bounds the original request and every correction together." }
       },
+      "dependentRequired": { "response_correction": ["response_schema"] },
       "oneOf": [
         { "required": ["prompt_template"], "not": { "required": ["prompt_file"] } },
         { "required": ["prompt_file"], "not": { "required": ["prompt_template"] } }

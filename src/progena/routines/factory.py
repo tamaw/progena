@@ -73,6 +73,7 @@ from .messages import (
     normalize_message_content as normalize_message_content,
 )
 from .model_nodes import _build_classify_node, _build_prompt_node
+from .response_contracts import is_terminal_contract_error
 from .state import (
     RoutineState as RoutineState,
 )
@@ -88,8 +89,23 @@ _SEED_NODE_ID = ROUTINE_SEED_NODE_ID
 
 
 def _retry_model_response(exc: Exception) -> bool:
+    if is_terminal_contract_error(exc):
+        return False
     predicate = RetryPolicy().retry_on
     return isinstance(exc, ValueError) or bool(callable(predicate) and predicate(exc))
+
+
+def _retry_all(exc: Exception) -> bool:
+    # A terminal A2A contract failure already spent its bounded corrections; a
+    # native retry would redispatch the original request instead.
+    return not is_terminal_contract_error(exc)
+
+
+def _retry_transient(exc: Exception) -> bool:
+    if is_terminal_contract_error(exc):
+        return False
+    predicate = RetryPolicy().retry_on
+    return bool(callable(predicate) and predicate(exc))
 
 
 def _retry_policy(config: dict[str, Any]) -> RetryPolicy | None:
@@ -114,11 +130,11 @@ def _retry_policy(config: dict[str, Any]) -> RetryPolicy | None:
         # friends as unfixable bugs. A routine node raising those is usually a
         # bad parse of a nondeterministic model response, which a retry does fix.
         "retry_on": (
-            Exception
+            _retry_all
             if retry.get("retry_on", "transient") == "all"
             else _retry_model_response
             if retry.get("retry_on") == "model_response"
-            else RetryPolicy().retry_on
+            else _retry_transient
         ),
     }
     return RetryPolicy(**values)
@@ -330,6 +346,7 @@ def _build_node_callable(
             node,
             tool_registry=tool_registry,
             timeout=_node_timeout(_node_config(node), policy_defaults or {}),
+            defs=defs,
         )
     if node.kind == "foreach":
         return _build_foreach_node(node, object_agent_registry=agent_registry)
@@ -446,6 +463,10 @@ def _instrument_node_callable(
             invocation = getattr(exc, "routine_invocation", None)
             if invocation:
                 entry["routine"] = dict(invocation)
+            contract_record = getattr(exc, "a2a_contract", None)
+            if contract_record:
+                # Run-scoped attempt transcript; the error string stays a summary.
+                entry["a2a_contract"] = contract_record
             exc.routine_run_meta = (node_id, entry)  # type: ignore[attr-defined]
             raise
         duration_ms = (time.monotonic() - started) * 1000
@@ -458,6 +479,9 @@ def _instrument_node_callable(
         invocation = update.pop("_routine_invocation", None)
         if invocation:
             entry["routine"] = invocation
+        contract_record = update.pop("_a2a_contract", None)
+        if contract_record:
+            entry["a2a_contract"] = contract_record
         # This execution's own written fields (not the whole accumulated
         # `data` dict) -- `data` itself only ever holds the latest write per
         # key, so a node run multiple times (a loop body) would otherwise

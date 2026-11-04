@@ -1279,3 +1279,22 @@ class TestA2ANodeTimeout:
             from src.progena.routines.delegation_nodes import _A2A_NO_LIMIT_TIMEOUT
 
             assert kwargs["timeout"] == _A2A_NO_LIMIT_TIMEOUT
+
+
+@pytest.mark.parametrize("retry_on", ["transient", "model_response", "all"])
+def test_retry_policies_exclude_terminal_a2a_contract_failures(retry_on: str) -> None:
+    from src.progena.routines.factory import _retry_policy
+    from src.progena.routines.response_contracts import (
+        A2AContractTerminalError,
+        A2AReplyNotCompletedError,
+    )
+
+    policy = _retry_policy({"retry": {"max_retries": 2, "retry_on": retry_on}})
+    assert policy is not None and callable(policy.retry_on)
+    assert policy.retry_on(A2AContractTerminalError("x", code="corrections_exhausted")) is False
+    # Ordinary failures keep the policy's existing semantics.
+    assert policy.retry_on(ConnectionError("reset")) is True
+    expected_value_error = retry_on != "transient"
+    assert policy.retry_on(ValueError("bad parse")) is expected_value_error
+    assert policy.retry_on(A2AReplyNotCompletedError("failed")) is expected_value_error
+    assert policy.retry_on(RuntimeError("boom")) is (retry_on == "all")
