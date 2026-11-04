@@ -85,6 +85,25 @@ function cleanupPendingTransport(pending) {
   }
 }
 
+// One request's transport state, shared by sends and observed responses.
+function createPendingStream({
+  onChunk, onComplete, onError, onStreamEvent,
+  acknowledged = false, allowDesyncedCompletion = false, owner = null,
+}) {
+  let resolve;
+  const terminal = new Promise((settle) => { resolve = settle; });
+  return {
+    onChunk, onComplete, onError, onStreamEvent, resolve, terminal,
+    allowDesyncedCompletion, owner, acknowledged,
+    cancelRequested: false, streamObserved: false, eventSource: null,
+    reconnectTimer: null, watchdogTimer: null, terminalTimer: null, lastEventAt: null,
+    lastEventId: null, connectAttempts: 0, openedOnce: false, desynced: false,
+    desyncReason: null, terminalEvent: null, finalized: false, receivedFrameIds: [],
+    // Set when the request stream closed after the terminal: all content arrived.
+    contentDrained: false, connect: null,
+  };
+}
+
 function rememberResponseFrameId(pending, frameId) {
   if (!frameId) {
     return;
@@ -422,39 +441,10 @@ export function useChatApi() {
       const { backendMetadata, allowDesyncedCompletion } = splitResponseMetadata(metadata);
 
       const acknowledgementController = new AbortController();
-      let resolveTerminal;
-      const terminal = new Promise((resolve) => {
-        resolveTerminal = resolve;
+      const pending = createPendingStream({
+        onChunk, onComplete, onError, onStreamEvent, allowDesyncedCompletion, owner,
       });
-      const pending = {
-        onChunk,
-        onComplete,
-        onError,
-        onStreamEvent,
-        resolve: resolveTerminal,
-        terminal,
-        cancelRequested: false,
-        acknowledged: false,
-        streamObserved: false,
-        eventSource: null,
-        reconnectTimer: null,
-        watchdogTimer: null,
-        terminalTimer: null,
-        lastEventAt: null,
-        lastEventId: null,
-        connectAttempts: 0,
-        openedOnce: false,
-        desynced: false,
-        desyncReason: null,
-        allowDesyncedCompletion,
-        owner,
-        terminalEvent: null,
-        finalized: false,
-        receivedFrameIds: [],
-        // Set when the request stream closed after the terminal: all content arrived.
-        contentDrained: false,
-        connect: null,
-      };
+      const { resolve: resolveTerminal, terminal } = pending;
 
       // Register before dispatch: the backend can broadcast `started` before
       // the 202 acknowledgement reaches the browser.
@@ -544,17 +534,9 @@ export function useChatApi() {
       };
     }
 
-    let resolveTerminal;
-    const terminal = new Promise((resolve) => { resolveTerminal = resolve; });
-    const pending = {
-      onChunk, onComplete, onError, onStreamEvent, resolve: resolveTerminal, terminal,
-      allowDesyncedCompletion: false, owner: null,
-      cancelRequested: false, acknowledged: true, streamObserved: false, eventSource: null,
-      reconnectTimer: null, watchdogTimer: null, terminalTimer: null, lastEventAt: null,
-      lastEventId: null, connectAttempts: 0, openedOnce: false, desynced: false,
-      desyncReason: null, terminalEvent: null, finalized: false, receivedFrameIds: [],
-      contentDrained: false, connect: null,
-    };
+    const pending = createPendingStream({
+      onChunk, onComplete, onError, onStreamEvent, acknowledged: true,
+    });
     pendingStreamsRef.current.set(requestId, pending);
     activeStreamRequestIdRef.current = requestId;
     setConnectionState(deriveConnectionState(pendingStreamsRef.current));
@@ -566,7 +548,7 @@ export function useChatApi() {
       pendingStreamsRef.current.delete(requestId);
       if (activeStreamRequestIdRef.current === requestId) activeStreamRequestIdRef.current = null;
       setConnectionState(deriveConnectionState(pendingStreamsRef.current));
-      resolveTerminal();
+      pending.resolve();
     };
   }, [getApiUrl, openResponseStream]);
 

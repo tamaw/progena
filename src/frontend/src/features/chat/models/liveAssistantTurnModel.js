@@ -1064,6 +1064,27 @@ export function resolveLiveTurnResponseStatus(turn, status) {
   return providerStatus === 'running' ? 'completed' : providerStatus;
 }
 
+// A settled answer/error row carrying the finalized turn's usage metadata.
+function terminalAssistantItem(finalTurn, { id, content, timestamp = finalTurn.assistantTimestamp, error = false }) {
+  return {
+    kind: 'assistant_message',
+    id,
+    content,
+    timestamp,
+    isStreaming: false,
+    error,
+    displayAgentName: finalTurn.displayAgentName || '',
+    displayModelName: finalTurn.displayModelName,
+    displayToolCalls: finalTurn.displayToolCalls,
+    tokenCount: finalTurn.tokenCount,
+    finalCallTokenCount: finalTurn.finalCallTokenCount,
+    usageProvenance: finalTurn.usageProvenance,
+    responseStatus: finalTurn.responseStatus,
+    reasoningTokenCount: finalTurn.reasoningTokenCount,
+    reasoningText: finalTurn.reasoningText,
+  };
+}
+
 /**
  * Finalise a live assistant turn — freeze it and return a committed message.
  *
@@ -1128,42 +1149,18 @@ export function finalizeLiveAssistantTurn(turn, {
     }
     const hasAssistantItem = timelineItems.some((item) => item.kind === 'assistant_message');
     if (!hasAssistantItem && priorContent.trim().length > 0) {
-      timelineItems.push({
-        kind: 'assistant_message',
+      timelineItems.push(terminalAssistantItem(finalTurn, {
         id: finalTurn.assistantMessageId,
         content: priorContent,
         timestamp: turn.assistantTimestamp || finalTurn.assistantTimestamp,
-        isStreaming: false,
-        error: false,
-        displayAgentName: finalTurn.displayAgentName || '',
-        displayModelName: finalTurn.displayModelName,
-        displayToolCalls: finalTurn.displayToolCalls,
-        tokenCount: finalTurn.tokenCount,
-        finalCallTokenCount: finalTurn.finalCallTokenCount,
-        usageProvenance: finalTurn.usageProvenance,
-        responseStatus: finalTurn.responseStatus,
-        reasoningTokenCount: finalTurn.reasoningTokenCount,
-        reasoningText: finalTurn.reasoningText,
-      });
+      }));
     }
 
-    timelineItems.push({
-      kind: 'assistant_message',
+    timelineItems.push(terminalAssistantItem(finalTurn, {
       id: `${finalTurn.assistantMessageId}-error`,
       content: errorContent,
-      timestamp: finalTurn.assistantTimestamp,
-      isStreaming: false,
       error: true,
-      displayAgentName: finalTurn.displayAgentName || '',
-      displayModelName: finalTurn.displayModelName,
-      displayToolCalls: finalTurn.displayToolCalls,
-      tokenCount: finalTurn.tokenCount,
-      finalCallTokenCount: finalTurn.finalCallTokenCount,
-      usageProvenance: finalTurn.usageProvenance,
-      responseStatus: finalTurn.responseStatus,
-      reasoningTokenCount: finalTurn.reasoningTokenCount,
-      reasoningText: finalTurn.reasoningText,
-    });
+    }));
     finalTurn.timelineItems = timelineItems;
     return toCommittedAssistantMessage(finalTurn);
   }
@@ -1179,23 +1176,11 @@ export function finalizeLiveAssistantTurn(turn, {
     }
     finalTurn.timelineItems = [
       ...(Array.isArray(finalTurn.timelineItems) ? finalTurn.timelineItems : []),
-      {
-        kind: 'assistant_message',
+      terminalAssistantItem(finalTurn, {
         id: `${finalTurn.assistantMessageId}-error`,
         content: finalTurn.content,
-        timestamp: finalTurn.assistantTimestamp,
-        isStreaming: false,
         error: true,
-        displayAgentName: finalTurn.displayAgentName || '',
-        displayModelName: finalTurn.displayModelName,
-        displayToolCalls: finalTurn.displayToolCalls,
-        tokenCount: finalTurn.tokenCount,
-        finalCallTokenCount: finalTurn.finalCallTokenCount,
-        usageProvenance: finalTurn.usageProvenance,
-        responseStatus: finalTurn.responseStatus,
-        reasoningTokenCount: finalTurn.reasoningTokenCount,
-        reasoningText: finalTurn.reasoningText,
-      },
+      }),
     ];
     return toCommittedAssistantMessage(finalTurn);
   }
@@ -1209,23 +1194,10 @@ export function finalizeLiveAssistantTurn(turn, {
       finalTurn.assistantMessageId = `${finalTurn.assistantIdPrefix ?? finalTurn.streamId}-assistant`;
     }
     finalTurn.timelineItems = [
-      {
-        kind: 'assistant_message',
+      terminalAssistantItem(finalTurn, {
         id: finalTurn.assistantMessageId,
         content: finalTurn.content,
-        timestamp: finalTurn.assistantTimestamp,
-        isStreaming: false,
-        error: false,
-        displayAgentName: finalTurn.displayAgentName || '',
-        displayModelName: finalTurn.displayModelName,
-        displayToolCalls: finalTurn.displayToolCalls,
-        tokenCount: finalTurn.tokenCount,
-        finalCallTokenCount: finalTurn.finalCallTokenCount,
-        usageProvenance: finalTurn.usageProvenance,
-        responseStatus: finalTurn.responseStatus,
-        reasoningTokenCount: finalTurn.reasoningTokenCount,
-        reasoningText: finalTurn.reasoningText,
-      },
+      }),
     ];
     return toCommittedAssistantMessage(finalTurn);
   }
