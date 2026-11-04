@@ -14,6 +14,7 @@ import { appendStreamingCursor } from '../models/messageRenderUtils';
 import { renderSafeMarkdown } from '../../../lib/safeMarkdown';
 import { filterTimelineItems } from '../models/streamFilters';
 import InterruptedMarker from './InterruptedMarker';
+import { EntryLine, Trailing } from './ChatEntryLine';
 
 function buildSyntheticReasoningEvent(
   reasoningText,
@@ -237,68 +238,84 @@ function MessageView({
   }
 
 
+  const messageBody = (
+    <div className={`message ${role} ${isStreaming ? 'streaming' : ''} ${error ? 'error' : ''} ${isScheduled ? 'scheduled' : ''}`}>
+      {formattedContent && (
+        <div
+          ref={messageContentRef}
+          className="message-content"
+          dangerouslySetInnerHTML={{ __html: formattedContent }}
+        />
+      )}
+      {attachments.length > 0 && (
+        <div className="message-attachments">
+          {attachments.map((attachment, index) => {
+            const sizeLabel = formatAttachmentSize(attachment.size_bytes);
+            const { label: fileTypeLabel } = describeAttachmentFileType(attachment.mime_type, attachment.name);
+            const tooltip = attachment.error
+              ? `${attachment.name} — ${attachment.error}`
+              : [attachment.name, sizeLabel].filter(Boolean).join(' — ');
+            return (
+              <span
+                key={attachment.id || `${attachment.name}-${index}`}
+                className={`message-attachment-chip${attachment.error ? ' message-attachment-chip--error' : ''}`}
+                title={tooltip}
+              >
+                <AttachmentFileIcon mimeType={attachment.mime_type} filename={attachment.name} size={26} />
+                <span className="message-attachment-chip__body">
+                  <span className="message-attachment-chip__name">{attachment.name}</span>
+                  <span className="message-attachment-chip__meta">
+                    {attachment.error ? attachment.error : [fileTypeLabel, sizeLabel].filter(Boolean).join(' · ')}
+                  </span>
+                </span>
+              </span>
+            );
+          })}
+        </div>
+      )}
+      {messageImages.length > 0 && (
+        <MessageImageStrip images={messageImages} />
+      )}
+    </div>
+  );
+  const time = formattedTime && <span className="msg__time entry__time">{formattedTime}</span>;
+  // Scheduled prompts are long instructions; their row stays one line until
+  // the reader opens it. Actions sit in the summary without toggling it.
+  const scheduledPreview = isScheduled
+    ? (content || '').split('\n').map((line) => line.trim()).find(Boolean) || ''
+    : '';
   const messageEntry = (
     <article className={`message-wrapper ${role} msg msg--${role} entry entry--user entry--standalone`}>
       <div className="entry__gutter" aria-hidden="true">
-        <span className="entry__badge entry__badge--user" />
+        <span className={`entry__badge entry__badge--user${isScheduled ? ' entry__badge--scheduled' : ''}`} />
       </div>
       <div className="entry__main msg__entry-main">
-        <div className="msg__head entry__head">
-          <span className="msg__role">{isScheduled ? 'Scheduled task' : 'Message'}</span>
-          {isScheduled && (
-            <span className="scheduled-badge muted">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10"></circle>
-                <polyline points="12 6 12 12 16 14"></polyline>
-              </svg>
-              Scheduled
-            </span>
-          )}
-          <span className="msg__head-trailing">
-            <MessageActions
-              content={content}
-            />
-            {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
-          </span>
-        </div>
-        <div className={`message ${role} ${isStreaming ? 'streaming' : ''} ${error ? 'error' : ''} ${isScheduled ? 'scheduled' : ''}`}>
-          {formattedContent && (
-            <div
-              ref={messageContentRef}
-              className="message-content"
-              dangerouslySetInnerHTML={{ __html: formattedContent }}
-            />
-          )}
-          {attachments.length > 0 && (
-            <div className="message-attachments">
-              {attachments.map((attachment, index) => {
-                const sizeLabel = formatAttachmentSize(attachment.size_bytes);
-                const { label: fileTypeLabel } = describeAttachmentFileType(attachment.mime_type, attachment.name);
-                const tooltip = attachment.error
-                  ? `${attachment.name} — ${attachment.error}`
-                  : [attachment.name, sizeLabel].filter(Boolean).join(' — ');
-                return (
-                  <span
-                    key={attachment.id || `${attachment.name}-${index}`}
-                    className={`message-attachment-chip${attachment.error ? ' message-attachment-chip--error' : ''}`}
-                    title={tooltip}
-                  >
-                    <AttachmentFileIcon mimeType={attachment.mime_type} filename={attachment.name} size={26} />
-                    <span className="message-attachment-chip__body">
-                      <span className="message-attachment-chip__name">{attachment.name}</span>
-                      <span className="message-attachment-chip__meta">
-                        {attachment.error ? attachment.error : [fileTypeLabel, sizeLabel].filter(Boolean).join(' · ')}
-                      </span>
-                    </span>
-                  </span>
-                );
-              })}
+        {isScheduled ? (
+          <EntryLine
+            title="Scheduled task"
+            text={<span className="tool-call-entry__summary entry__meta">{scheduledPreview}</span>}
+            summaryLabel={scheduledPreview ? `Scheduled task: ${scheduledPreview}` : 'Scheduled task'}
+            trailing={<>
+              <span onClick={(event) => event.preventDefault()}>
+                <MessageActions content={content} />
+              </span>
+              <Trailing time={formattedTime} />
+            </>}
+          >
+            {messageBody}
+          </EntryLine>
+        ) : (
+          <>
+            <div className="msg__head entry__head">
+              <span className="msg__role">Message</span>
+              <span className="msg__head-trailing">
+                <MessageActions content={content} />
+                {time}
+              </span>
             </div>
-          )}
-          {messageImages.length > 0 && (
-            <MessageImageStrip images={messageImages} />
-          )}
-        </div>
+            {messageBody}
+          </>
+        )}
       </div>
     </article>
   );

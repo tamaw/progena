@@ -72,14 +72,16 @@ describe('TimelineItem assistant messages', () => {
     expect(terminalMarkup).toContain('<p><strong>formatted terminal content</strong></p>');
   });
 
-  it('retains the scheduled assistant badge on a rebuilt timeline row', () => {
+  it('renders assistant replies in full without a Scheduled badge', () => {
     const markup = renderToStaticMarkup(React.createElement(TimelineItem, {
-      item: assistantItem({ isScheduled: true }),
+      item: assistantItem({ isStreaming: false, isScheduled: true }),
       itemIndex: 0,
     }));
 
-    expect(markup).toContain('scheduled-badge');
-    expect(markup).toContain('Scheduled');
+    expect(markup).not.toContain('scheduled-badge');
+    expect(markup).not.toContain('Scheduled');
+    expect(markup).not.toContain('<details');
+    expect(markup).toContain('<p><strong>formatted terminal content</strong></p>');
   });
 
   it('renders sanitized reasoning disclosure content without throwing', () => {

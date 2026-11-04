@@ -33,6 +33,9 @@
        teal and Progena's own violet message dot. */
     --color-subagent: #e879f9;
 
+    /* Scheduled-task input dot: a lime outside every other chat dot hue. */
+    --color-scheduled: #a3e635;
+
     /* User message colors */
     --color-user-bg: #2f6ff6;
     --color-user-text: #ffffff;
@@ -134,6 +137,7 @@
     --color-error: #e0524a;
     --color-info: #2f6ff6;
     --color-subagent: #c026d3;
+    --color-scheduled: #4d7c0f;
     --color-accent-soft: rgba(47, 111, 246, 0.12);
 
     --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);

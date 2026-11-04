@@ -966,7 +966,6 @@ export function buildDefaultAssistantTimeline(message) {
     timestamp: message.timestamp,
     isStreaming: !!message.isStreaming,
     error: !!message.error,
-    isScheduled: message.isScheduled === true,
     displayAgentName: typeof message.displayAgentName === 'string' ? message.displayAgentName : '',
     displayModelName: typeof message.displayModelName === 'string' && message.displayModelName
       ? message.displayModelName

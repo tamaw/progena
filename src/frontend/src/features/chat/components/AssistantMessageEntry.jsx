@@ -31,15 +31,6 @@ export default function AssistantMessageEntry({ item, agentName, onRegenerate, s
         <div className="entry__main msg__entry-main">
           <div className="msg__head entry__head">
             <span className="msg__role">{item.displayAgentName || agentName}</span>
-            {item.isScheduled && (
-              <span className="scheduled-badge muted">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <polyline points="12 6 12 12 16 14"></polyline>
-                </svg>
-                Scheduled
-              </span>
-            )}
             <span className="msg__head-trailing">
               {statusLabel && (
                 <span className={`${styles.status}${item.responseStatus === 'failed' ? ` ${styles.failed}` : ''}`} role="status">
@@ -54,7 +45,7 @@ export default function AssistantMessageEntry({ item, agentName, onRegenerate, s
               {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
             </span>
           </div>
-          <div className={`message assistant ${item.isStreaming ? 'streaming' : ''} ${item.error ? 'error' : ''} ${item.isScheduled ? 'scheduled' : ''}`}>
+          <div className={`message assistant ${item.isStreaming ? 'streaming' : ''} ${item.error ? 'error' : ''}`}>
             {item.isStreaming ? (
               <div className="message-content message-content--streaming-text">
                 {item.content || ''}
