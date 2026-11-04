@@ -2741,10 +2741,6 @@ pre.mermaid svg {
     transition: max-width var(--transition-fast), gap var(--transition-fast), padding var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
 }
 
-.tool-call-entry__line .msg-action-btn {
-    color: inherit;
-}
-
 .msg-action-btn:hover,
 .msg-action-btn:focus-visible {
     gap: 4px;

@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Reasoning and routine status**: heading-only reasoning phases use the same provider title live and after reload without an empty disclosure. Routine failures remain visibly failed even when their enclosing task returns normally; later successful attempts keep their own status.
 - **A2A completion routing**: asynchronous callbacks return to the originating chat or object-agent protocol thread instead of shared runtime state. Busy object agents and unavailable queues retain their pending notifications for retry.
 - **Chat token details**: restore last-call input counts alongside output breakdowns in the token icon's styled tooltip.
-- **Chat icon and metadata consistency**: use a defined action colour, with disclosure-row icons inheriting the same colour as their collapse arrow. Sticky status and duration labels share the conversation's metadata typography.
+- **Chat icon and metadata consistency**: use a defined action colour; sticky background and queue action icons now use the same idle, hover and focus colours as message actions instead of inheriting their row's text colour. Sticky status and duration labels share the conversation's metadata typography.
 - **Background reconnects**: restore task and workflow-trace subscriptions when a connection returns before the previous HTTP acknowledgement finishes, so completion updates reach mounted chat surfaces.
 - **Durable background activity**: delayed task events read current durable state instead of resurrecting completed work. Chat-launched workflows persist their owning conversation and rehydrate active identities independently of transcript pagination.
 
