@@ -2289,6 +2289,11 @@ pre.mermaid svg {
     min-height: 100%;
 }
 
+.msg__entry-main > .tool-call-entry__disclosure {
+    align-self: stretch;
+    min-width: 0;
+}
+
 .message {
     max-width: none;
     padding: 0;

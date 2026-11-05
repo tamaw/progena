@@ -49,9 +49,8 @@ function deriveConnectionState(pendingStreams, emptyState = 'disconnected') {
 
 const FRONTEND_RESPONSE_OPTIONS_KEY = '__frontendResponse';
 const RESPONSE_TERMINAL_DRAIN_MS = 50;
-// The canonical terminal travels on the UI stream and can overtake content
-// still in flight on the request stream. Its close is the drain signal; this
-// bounds the wait when that close never arrives.
+// The canonical terminal can overtake content on the request stream. Wait for
+// that stream to close, but bound the wait if it never does.
 const RESPONSE_TERMINAL_CONTENT_TIMEOUT_MS = 5000;
 const RESPONSE_HEARTBEAT_STALE_MS = 45000;
 const RESPONSE_WATCHDOG_POLL_MS = 15000;
@@ -99,8 +98,7 @@ function createPendingStream({
     reconnectTimer: null, watchdogTimer: null, terminalTimer: null, lastEventAt: null,
     lastEventId: null, connectAttempts: 0, openedOnce: false, desynced: false,
     desyncReason: null, terminalEvent: null, finalized: false, receivedFrameIds: [],
-    // Set when the request stream closed after the terminal: all content arrived.
-    contentDrained: false, connect: null,
+    connect: null,
   };
 }
 
@@ -191,9 +189,11 @@ export function useChatApi() {
       pending.onError?.(buildDesyncCompletionError(pending.desyncReason));
       setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
     } else {
+      // EventSource cannot distinguish a clean EOF from a dropped connection.
+      // Preserve received content, but let canonical history confirm completeness.
       pending.onComplete?.(
         terminalType === UI_EVENT.CHAT_RESPONSE_CANCELLED ? 'cancelled' : 'completed',
-        { contentComplete: pending.contentDrained },
+        { contentComplete: false },
       );
       setConnectionState(deriveConnectionState(pendingStreamsRef.current));
     }
@@ -271,7 +271,6 @@ export function useChatApi() {
 
       const streamUrl = responseStreamUrl(responsesUrl, requestId, pending.lastEventId);
       const source = new EventSource(streamUrl);
-      let sourceOpened = false;
       pending.eventSource = source;
 
       const handleContentFrame = (responseType, messageEvent) => {
@@ -292,7 +291,6 @@ export function useChatApi() {
         }
 
         rememberResponseFrameId(pending, frameId);
-        sourceOpened = true;
         pending.lastEventId = frameId || pending.lastEventId;
         pending.lastEventAt = Date.now();
         pending.openedOnce = true;
@@ -314,7 +312,6 @@ export function useChatApi() {
         if (!isCurrent() || pending.eventSource !== source || pending.finalized) {
           return;
         }
-        sourceOpened = true;
         pending.lastEventAt = Date.now();
       };
       source.addEventListener(CHAT_CONTENT_EVENT.DELTA, (event) => {
@@ -347,7 +344,6 @@ export function useChatApi() {
         if (pending.terminalEvent) {
           // The response already finished; only its replay is unavailable.
           // Complete it as undelivered so canonical history supplies content.
-          pending.contentDrained = false;
           closePendingSource(pending);
           scheduleTerminalFinalization(requestId, pending, 0);
           return;
@@ -360,10 +356,7 @@ export function useChatApi() {
         }
 
         if (pending.terminalEvent) {
-          // After the terminal, the server closes an opened stream only once
-          // every retained frame is flushed. A failed connection proves nothing.
-          // Frames dropped after a Stop request were never delivered.
-          pending.contentDrained = sourceOpened && !pending.cancelRequested;
+          // A close bounds the drain wait, not proof that all frames arrived.
           closePendingSource(pending);
           scheduleTerminalFinalization(requestId, pending);
           return;

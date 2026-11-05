@@ -186,11 +186,12 @@ reverse proxy outside this Compose project. Forward requests to
 the repository.
 
 The browser's chat streams are Server-Sent Events (`/api/ui/stream` and
-`/api/ui/responses/{request_id}/stream`). The reverse proxy must deliver them
-unbuffered and uncompressed: honour the forwarded `X-Accel-Buffering: no` header
-(nginx does by default) or set `proxy_buffering off`, and do not gzip
-`text/event-stream`. A buffering proxy holds small frames such as tool starts
-until the response ends, so live activity appears only after completion.
+`/api/ui/responses/{request_id}/stream`). Configure every reverse-proxy hop for
+incremental delivery without compression; for nginx, use `proxy_buffering off`
+and do not gzip `text/event-stream`. Frontend nginx already disables buffering,
+but its configuration does not control a host proxy or corporate TLS-inspection
+gateway. The response-drain/reconciliation logic protects completion correctness;
+it cannot force an intermediary to release buffered events during generation.
 
 When upgrading from the old HTTPS containers, switch the reverse-proxy upstream
 from HTTPS to HTTP together with the frontend container port change from 443 to

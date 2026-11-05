@@ -630,7 +630,14 @@ function ConversationPage() {
       ? messages
       : isSpectatedReconciliation
         ? canonicalMessages
-        : mergeCanonicalMessages(messages, canonicalMessages);
+        : mergeCanonicalMessages(messages, canonicalMessages, {
+          // Only the raw persisted ID is a trusted pagination boundary;
+          // normalizeBackendChatMessage may synthesize an index-based ID.
+          preserveBeforeId: chatReconciliationState.detail.has_more_messages
+            && typeof chatReconciliationState.detail.messages?.[0]?.id === 'string'
+            ? chatReconciliationState.detail.messages[0].id
+            : null,
+        });
     setSummaryMarkers((current) => mergeConversationSummaryMarkers(
       current,
       alignSummaryMarkerAnchors(
@@ -639,6 +646,12 @@ function ConversationPage() {
         nextMessages,
       ),
     ));
+    if (nextMessages.length === canonicalMessages.length) {
+      // No older prefix survived. Render-equivalent rows may retain client IDs;
+      // pagination must still start from the canonical persisted boundary.
+      const persistedStartId = chatReconciliationState.detail.messages?.[0]?.id;
+      setOldestMessageCursor(typeof persistedStartId === 'string' ? persistedStartId : null);
+    }
     if (!isCanonicalEquivalent) {
       // A spectated turn (someone else's send into a thread this page is
       // just watching) never had the interleaved user message locally --

@@ -168,7 +168,6 @@ describe('useChatApi dedicated response transport', () => {
 
     expect(source.closed).toBe(true);
     expect(onComplete).toHaveBeenCalledOnce();
-    expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: true });
     expect(onError).not.toHaveBeenCalled();
     expect(observed).toEqual([
       ['delta', 'First '],
@@ -272,7 +271,6 @@ describe('useChatApi dedicated response transport', () => {
       ['event', 'tool_result', 'arrived after terminal'],
       ['complete', 'completed'],
     ]);
-    expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: true });
   });
 
   it('reports undelivered content when the request stream never drains after the terminal', async () => {
@@ -309,6 +307,26 @@ describe('useChatApi dedicated response transport', () => {
     expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: false });
   });
 
+  it('defers an opened stream that disconnects after completion to canonical history', async () => {
+    vi.useFakeTimers();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+    const hook = useChatApi();
+    const terminal = hook.sendMessageStream('Lost answer', [], vi.fn(), onComplete, onError, vi.fn());
+    await flushMicrotasks();
+
+    const source = MockEventSource.instances[0];
+    source.onopen();
+    source.emit('chat.response.event', { event_type: 'node_update' }, `chat-response:${REQUEST_ID}:1`);
+    publishLifecycle('chat.response.completed');
+    source.onerror();
+    await vi.advanceTimersByTimeAsync(50);
+    await terminal;
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: false });
+  });
+
   it('still opens and drains the request stream when the terminal overtakes the acknowledgement', async () => {
     vi.useFakeTimers();
     let acknowledge;
@@ -336,7 +354,6 @@ describe('useChatApi dedicated response transport', () => {
     await terminal;
 
     expect(observed).toEqual(['Retained answer']);
-    expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: true });
   });
 
   it('completes as undelivered when the post-terminal replay has expired', async () => {
@@ -397,7 +414,6 @@ describe('useChatApi dedicated response transport', () => {
     await vi.advanceTimersByTimeAsync(50);
     await terminal;
 
-    expect(onComplete).toHaveBeenCalledWith('completed', { contentComplete: true });
   });
 
 
@@ -462,7 +478,6 @@ describe('useChatApi dedicated response transport', () => {
     expect(adopted).toHaveBeenCalledWith({ humanMessageId: 'local-human' });
     expect(directChunk).not.toHaveBeenCalled();
     expect(queuedChunk).toHaveBeenCalledWith('claimed');
-    expect(queuedComplete).toHaveBeenCalledWith('completed', { contentComplete: true });
   });
 
   it('fails desynced quick-chat completions explicitly instead of silently completing empty', async () => {

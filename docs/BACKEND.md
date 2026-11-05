@@ -375,11 +375,19 @@ flushed every queued retained content frame.
 The canonical terminal can therefore reach the browser before the last content
 frames. A client finalizes the turn when the dedicated stream it opened closes
 after the terminal (reopening from its cursor if it was between connections),
-or after a bounded wait. A browser `EventSource` cannot distinguish that close
-from a dropped connection, so the close is treated as the drain signal. A turn
-finalized without it (timeout, failed connection, expired replay or a Stop
-request) is reported as undelivered: the client defers to canonical history
-instead of rendering an empty-reply placeholder or an error.
+or after a five-second bounded wait. A browser `EventSource` cannot distinguish
+a clean EOF from a dropped connection, so neither an opened connection nor its
+close confirms complete delivery. The client preserves received content and
+reconciles with canonical history after finalization, including on timeout,
+expired replay or Stop. Unconfirmed empty turns do not render an empty-reply
+placeholder while that reconciliation is pending.
+
+Canonical chat-detail reads return the latest message page. Terminal
+reconciliation preserves already-loaded older pages only before a matching
+persisted first-message ID in a partial canonical page. The canonical tail
+replaces provisional content; a complete, empty or non-overlapping response
+does not authorize preserving an unmatched prefix. When no prefix survives,
+pagination resumes from the canonical persisted ID, not a reused client row ID.
 
 ## Finite request acknowledgement and correlation
 
