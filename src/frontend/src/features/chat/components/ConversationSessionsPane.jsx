@@ -10,7 +10,7 @@ const CHAT_FILTERS = [
   { value: 'archived', label: 'Archived' },
 ];
 
-export function ConversationSessionsPane({ sessionsPaneClassName, sessionsCollapsed, setSessionsCollapsed, sidebarFilter, setSidebarFilter, hasUnreadChats, startNewChatSession, isClearingSession, sidebarQuery, setSidebarQuery, sidebarSort, setSidebarSort, visibleSessionGroups, sidebarEmptyMessageText, selectSessionItem }) {
+export function ConversationSessionsPane({ sessionsPaneClassName, sessionsCollapsed, setSessionsCollapsed, sidebarFilter, setSidebarFilter, hasUnreadChats, startNewChatSession, isClearingSession, sidebarQuery, setSidebarQuery, sidebarSort, setSidebarSort, visibleSessionGroups, sidebarEmptyMessageText, selectSessionItem, loadNextPage }) {
   return (
 <PaneSection as="aside" className={sessionsPaneClassName} aria-label="Conversation sessions" onItemSelect={() => setSessionsCollapsed(true)}>
         {sessionsCollapsed ? (
@@ -50,12 +50,15 @@ export function ConversationSessionsPane({ sessionsPaneClassName, sessionsCollap
               title: group.label,
               items: group.items,
             }))}
-            getItemKey={(item) => item.id}
+            onScroll={(event) => {
+              const element = event.currentTarget;
+              if (element.scrollHeight - element.scrollTop - element.clientHeight < 120) loadNextPage?.();
+            }}
             renderItem={(item) => (
               <article
                 className={`chat-session-card${item.selected ? ' is-selected' : ''}${item.unread ? ' is-unread' : ''}`}
                 data-thread-id={item.threadId || item.id}
-                data-chat-source={item.source || 'unknown'}
+                data-chat-source={item.sessionSource || item.source || 'unknown'}
                 role="button"
                 tabIndex={0}
                 aria-current={item.selected ? 'true' : undefined}

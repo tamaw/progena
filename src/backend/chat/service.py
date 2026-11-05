@@ -7,6 +7,7 @@ the runtime reader.
 
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,6 +20,7 @@ from src.backend.storage.documents import (
     PROGENA_STATE_PREFIX,
     BackendDocumentStore,
     CheckpointThreadSnapshot,
+    SessionRowQuery,
 )
 from src.progena.a2a.payloads import (
     _MAX_PROGRESS_LOG_ENTRIES as _REPLAYED_PROGRESS_LOG_ENTRY_LIMIT,
@@ -41,7 +43,7 @@ from src.progena.sessions.messages import (
     tool_result_failed,
 )
 from src.progena.sessions.models import ResponseStatus
-from src.progena.sessions.titles import ATTACHMENT_CONTEXT_MARKER, display_title
+from src.progena.sessions.titles import ATTACHMENT_CONTEXT_MARKER, display_title, session_preview
 from src.progena.utils import normalize_utc_timestamp, parse_provider_timestamp
 
 # History must not replay arbitrary tool artifacts (which may contain raw files,
@@ -206,9 +208,6 @@ class ChatSessionSummary(BaseModel):
     last_activity: str | None = None
     message_count: int = 0
     preview: str = ""
-    # The runtime could not be reached to read this chat's messages, so
-    # message_count/preview are unknown (not zero) until it is back.
-    history_unavailable: bool = False
     # Full root transcript accounting; independent of the visible message page.
     usage_totals: ConversationUsageTotals = Field(default_factory=ConversationUsageTotals)
 
@@ -268,9 +267,44 @@ class ChatMessagesPageResponse(BaseModel):
     has_more: bool
 
 
-class ChatSessionsResponse(BaseModel):
-    sessions: list[ChatSessionSummary]
+ChatListSort = Literal["recent", "name"]
+ChatListFilter = Literal["active", "archived", "all"]
+CHAT_LIST_PAGE_SIZE = 50
+CHAT_LIST_MAX_PAGE_SIZE = 200
+
+
+class ChatListRow(BaseModel):
+    """One conversation-list row: the session document's own fields, nothing derived."""
+
+    thread_id: str
+    title: str
+    # Where the conversation started: "ui", "telegram" (a channel) or "api".
+    source: str | None = None
+    pinned: bool = False
+    archived: bool = False
+    created_at: str | None = None
+    last_activity: str | None = None
+    preview: str = ""
+
+
+class ChatListView(BaseModel):
+    q: str = ""
+    sort: ChatListSort = "recent"
+    filter: ChatListFilter = "active"
+    source: str | None = None
+    thread_ids: list[str] = Field(default_factory=list)
+
+
+class ChatListPage(BaseModel):
+    view: ChatListView
+    rows: list[ChatListRow]
+    # Every row the view matches, regardless of the cursor.
     total: int
+    next_cursor: str | None = None
+
+
+class InvalidChatListCursor(ValueError):
+    """The cursor is malformed or belongs to another sort order."""
 
 
 class ChatPatchRequest(BaseModel):
@@ -979,7 +1013,6 @@ def _summary_from_session(
     *,
     messages: list[ChatMessage],
     usage_totals: ConversationUsageTotals,
-    history_unavailable: bool = False,
 ) -> ChatSessionSummary:
     preview = next((message.content for message in reversed(messages) if message.content), "")
     return ChatSessionSummary(
@@ -992,7 +1025,6 @@ def _summary_from_session(
         last_activity=_known_session_timestamp(payload.get("last_activity")),
         message_count=len(messages),
         preview=preview,
-        history_unavailable=history_unavailable,
         usage_totals=usage_totals,
     )
 
@@ -1002,40 +1034,113 @@ def _session_payload(store: BackendDocumentStore, thread_id: str) -> dict[str, A
     return None if document is None else dict(document.payload)
 
 
-def list_chat_sessions(
-    store: BackendDocumentStore,
-    *,
-    include_archived: bool = False,
-) -> list[ChatSessionSummary]:
-    sessions: list[ChatSessionSummary] = []
-    checkpoint_snapshots = store.list_checkpoint_thread_snapshots(limit=100)
-    snapshots_by_thread_id = {snapshot.thread_id: snapshot for snapshot in checkpoint_snapshots}
+def chat_list_row(payload: dict[str, Any]) -> ChatListRow:
+    return ChatListRow(
+        thread_id=payload["thread_id"],
+        title=display_title(
+            str(payload.get("title") or ""), str(payload.get("first_message") or "")
+        ),
+        source=payload.get("source"),
+        pinned=bool(payload.get("pinned")),
+        archived=bool(payload.get("archived")),
+        created_at=_known_session_timestamp(payload.get("created_at")),
+        last_activity=_known_session_timestamp(payload.get("last_activity")),
+        preview=str(payload.get("preview") or ""),
+    )
 
-    for _key, document in store.list_documents(PROGENA_STATE_PREFIX, SESSION_KEY_PREFIX):
+
+def _encode_list_cursor(sort: ChatListSort, position: tuple[Any, ...]) -> str:
+    raw = json.dumps([sort, *position], separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _decode_list_cursor(sort: ChatListSort, cursor: str) -> tuple[Any, ...]:
+    try:
+        decoded = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+    except (ValueError, TypeError) as exc:
+        raise InvalidChatListCursor("Malformed chat list cursor") from exc
+    if not isinstance(decoded, list) or not decoded or decoded[0] != sort:
+        raise InvalidChatListCursor("Chat list cursor belongs to another sort")
+    position = tuple(decoded[1:])
+    valid = (
+        len(position) == 2 and all(isinstance(part, str) for part in position)
+        if sort == "name"
+        else len(position) == 3
+        and isinstance(position[0], bool)
+        and all(isinstance(part, str) for part in position[1:])
+    )
+    if not valid:
+        raise InvalidChatListCursor("Malformed chat list cursor")
+    return position
+
+
+def query_chat_list(
+    store: BackendDocumentStore,
+    view: ChatListView,
+    *,
+    cursor: str | None = None,
+    limit: int = CHAT_LIST_PAGE_SIZE,
+) -> ChatListPage:
+    """One page of the conversation list, read from session documents only."""
+    after = _decode_list_cursor(view.sort, cursor) if cursor else None
+    rows, total = store.query_session_rows(
+        SessionRowQuery(
+            filter=view.filter,
+            sort=view.sort,
+            q=view.q.strip(),
+            source=view.source,
+            thread_ids=tuple(view.thread_ids),
+        ),
+        after=after,
+        limit=limit + 1,
+    )
+    page = rows[:limit]
+    return ChatListPage(
+        view=view,
+        rows=[chat_list_row(row.payload) for row in page],
+        total=total,
+        next_cursor=(
+            _encode_list_cursor(view.sort, page[-1].position)
+            if len(rows) > limit and page
+            else None
+        ),
+    )
+
+
+def get_chat_list_row(store: BackendDocumentStore, thread_id: str) -> ChatListRow | None:
+    payload = _session_payload(store, thread_id)
+    return None if payload is None else chat_list_row(payload)
+
+
+def backfill_session_previews(store: BackendDocumentStore) -> int:
+    """Store ``preview`` on sessions written before it existed; returns how many changed.
+
+    Reads each such chat's checkpoint once. A chat whose history is unreachable
+    is left for the next start; one with no messages gets an empty preview.
+    """
+    backfilled = 0
+    for key, document in store.list_documents(PROGENA_STATE_PREFIX, SESSION_KEY_PREFIX):
         payload = document.payload
-        thread_id = payload["thread_id"]
-        if payload["archived"] and not include_archived:
+        if not isinstance(payload, dict) or "preview" in payload:
             continue
         try:
-            snapshot = snapshots_by_thread_id.get(thread_id)
-            if snapshot is None:
-                snapshot = store.get_checkpoint_thread_snapshot(thread_id)
-            history_unavailable = snapshot is not None and not snapshot.messages_available
+            snapshot = store.get_checkpoint_thread_snapshot(key.removeprefix(SESSION_KEY_PREFIX))
         except RuntimeUnavailable:
-            snapshot = None
-            history_unavailable = True
-        messages = _messages_from_checkpoint(snapshot)
-        sessions.append(
-            _summary_from_session(
-                payload,
-                messages=messages,
-                usage_totals=_usage_totals_from_checkpoint(snapshot),
-                history_unavailable=history_unavailable,
-            )
+            continue
+        if snapshot is not None and not snapshot.messages_available:
+            continue
+        preview = next(
+            (
+                text
+                for message in reversed(_messages_from_checkpoint(snapshot))
+                if message.role in {"user", "assistant"}
+                and (text := session_preview(message.content))
+            ),
+            "",
         )
-
-    sessions.sort(key=lambda item: (item.pinned, item.last_activity or ""), reverse=True)
-    return sessions
+        if store.merge_document(PROGENA_STATE_PREFIX, key, {"preview": preview}):
+            backfilled += 1
+    return backfilled
 
 
 def get_chat_detail(
@@ -1058,30 +1163,6 @@ def get_chat_detail(
         messages=messages,
         summary_markers=summary_markers,
         background_workflow_run_ids=store.list_active_workflow_run_ids(thread_id),
-    )
-
-
-def get_chat_summary(store: BackendDocumentStore, thread_id: str) -> ChatSessionSummary | None:
-    """The sidebar summary of one session, with history read best-effort.
-
-    Used by the document-event handler: a runtime outage marks the history
-    unavailable (as the roster does) instead of failing event dispatch.
-    """
-    payload = _session_payload(store, thread_id)
-    if payload is None:
-        return None
-    try:
-        snapshot = store.get_checkpoint_thread_snapshot(thread_id)
-        history_unavailable = snapshot is not None and not snapshot.messages_available
-    except RuntimeUnavailable:
-        snapshot = None
-        history_unavailable = True
-    messages = _messages_from_checkpoint(snapshot)
-    return _summary_from_session(
-        payload,
-        messages=messages,
-        usage_totals=_usage_totals_from_checkpoint(snapshot),
-        history_unavailable=history_unavailable,
     )
 
 

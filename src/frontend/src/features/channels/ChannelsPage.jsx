@@ -24,7 +24,7 @@ import { useSnapshotSave } from '../../hooks/useSnapshotSave';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
 import { UI_EVENT } from '../../realtime/eventVocabulary';
-import { selectChatSessions } from '../chat/state/chats';
+import { fetchChatSessions, selectChatRowsById, selectChatSourceTotals } from '../chat/state/chats';
 import {
   fetchChannels, patchChannel, reconnectChannel, selectChannels, selectChannelsState,
   selectChannelTest, testChannel,
@@ -330,7 +330,7 @@ function ChannelDetails({ channel, sessions, channelsUrl, connected, credentialS
         <div className="agents-metrics">
           <MetricCard label="Inbound" value={Number(channel.stats?.inbound || 0).toLocaleString()} detail="since backend start" />
           <MetricCard label="Outbound" value={Number(channel.stats?.outbound || 0).toLocaleString()} detail="since backend start" />
-          <MetricCard label="Conversations" value={channelSessions.length} detail="channel sessions" />
+          <MetricCard label="Conversations" value={Number(channel.conversationCount ?? channelSessions.length).toLocaleString()} detail="channel sessions" />
           <MetricCard label="Status" value={status.label} detail={channel.status_detail || 'Current connection state'} />
         </div>
         <section className="agents-section">
@@ -407,16 +407,37 @@ export default function ChannelsPage() {
   const connected = useSelector(selectRealtimeStreamReady);
   const channels = useSelector(selectChannels);
   const channelState = useSelector(selectChannelsState);
-  const sessions = useSelector(selectChatSessions);
+  const chatRowsById = useSelector(selectChatRowsById);
+  const chatSourceTotals = useSelector(selectChatSourceTotals);
+  const sessions = useMemo(() => Object.values(chatRowsById), [chatRowsById]);
   const enrichedChannels = useMemo(() => channels.map((channel) => ({
     ...channel,
-    conversationCount: sessions.filter((session) => session.source === channel.session_source).length,
-  })), [channels, sessions]);
-  const { filter, groups, search, selected, setFilter, setSearch, setSelectedId, visible } = useListSelection(enrichedChannels, { getId: channelId, match: matchesChannel, groupBy: byCategory });
+    conversationCount: chatSourceTotals[channel.session_source] ?? 0,
+  })), [channels, chatSourceTotals]);
+  const { filter, groups, search, selected, setFilter, setSearch, setSelectedId, visible } = useListSelection(
+    enrichedChannels,
+    { getId: channelId, match: matchesChannel, groupBy: byCategory },
+  );
 
   useEffect(() => {
     if (connected) dispatch(fetchChannels({ channelsUrl }));
   }, [channelsUrl, connected, dispatch]);
+  const sessionSourcesKey = useMemo(
+    () => [...new Set(channels.map((channel) => channel.session_source).filter(Boolean))].sort().join('\u0000'),
+    [channels],
+  );
+  useEffect(() => {
+    if (!connected) return;
+    for (const source of sessionSourcesKey.split('\u0000').filter(Boolean)) {
+      dispatch(fetchChatSessions({
+        chatsUrl: getApiUrl('chats'),
+        view: { q: '', sort: 'recent', filter: 'all' },
+        source,
+        limit: 200,
+        lookup: true,
+      }));
+    }
+  }, [connected, dispatch, getApiUrl, sessionSourcesKey]);
 
   return (
     <PageShell>

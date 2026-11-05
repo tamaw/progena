@@ -698,12 +698,16 @@ async def test_document_write_node_with_nothing_to_write_completes(store):
 
 
 def test_in_memory_session_turn_updates_log_no_event_like_postgres():
-    """Every turn rewrites content/last_activity; only real edits are events."""
+    """Every turn rewrites content/preview/last_activity; only real edits are events."""
     store = InMemoryDocumentStore()
     key = f"{SESSION_KEY_PREFIX}t-noise"
     session = {"id": "t-noise", "title": "New chat", "content": "", "last_activity": "t0"}
     store.save_document(PROGENA_STATE_PREFIX, key, session)
-    store.merge_document(PROGENA_STATE_PREFIX, key, {"content": "<user> hi", "last_activity": "t1"})
+    store.merge_document(
+        PROGENA_STATE_PREFIX,
+        key,
+        {"content": "<user> hi", "preview": "hi", "last_activity": "t1"},
+    )
     store.save_document(
         PROGENA_STATE_PREFIX, key, {**session, "content": "x", "last_activity": "t2"}
     )

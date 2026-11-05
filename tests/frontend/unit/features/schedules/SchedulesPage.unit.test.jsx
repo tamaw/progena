@@ -175,10 +175,6 @@ it('keeps a deep link that a cached list lacks until this visit’s refresh sett
     reducer: { realtime: realtimeReducer, uiData: uiDataReducer, editorDrafts: editorDraftsReducer },
   });
   store.dispatch(realtimeConnected());
-  store.dispatch(applyUiEvent({
-    type: 'chat.sessions.snapshot',
-    payload: { sessions: [] },
-  }));
   // Hydrated by an earlier visit, before schedule "b" was created elsewhere.
   store.dispatch(applyUiEvent({
     type: 'schedule.snapshot',
@@ -257,8 +253,8 @@ it('retargets a schedule only when the destination changes', async () => {
     },
   }));
   store.dispatch(applyUiEvent({
-    type: 'chat.sessions.snapshot',
-    payload: { sessions: [{ thread_id: 'chat-a', title: 'Operations' }] },
+    type: 'chat.list.row.upserted',
+    payload: { row: { thread_id: 'chat-a', title: 'Operations' } },
   }));
   await act(async () => renderSchedules(store, '/schedules/schedule-a'));
   const destinationSection = Array.from(host.querySelectorAll('.agents-section'))

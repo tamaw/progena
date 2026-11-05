@@ -977,7 +977,7 @@ class RuntimeChatService:
                 # Only remove an exact checkpointed prefix. If the stream and
                 # checkpoint disagree, preserve the visible partial response.
                 if committed_text and partial_text.startswith(committed_text):
-                    partial_text = partial_text[len(committed_text):]
+                    partial_text = partial_text[len(committed_text) :]
             message = AIMessage(
                 id=f"msg_{response_id}",
                 content=partial_text,
@@ -999,7 +999,7 @@ class RuntimeChatService:
             return []
 
     def _fire_and_forget_session_merge(self, thread_id: str) -> None:
-        """Re-render the thread and merge ``content``/``last_activity`` into the session row.
+        """Re-render the thread and merge ``content``/``preview``/``last_activity`` into its session.
 
         Renders of one thread never overlap: a turn finishing while its thread
         renders queues one more render, so the last merge reflects the last turn.

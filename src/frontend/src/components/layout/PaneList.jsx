@@ -276,6 +276,7 @@ export function PaneListRows({
     <PaneListGroupHeader title={getGroupTitle(group)} count={groupItems.length} />
   ),
   className = '',
+  onScroll,
 }) {
   const collapseIfNarrow = useContext(PaneAutoCollapseCtx);
   const rows = useMemo(() => {
@@ -315,6 +316,7 @@ export function PaneListRows({
     <div
       className={`sess-list__scroll ${className}`.trim()}
       onClick={collapseIfNarrow ?? undefined}
+      onScroll={onScroll}
     >
       <div className="pane-list-rows">
         {rows.map((row) => (

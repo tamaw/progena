@@ -60,6 +60,40 @@ def _create_session_document(store, thread_id, title="New chat", **extra):
     )
 
 
+def _stream_events(queue: asyncio.Queue) -> list[Any]:
+    return [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
+
+
+def _select_chat(client, ui_stream, thread_id: str, request_id: str = "select") -> Any:
+    """Open a chat as tab ``tab-1`` and return its one targeted selection event."""
+    _stream_events(ui_stream)
+    response = client.get(
+        f"/api/ui/chats/{thread_id}?client_id=tab-1", headers={"X-Operation-Id": request_id}
+    )
+    assert_acknowledged(response, ["chat.session.selected"], request_id=request_id)
+    [selected] = [
+        event
+        for event in _stream_events(ui_stream)
+        if event.payload.get("request_id") == request_id
+    ]
+    assert selected.type == "chat.session.selected"
+    return selected
+
+
+def _list_chats(client, ui_stream, query: str = "", request_id: str = "list") -> Any:
+    _stream_events(ui_stream)
+    response = client.get(
+        f"/api/ui/chats?client_id=tab-1{query}", headers={"X-Operation-Id": request_id}
+    )
+    assert response.status_code == 202, response.text
+    [page] = [
+        event
+        for event in _stream_events(ui_stream)
+        if event.payload.get("request_id") == request_id
+    ]
+    return page
+
+
 @pytest.fixture
 def client():
     """Create a test client."""
@@ -73,6 +107,14 @@ def clear_thread_registry():
     clear_threads()
     yield
     clear_threads()
+
+
+@pytest.fixture(autouse=True)
+def clear_chat_list_state():
+    """Opening a chat registers task interest; sent rows are remembered for dedupe."""
+    yield
+    chat_routes.chat_background_tasks.background_task_events.interests.clear()
+    chat_routes._sent_chat_list_rows.clear()
 
 
 @pytest.fixture
@@ -188,7 +230,7 @@ class TestUIRoutes:
         assert envelope.type == "mcp.snapshot"
         assert isinstance(envelope.payload["items"], list)
 
-    def test_chat_endpoints_read_session_documents(self, client, document_store):
+    def test_chat_endpoints_read_session_documents(self, client, document_store, ui_stream):
         _create_session_document(document_store, "thread-1", "Backend chat")
         thread_id = "thread-1"
 
@@ -200,7 +242,7 @@ class TestUIRoutes:
         )
         assert_acknowledged(
             patch_response,
-            ["chat.session.metadata.updated", "chat.sessions.snapshot"],
+            ["chat.list.row.upserted"],
             request_id=patch_request_id,
             check_request_id_header=True,
         )
@@ -213,22 +255,35 @@ class TestUIRoutes:
         assert stored.payload["archived"] is True
 
         list_request_id = "chat-list-request"
+        replay_start = len(events_stream._ui_event_replay)
         list_response = client.get(
-            "/api/ui/chats?include_archived=true",
+            "/api/ui/chats?filter=all&client_id=tab-1",
             headers={"X-Operation-Id": list_request_id},
         )
         assert_acknowledged(
             list_response,
-            ["chat.sessions.snapshot"],
+            ["chat.list.loaded"],
             request_id=list_request_id,
             check_request_id_header=True,
         )
 
-        replay = events_stream._ui_event_replay[-1]
-        assert replay.type == "chat.sessions.snapshot"
-        assert replay.payload["request_id"] == list_request_id
-        assert replay.payload["total"] == 1
-        assert replay.payload["sessions"][0]["thread_id"] == thread_id
+        [loaded] = [
+            event
+            for event in _stream_events(ui_stream)
+            if event.payload.get("request_id") == list_request_id
+        ]
+        assert loaded.type == "chat.list.loaded"
+        assert loaded.payload["total"] == 1
+        assert loaded.payload["next_cursor"] is None
+        assert loaded.payload["view"]["filter"] == "all"
+        [row] = loaded.payload["rows"]
+        assert (row["thread_id"], row["pinned"], row["archived"]) == (thread_id, True, True)
+        # The page belongs to the requesting tab: never replayed to others.
+        assert events_stream._ui_event_replay[replay_start:] == []
+
+    def test_chat_list_requires_an_active_stream_and_a_valid_cursor(self, client, ui_stream):
+        assert client.get("/api/ui/chats?client_id=other-tab").status_code == 409
+        assert client.get("/api/ui/chats?client_id=tab-1&cursor=bogus").status_code == 400
 
     @pytest.mark.asyncio
     async def test_concurrent_chat_mutations_emit_their_own_correlated_events(self, document_store):
@@ -296,26 +351,26 @@ class TestUIRoutes:
 
         assert_acknowledged(
             patch_response,
-            ["chat.session.metadata.updated", "chat.sessions.snapshot"],
+            ["chat.list.row.upserted"],
             request_id=patch_request_id,
             check_request_id_header=True,
         )
         assert_acknowledged(
             delete_response,
-            ["chat.session.deleted", "chat.sessions.snapshot"],
+            ["chat.list.row.deleted"],
             request_id=delete_request_id,
             check_request_id_header=True,
         )
         assert missing_response.status_code == 404
         assert_acknowledged(
             empty_response,
-            ["chat.sessions.snapshot"],
+            ["chat.list.row.upserted"],
             request_id=empty_request_id,
             check_request_id_header=True,
         )
         assert_acknowledged(
             idempotent_response,
-            ["chat.sessions.snapshot"],
+            ["chat.list.row.upserted"],
             request_id=idempotent_request_id,
             check_request_id_header=True,
         )
@@ -333,59 +388,56 @@ class TestUIRoutes:
             )
         }
         assert [event.type for event in by_request_id[patch_request_id]] == [
-            "chat.sessions.snapshot",
-            "chat.session.metadata.updated",
+            "chat.list.row.upserted"
         ]
         assert [event.type for event in by_request_id[delete_request_id]] == [
-            "chat.sessions.snapshot",
-            "chat.session.deleted",
+            "chat.list.row.deleted"
         ]
         assert by_request_id[missing_request_id] == []
-        assert [event.type for event in by_request_id[empty_request_id]] == [
-            "chat.sessions.snapshot"
+        assert [event.payload["row"]["thread_id"] for event in by_request_id[empty_request_id]] == [
+            "thread-empty"
         ]
-        assert [event.type for event in by_request_id[idempotent_request_id]] == [
-            "chat.sessions.snapshot"
-        ]
-        patched_session = by_request_id[patch_request_id][1].payload["session"]
-        assert patched_session["thread_id"] == "thread-patch"
-        assert patched_session["title"] == "After"
-        assert patched_session["pinned"] is True
-        assert patched_session["archived"] is True
-        assert by_request_id[delete_request_id][1].payload == {
+        assert [
+            event.payload["row"]["thread_id"] for event in by_request_id[idempotent_request_id]
+        ] == ["thread-idempotent"]
+        patched_row = by_request_id[patch_request_id][0].payload["row"]
+        assert patched_row["thread_id"] == "thread-patch"
+        assert patched_row["title"] == "After"
+        assert patched_row["pinned"] is True
+        assert patched_row["archived"] is True
+        assert by_request_id[delete_request_id][0].payload == {
             "thread_id": "thread-delete",
             "request_id": delete_request_id,
         }
 
-    def test_chat_detail_request_emits_request_scoped_selection_event(self, client, document_store):
-
+    def test_chat_detail_is_one_targeted_event_with_queue_and_background_tasks(
+        self, client, document_store, ui_stream
+    ):
         _create_session_document(document_store, "thread-select", "Selectable chat")
         thread_id = "thread-select"
-        request_id = "chat-detail-request"
+        task_events = chat_routes.chat_background_tasks.background_task_events
+        replay_start = len(events_stream._ui_event_replay)
 
-        detail_response = client.get(
-            f"/api/ui/chats/{thread_id}",
-            headers={"X-Operation-Id": request_id},
-        )
+        try:
+            selected = _select_chat(client, ui_stream, thread_id, request_id="chat-detail")
 
-        assert_acknowledged(
-            detail_response,
-            ["chat.session.upserted", "chat.session.selected"],
-            request_id=request_id,
-            check_request_id_header=True,
-        )
-        upserted = events_stream._ui_event_replay[-2]
-        selected = events_stream._ui_event_replay[-1]
-        assert upserted.type == "chat.session.upserted"
-        assert upserted.payload["request_id"] == request_id
-        assert upserted.payload["session"]["thread_id"] == thread_id
-        assert selected.type == "chat.session.selected"
-        assert selected.payload["request_id"] == request_id
-        assert selected.session_id == thread_id
-        assert selected.payload["session"]["thread_id"] == thread_id
+            assert selected.session_id == thread_id
+            assert selected.payload["session"]["thread_id"] == thread_id
+            # The runtime client is absent in tests: the page loads its queue itself.
+            assert selected.payload["queue"] is None
+            assert selected.payload["background_tasks"] == {
+                "thread_id": thread_id,
+                "tasks": [],
+                "revision": 0,
+            }
+            # Opening the chat registered this tab's background-task interest.
+            assert thread_id in task_events.interests["tab-1"]
+            assert events_stream._ui_event_replay[replay_start:] == []
+        finally:
+            task_events.unsubscribe("tab-1")
 
     def test_chat_detail_reports_interruption_only_for_an_unfinished_turn(
-        self, client, document_store, monkeypatch
+        self, client, document_store, monkeypatch, ui_stream
     ):
         """A checkpoint is read only when the saved transcript ends mid-turn."""
         reads: list[str] = []
@@ -431,10 +483,8 @@ class TestUIRoutes:
                 )
             )
 
-        client.get("/api/ui/chats/thread-cut", headers={"X-Operation-Id": "cut"})
-        cut = events_stream._ui_event_replay[-1].payload["session"]
-        client.get("/api/ui/chats/thread-done", headers={"X-Operation-Id": "done"})
-        done = events_stream._ui_event_replay[-1].payload["session"]
+        cut = _select_chat(client, ui_stream, "thread-cut", "cut").payload["session"]
+        done = _select_chat(client, ui_stream, "thread-done", "done").payload["session"]
 
         assert cut["interruption"] == {"next": ["tools"], "at": "2026-10-28T10:00:00Z"}
         assert done["interruption"] is None
@@ -464,7 +514,7 @@ class TestUIRoutes:
         assert chat_routes._interruption_from_checkpoint_state(checkpoint, live) == expected
         assert chat_routes._interruption_from_checkpoint_state(checkpoint, None) is None
 
-    def test_chat_detail_rehydrates_live_response_activity(self, client, document_store):
+    def test_chat_detail_rehydrates_live_response_activity(self, client, document_store, ui_stream):
         """A selected thread recovers live activity without persisting transient state."""
 
         thread_id = "thread-live-delegation"
@@ -472,18 +522,9 @@ class TestUIRoutes:
         _create_session_document(document_store, thread_id, "Delegating chat")
         chat_responses._register_response_activity(response_request_id, thread_id)
         try:
-            generating_response = client.get(
-                f"/api/ui/chats/{thread_id}",
-                headers={"X-Operation-Id": "generating-detail-request"},
+            generating_selected = _select_chat(
+                client, ui_stream, thread_id, "generating-detail-request"
             )
-
-            assert_acknowledged(
-                generating_response,
-                ["chat.session.upserted", "chat.session.selected"],
-                request_id="generating-detail-request",
-                check_request_id_header=True,
-            )
-            generating_selected = events_stream._ui_event_replay[-1]
             assert (
                 generating_selected.payload["session"]["active_request_id"] == response_request_id
             )
@@ -501,42 +542,26 @@ class TestUIRoutes:
                     },
                 },
             )
-            delegating_response = client.get(
-                f"/api/ui/chats/{thread_id}",
-                headers={"X-Operation-Id": "delegating-detail-request"},
+            delegating_selected = _select_chat(
+                client, ui_stream, thread_id, "delegating-detail-request"
             )
-
-            assert_acknowledged(
-                delegating_response,
-                ["chat.session.upserted", "chat.session.selected"],
-                request_id="delegating-detail-request",
-                check_request_id_header=True,
-            )
-            delegating_selected = events_stream._ui_event_replay[-1]
             assert (
                 delegating_selected.payload["session"]["active_request_id"] == response_request_id
             )
             assert delegating_selected.payload["session"]["activity"] == "delegating"
 
             chat_responses._clear_response_activity(response_request_id)
-            terminal_response = client.get(
-                f"/api/ui/chats/{thread_id}",
-                headers={"X-Operation-Id": "terminal-detail-request"},
+            terminal_selected = _select_chat(
+                client, ui_stream, thread_id, "terminal-detail-request"
             )
-
-            assert_acknowledged(
-                terminal_response,
-                ["chat.session.upserted", "chat.session.selected"],
-                request_id="terminal-detail-request",
-                check_request_id_header=True,
-            )
-            terminal_selected = events_stream._ui_event_replay[-1]
             assert terminal_selected.payload["session"]["active_request_id"] is None
             assert terminal_selected.payload["session"]["activity"] is None
         finally:
             chat_responses._clear_response_activity(response_request_id)
 
-    def test_chat_card_rehydrates_history_from_checkpoint_thread(self, client, document_store):
+    def test_chat_card_rehydrates_history_from_checkpoint_thread(
+        self, client, document_store, ui_stream
+    ):
         document_store.upsert_checkpoint_thread_snapshot(
             CheckpointThreadSnapshot(
                 thread_id="thread_sess-history",
@@ -565,40 +590,32 @@ class TestUIRoutes:
             )
         )
         _create_session_document(
-            document_store, "thread_sess-history", first_message="count backwards"
+            document_store,
+            "thread_sess-history",
+            first_message="count backwards",
+            preview="99, 98, 97",
         )
         thread_id = "thread_sess-history"
 
-        list_response = client.get("/api/ui/chats?include_archived=true")
-        detail_response = client.get(f"/api/ui/chats/{thread_id}?request_id=request-history")
-
-        assert list_response.status_code == 202
-
-        replay_list = events_stream._ui_event_replay[-3]
-        assert replay_list.type == "chat.sessions.snapshot"
         listed = next(
-            session
-            for session in replay_list.payload["sessions"]
-            if session["thread_id"] == thread_id
+            row
+            for row in _list_chats(client, ui_stream, "&filter=all").payload["rows"]
+            if row["thread_id"] == thread_id
         )
         assert listed["title"] == "count backwards"
-        assert listed["message_count"] == 2
         assert listed["preview"] == "99, 98, 97"
 
-        assert detail_response.status_code == 202
-        replay_detail_upsert = events_stream._ui_event_replay[-2]
-        assert replay_detail_upsert.type == "chat.session.upserted"
-        detail = replay_detail_upsert.payload
-        assert detail["session"]["thread_id"] == "thread_sess-history"
-        assert [message["content"] for message in detail["session"]["messages"]] == [
+        session = _select_chat(client, ui_stream, thread_id).payload["session"]
+        assert session["thread_id"] == "thread_sess-history"
+        assert [message["content"] for message in session["messages"]] == [
             "count backwards",
             "99, 98, 97",
         ]
-        assert detail["session"]["messages"][1]["reasoning_text"] == "Need to count down."
-        assert detail["session"]["messages"][1]["reasoning_token_count"] == 3
-        assert detail["session"]["messages"][1]["token_count"] == 12
+        assert session["messages"][1]["reasoning_text"] == "Need to count down."
+        assert session["messages"][1]["reasoning_token_count"] == 3
+        assert session["messages"][1]["token_count"] == 12
 
-    def test_chat_detail_caps_messages_and_flags_has_more(self, client, document_store):
+    def test_chat_detail_caps_messages_and_flags_has_more(self, client, document_store, ui_stream):
         messages = []
         for index in range(60):
             role = "human" if index % 2 == 0 else "ai"
@@ -614,12 +631,7 @@ class TestUIRoutes:
         _create_session_document(document_store, "thread_sess-paged")
         thread_id = "thread_sess-paged"
 
-        detail_response = client.get(f"/api/ui/chats/{thread_id}")
-        assert detail_response.status_code == 202
-
-        replay_selected = events_stream._ui_event_replay[-1]
-        assert replay_selected.type == "chat.session.selected"
-        session = replay_selected.payload["session"]
+        session = _select_chat(client, ui_stream, thread_id).payload["session"]
         assert session["has_more_messages"] is True
         assert len(session["messages"]) == 50
         assert session["messages"][0]["content"] == "message 10"
@@ -658,7 +670,7 @@ class TestUIRoutes:
         assert page_messages[-1]["content"] == "message 9"
 
     def test_deleted_chat_stays_deleted_despite_live_runtime_state(
-        self, client, document_store, monkeypatch
+        self, client, document_store, monkeypatch, ui_stream
     ):
 
         thread_id = "thread-deleted"
@@ -677,18 +689,14 @@ class TestUIRoutes:
         monkeypatch.setattr(
             "src.backend.monitoring.state.get_state_reader", lambda: _LiveStateReader()
         )
-        event_start = len(events_stream._ui_event_replay)
-
-        assert client.get(f"/api/ui/chats/{thread_id}").status_code == 404
+        assert client.get(f"/api/ui/chats/{thread_id}?client_id=tab-1").status_code == 404
         assert client.get(f"/api/ui/chats/{thread_id}/messages").status_code == 404
         assert not [
-            event
-            for event in events_stream._ui_event_replay[event_start:]
-            if event.type == "chat.session.upserted"
+            event for event in _stream_events(ui_stream) if event.type == "chat.session.selected"
         ]
 
-    def test_chat_detail_reports_runtime_outage_instead_of_empty_chat(
-        self, client, document_store, monkeypatch
+    def test_chat_detail_reports_runtime_outage_but_the_list_still_renders(
+        self, client, document_store, monkeypatch, ui_stream
     ):
         from src.backend.integrations.runtime_history import RuntimeUnavailable
 
@@ -699,10 +707,11 @@ class TestUIRoutes:
 
         monkeypatch.setattr(document_store, "get_checkpoint_thread_snapshot", _unavailable)
 
-        response = client.get("/api/ui/chats/thread-out")
+        response = client.get("/api/ui/chats/thread-out?client_id=tab-1")
         assert response.status_code == 503
-        # The list still renders (metadata title) while the runtime is down.
-        assert client.get("/api/ui/chats").status_code == 202
+        # Rows are the session documents alone, so the runtime is not involved.
+        rows = _list_chats(client, ui_stream).payload["rows"]
+        assert [row["title"] for row in rows] == ["Has history"]
 
     def test_rename_is_accepted_while_the_runtime_is_down(
         self, client, document_store, monkeypatch
@@ -725,49 +734,88 @@ class TestUIRoutes:
         assert stored.payload["title"] == "New"
         assert client.patch("/api/ui/chats/missing", json={"title": "x"}).status_code == 404
 
-    async def test_session_event_publishes_metadata_while_runtime_is_down(
-        self, document_store, monkeypatch
-    ):
-        """A rename during a runtime outage still reaches the sidebar, and the
-        handler does not raise (a raise would stop the event dispatcher)."""
+    async def test_session_document_event_sends_the_current_row_once(self, document_store):
+        """Document events are historical: the row sent is the document as it is
+        now, an uncorrelated repeat of an unchanged row is not resent, and a
+        delete sends only the id."""
         from src.backend.events.documents import TypedDocumentEvent
-        from src.backend.integrations.runtime_history import RuntimeUnavailable
         from src.backend.storage.documents import DocumentEvent
 
-        _create_session_document(document_store, "thread-down", "Renamed")
-
-        def _unavailable(*_args: Any, **_kwargs: Any) -> Any:
-            raise RuntimeUnavailable("runtime unreachable")
-
-        monkeypatch.setattr(document_store, "get_checkpoint_thread_snapshot", _unavailable)
-        key = f"{SESSION_KEY_PREFIX}thread-down"
-        payload = document_store.get_document(PROGENA_STATE_PREFIX, key).payload
-        event = DocumentEvent(
-            seq=1,
-            txid=1,
-            prefix=PROGENA_STATE_PREFIX,
-            key=key,
-            op="updated",
-            before=payload,
-            after=payload,
-            origin=None,
-            created_at=datetime.now(UTC),
+        _create_session_document(document_store, "thread-row", "Old title")
+        key = f"{SESSION_KEY_PREFIX}thread-row"
+        historical = document_store.get_document(PROGENA_STATE_PREFIX, key).payload
+        document_store.merge_document(
+            PROGENA_STATE_PREFIX, key, {"title": "New title", "preview": "latest"}
         )
+
+        def typed(op: str) -> TypedDocumentEvent:
+            event = DocumentEvent(
+                seq=1,
+                txid=1,
+                prefix=PROGENA_STATE_PREFIX,
+                key=key,
+                op=op,
+                before=historical,
+                after=None if op == "deleted" else historical,
+                origin=None,
+                created_at=datetime.now(UTC),
+            )
+            return TypedDocumentEvent(event=event, document_type=None, output=None)
+
         event_start = len(events_stream._ui_event_replay)
-        await chat_routes._publish_chat_session_document_event(
-            TypedDocumentEvent(event=event, document_type=None, output=None)
-        )
-        updated = [
-            envelope
-            for envelope in events_stream._ui_event_replay[event_start:]
-            if envelope.type == "chat.session.metadata.updated"
-        ]
-        assert len(updated) == 1
-        session = updated[0].payload["session"]
-        assert session["title"] == "Renamed"
-        assert session["history_unavailable"] is True
+        await chat_routes._publish_chat_session_document_event(typed("updated"))
+        await chat_routes._publish_chat_session_document_event(typed("updated"))
+        await chat_routes._publish_chat_session_document_event(typed("deleted"))
 
-    async def test_slow_chat_read_does_not_block_other_requests(self, document_store, monkeypatch):
+        emitted = events_stream._ui_event_replay[event_start:]
+        assert [envelope.type for envelope in emitted] == [
+            "chat.list.row.upserted",
+            "chat.list.row.deleted",
+        ]
+        row = emitted[0].payload["row"]
+        assert (row["thread_id"], row["title"], row["preview"]) == (
+            "thread-row",
+            "New title",
+            "latest",
+        )
+        assert emitted[1].payload == {"thread_id": "thread-row"}
+
+    async def test_every_turn_session_write_reaches_the_list_through_the_store_watcher(
+        self, document_store, monkeypatch, tmp_path
+    ):
+        """Per-turn content/preview writes log no document event; the store
+        notification must still reach the watcher and send the row."""
+        reader = StateReader(document_store=document_store, logs_dir=tmp_path)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: reader)
+        reader.add_watcher(monitoring_status._queue_state_watch_status)
+        _create_session_document(document_store, "thread-turn", "Turning")
+        reader._last_snapshot = reader.get_snapshot()
+        document_store.merge_document(
+            PROGENA_STATE_PREFIX,
+            f"{SESSION_KEY_PREFIX}thread-turn",
+            {"preview": "the answer", "last_activity": "2030-01-01T00:00:00Z", "content": "x"},
+        )
+        queue: asyncio.Queue = asyncio.Queue()
+        events_stream._ui_stream_subscribers[queue] = None
+        try:
+            reader._on_store_change(
+                json.dumps({"prefix": PROGENA_STATE_PREFIX, "key": "session:thread-turn"})
+            )
+            await asyncio.gather(*monitoring_status._active_chat_list_row_tasks)
+        finally:
+            events_stream._ui_stream_subscribers.pop(queue, None)
+
+        [row_event] = [e for e in _stream_events(queue) if e.type == "chat.list.row.upserted"]
+        row = row_event.payload["row"]
+        assert (row["thread_id"], row["preview"], row["last_activity"]) == (
+            "thread-turn",
+            "the answer",
+            "2030-01-01T00:00:00Z",
+        )
+
+    async def test_slow_chat_read_does_not_block_other_requests(
+        self, document_store, monkeypatch, ui_stream
+    ):
         import time
 
         import httpx
@@ -777,10 +825,13 @@ class TestUIRoutes:
             return None
 
         monkeypatch.setattr(document_store, "get_checkpoint_thread_snapshot", _slow_snapshot)
+        _create_session_document(document_store, "thread-slow")
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
             started = time.monotonic()
-            slow = asyncio.create_task(async_client.get("/api/ui/chats/thread-slow"))
+            slow = asyncio.create_task(
+                async_client.get("/api/ui/chats/thread-slow?client_id=tab-1")
+            )
             await asyncio.sleep(0.1)  # let the slow read start
             fast = await async_client.get("/api/ui/preferences")
             fast_done_after = time.monotonic() - started
@@ -790,7 +841,7 @@ class TestUIRoutes:
         # above) could finish before it did, ~1s in.
         assert fast_done_after < 0.6
 
-    def test_chat_list_hides_schedule_activity_threads(self, client, document_store):
+    def test_chat_list_hides_schedule_activity_threads(self, client, document_store, ui_stream):
         document_store.upsert_checkpoint_thread_snapshot(
             CheckpointThreadSnapshot(
                 thread_id="2026-06-19T09:00:00+00:00",
@@ -806,15 +857,10 @@ class TestUIRoutes:
                 ],
             )
         )
-        list_response = client.get("/api/ui/chats?include_archived=true")
-        assert list_response.status_code == 202
+        rows = _list_chats(client, ui_stream, "&filter=all").payload["rows"]
+        assert all(row["thread_id"] != "2026-06-19T09:00:00+00:00" for row in rows)
 
-        assert all(
-            session["thread_id"] != "2026-06-19T09:00:00+00:00"
-            for session in events_stream._ui_event_replay[-1].payload["sessions"]
-        )
-
-    def test_chat_delete_removes_session_document(self, client, document_store):
+    def test_chat_delete_removes_session_document(self, client, document_store, ui_stream):
         _create_session_document(document_store, "thread-delete", "Disposable chat")
         thread_id = "thread-delete"
 
@@ -825,24 +871,16 @@ class TestUIRoutes:
             document_store.get_document(PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}")
             is None
         )
-        list_response = client.get("/api/ui/chats?include_archived=true")
-        assert list_response.status_code == 202
+        rows = _list_chats(client, ui_stream, "&filter=all").payload["rows"]
+        assert all(row["thread_id"] != thread_id for row in rows)
 
-        assert all(
-            session["thread_id"] != thread_id
-            for session in events_stream._ui_event_replay[-1].payload["sessions"]
-        )
-
-    def test_chat_list_shows_session_documents(self, client, document_store):
+    def test_chat_list_shows_session_documents(self, client, document_store, ui_stream):
         _create_session_document(document_store, "thread_sess-1", "Chat One")
         _create_session_document(document_store, "thread_sess-2", "Chat Two")
 
-        list_response = client.get("/api/ui/chats?include_archived=true")
-        assert list_response.status_code == 202
-
-        sessions = events_stream._ui_event_replay[-1].payload["sessions"]
-        assert len(sessions) == 2
-        assert {s["thread_id"] for s in sessions} == {"thread_sess-1", "thread_sess-2"}
+        page = _list_chats(client, ui_stream, "&filter=all").payload
+        assert page["total"] == 2
+        assert {row["thread_id"] for row in page["rows"]} == {"thread_sess-1", "thread_sess-2"}
 
     def test_chat_patch_updates_session_document(
         self,

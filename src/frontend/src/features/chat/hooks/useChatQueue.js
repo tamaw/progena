@@ -32,8 +32,14 @@ function queueUrl(getApiUrl, conversationId) {
   return `${getApiUrl('/api/chat/sessions').replace(/\/$/, '')}/${encodeURIComponent(conversationId)}/queue`;
 }
 
-/** Queue mutations complete through correlated events, not the HTTP acknowledgement. */
-export function useChatQueue(conversationId) {
+/**
+ * Queue mutations complete through correlated events, not the HTTP acknowledgement.
+ *
+ * `detailQueue` is the queue carried by this conversation's opened detail:
+ * `undefined` until that detail arrives, `null` when the runtime could not
+ * supply it (then the hook requests it), or the snapshot itself.
+ */
+export function useChatQueue(conversationId, detailQueue) {
   const { getApiUrl } = useConfig();
   const { show } = useNotifications();
   const [snapshot, setSnapshot] = useState(null);
@@ -57,8 +63,9 @@ export function useChatQueue(conversationId) {
   useEffect(() => {
     commandRef.current = null;
     revisionRef.current = -1;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- a queue command belongs only to its originating conversation.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a pending queue command belongs only to its originating conversation.
     setPendingMutation(null);
+    setSnapshot(null);
     if (!conversationId) return undefined;
 
     const unsubscribe = subscribeUiEvent((event) => {
@@ -70,8 +77,10 @@ export function useChatQueue(conversationId) {
         void requestSnapshot(true);
         return;
       }
-      if (event?.type !== UI_EVENT.CHAT_QUEUE_UPDATED) return;
-      const next = normalizeSnapshot(event.payload, conversationId);
+      const payload = event?.type === UI_EVENT.CHAT_SESSION_SELECTED
+        ? event.payload?.queue
+        : event?.type === UI_EVENT.CHAT_QUEUE_UPDATED ? event.payload : null;
+      const next = normalizeSnapshot(payload, conversationId);
       if (!next) return;
       if (next.revision > revisionRef.current) {
         revisionRef.current = next.revision;
@@ -82,9 +91,20 @@ export function useChatQueue(conversationId) {
         setPendingMutation(null);
       }
     });
-    void requestSnapshot(true);
     return unsubscribe;
   }, [conversationId, requestSnapshot]);
+
+  useEffect(() => {
+    if (detailQueue === undefined) return;
+    const next = normalizeSnapshot(detailQueue, conversationId);
+    if (next && next.revision > revisionRef.current) {
+      revisionRef.current = next.revision;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- detail snapshots are the initial queue state for this conversation.
+      setSnapshot(next);
+      return;
+    }
+    if (!next) void requestSnapshot(true);
+  }, [conversationId, detailQueue, requestSnapshot]);
 
   const dispatchAction = useCallback(async ({ action, messageId, order }) => {
     if (!conversationId || !activeSnapshot || isMutating || commandRef.current) return false;

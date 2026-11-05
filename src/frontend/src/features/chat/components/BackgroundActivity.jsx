@@ -92,7 +92,7 @@ function useTrackedWorkflowRows({ messages, liveActivity, workflowRunIds, runsUr
 }
 
 function useActivities({
-  messages, liveTurnStore, threadId, workflowRunIds, runsUrl, hydrateRuns, asyncTaskRecords, tasksUrl, subscribeTasks,
+  messages, liveTurnStore, threadId, workflowRunIds, runsUrl, hydrateRuns, asyncTaskRecords, tasksUrl, subscribeTasks, serverRegistered,
 }) {
   const liveActivity = useLiveBackgroundActivity(liveTurnStore);
   const { rows, runRequests, refresh, runIdsKey } = useTrackedWorkflowRows({
@@ -110,8 +110,8 @@ function useActivities({
   }, [runIdsKey, runsUrl]);
   useEffect(() => {
     if (!subscribeTasks || !tasksUrl) return undefined;
-    return watchBackgroundTasks(tasksUrl);
-  }, [subscribeTasks, tasksUrl]);
+    return watchBackgroundTasks(tasksUrl, { serverRegistered });
+  }, [serverRegistered, subscribeTasks, tasksUrl]);
   const activities = useMemo(
     () => deriveBackgroundActivities({
       messages,
@@ -251,14 +251,16 @@ function useElapsedClock(active) {
 }
 
 /** Sticky, chat-scoped work that survives a root reply ending. */
-export function BackgroundActivity({ messages, liveTurnStore, threadId, workflowRunIds, runsUrl, chatsUrl }) {
+export function BackgroundActivity({
+  messages, liveTurnStore, threadId, workflowRunIds, runsUrl, chatsUrl, subscribeTasks = false, serverRegistered = false,
+}) {
   const asyncTaskRecords = useSelector((state) => selectBackgroundTasks(state, threadId));
   const tasksUrl = threadId && chatsUrl
     ? `${chatsUrl}/${encodeURIComponent(threadId)}/background-tasks`
     : null;
   const { active, refresh } = useActivities({
     messages, liveTurnStore, threadId, workflowRunIds, runsUrl, hydrateRuns: true,
-    asyncTaskRecords, tasksUrl, subscribeTasks: true,
+    asyncTaskRecords, tasksUrl, subscribeTasks, serverRegistered,
   });
   const now = useElapsedClock(active.length > 0);
   if (!active.length) return null;

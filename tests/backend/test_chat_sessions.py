@@ -8,23 +8,28 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from langchain_core.messages import AIMessage, ToolMessage, messages_from_dict, messages_to_dict
 
 from src.backend.chat.service import (
+    ChatListView,
     ChatPatchRequest,
+    InvalidChatListCursor,
     _extract_progress_log_from_content,
     _messages_from_checkpoint,
     _tool_result_preview,
+    backfill_session_previews,
     delete_session_document,
     get_chat_detail,
-    list_chat_sessions,
     paginate_chat_messages,
     patch_session_document,
+    query_chat_list,
 )
 from src.backend.storage.documents import (
     PROGENA_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
+    PostgresDocumentStore,
 )
 from src.backend.workflows.service import save_workflow_run
 from src.progena.documents.kinds import SESSION_KEY_PREFIX
@@ -71,111 +76,200 @@ def _store_session(store: InMemoryDocumentStore, thread_id: str, **fields) -> No
     store.save_document(PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}", payload)
 
 
-class TestListChatSessions:
-    def test_empty_store_returns_empty_list(self):
-        store = InMemoryDocumentStore()
-        assert list_chat_sessions(store) == []
+def _all_pages(store: InMemoryDocumentStore, view: ChatListView, limit: int) -> list[str]:
+    page = query_chat_list(store, view, limit=limit)
+    seen = [row.thread_id for row in page.rows]
+    while page.next_cursor:
+        page = query_chat_list(store, view, cursor=page.next_cursor, limit=limit)
+        seen += [row.thread_id for row in page.rows]
+    return seen
 
-    def test_reads_session_documents(self):
-        store = InMemoryDocumentStore()
-        _store_session(store, "thread_a", title="Alpha", last_activity="2026-01-02T00:00:00Z")
-        _store_session(store, "thread_b", title="Beta", last_activity="2026-01-01T00:00:00Z")
 
-        sessions = list_chat_sessions(store)
-        assert [s.thread_id for s in sessions] == ["thread_a", "thread_b"]
+@pytest.fixture(params=["memory", "postgres"])
+def list_store(request):
+    """The conversation list is SQL in production; both stores must agree."""
+    if request.param == "memory":
+        yield InMemoryDocumentStore()
+        return
+    store = PostgresDocumentStore(request.getfixturevalue("postgres_url"))
+    store.open()
+    yield store
+    store.close()
 
-    def test_sorts_pinned_first_then_last_activity_desc(self):
-        store = InMemoryDocumentStore()
-        _store_session(store, "old", title="Old", pinned=True, last_activity="2026-01-01T00:00:00Z")
-        _store_session(
-            store, "new", title="New", pinned=False, last_activity="2026-01-03T00:00:00Z"
-        )
-        _store_session(store, "mid", title="Mid", pinned=True, last_activity="2026-01-02T00:00:00Z")
 
-        sessions = list_chat_sessions(store)
-        assert [s.thread_id for s in sessions] == ["mid", "old", "new"]
+class TestChatList:
+    def test_rows_come_from_session_documents_without_reading_checkpoints(self):
+        store = _CountingDocumentStore()
+        _store_session(store, "thread_a", title="Alpha", preview="latest words")
 
-    def test_normalizes_legacy_and_offset_session_timestamps_before_sorting(self):
-        store = InMemoryDocumentStore()
+        page = query_chat_list(store, ChatListView())
+
+        assert store.get_checkpoint_thread_snapshot_calls == 0
+        assert [row.model_dump() for row in page.rows] == [
+            {
+                "thread_id": "thread_a",
+                "title": "Alpha",
+                "source": "ui",
+                "pinned": False,
+                "archived": False,
+                "created_at": "2026-01-01T00:00:00Z",
+                "last_activity": "2026-01-01T00:00:00Z",
+                "preview": "latest words",
+            }
+        ]
+        assert page.total == 1
+        assert page.next_cursor is None
+
+    def test_recent_sorts_pinned_first_then_normalized_last_activity_desc(self, list_store):
+        store = list_store
+        _store_session(store, "old", pinned=True, last_activity="2026-01-01T00:00:00Z")
+        _store_session(store, "new", last_activity="2026-01-03T00:00:00Z")
+        _store_session(store, "mid", pinned=True, last_activity="2026-01-02T00:00:00Z")
         _store_session(
             store,
             "offset_earlier",
             created_at="2026-01-01T00:00:00",
             last_activity="2026-01-02T00:30:00+02:00",
         )
-        _store_session(
-            store,
+        _store_session(store, "utc_later", last_activity="2026-01-01T23:00:00Z")
+
+        page = query_chat_list(store, ChatListView())
+
+        assert [row.thread_id for row in page.rows] == [
+            "mid",
+            "old",
+            "new",
             "utc_later",
-            last_activity="2026-01-01T23:00:00Z",
-        )
+            "offset_earlier",
+        ]
+        offset = page.rows[-1]
+        assert offset.created_at == "2026-01-01T00:00:00Z"
+        assert offset.last_activity == "2026-01-01T22:30:00Z"
 
-        sessions = list_chat_sessions(store)
+    def test_filters_by_archived_state(self, list_store):
+        store = list_store
+        _store_session(store, "archived", archived=True)
+        _store_session(store, "active")
 
-        assert [session.thread_id for session in sessions] == ["utc_later", "offset_earlier"]
-        assert sessions[1].created_at == "2026-01-01T00:00:00Z"
-        assert sessions[1].last_activity == "2026-01-01T22:30:00Z"
+        def ids(list_filter):
+            return {
+                r.thread_id for r in query_chat_list(store, ChatListView(filter=list_filter)).rows
+            }
 
-    def test_filters_archived_by_default(self):
-        store = InMemoryDocumentStore()
-        _store_session(store, "archived", title="Archived", archived=True)
-        _store_session(store, "active", title="Active", archived=False)
+        assert ids("active") == {"active"}
+        assert ids("archived") == {"archived"}
+        assert ids("all") == {"archived", "active"}
 
-        sessions = list_chat_sessions(store)
-        assert [s.thread_id for s in sessions] == ["active"]
-
-    def test_include_archived_shows_all(self):
-        store = InMemoryDocumentStore()
-        _store_session(store, "archived", title="Archived", archived=True)
-        _store_session(store, "active", title="Active", archived=False)
-
-        sessions = list_chat_sessions(store, include_archived=True)
-        assert {s.thread_id for s in sessions} == {"archived", "active"}
-
-    def test_uses_first_message_for_placeholder_title(self):
-        store = InMemoryDocumentStore()
-        store.upsert_checkpoint_thread_snapshot(
-            CheckpointThreadSnapshot(
-                thread_id="thread_msg",
-                checkpoint_id="cp-1",
-                checkpoint_ts="2026-01-01T00:00:00Z",
-                messages=[
-                    {"id": "u1", "type": "human", "content": "Hello world"},
-                ],
-            )
-        )
-        _store_session(store, "thread_msg", title="New chat", first_message="Hello world")
-
-        sessions = list_chat_sessions(store)
-        assert len(sessions) == 1
-        assert sessions[0].title == "Hello world"
-
-    def test_placeholder_title_redacts_secrets_in_the_first_message(self):
-        store = InMemoryDocumentStore()
+    def test_placeholder_title_shows_the_redacted_first_message(self, list_store):
+        store = list_store
         secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789"
         _store_session(store, "thread_key", title="New chat", first_message=f"use {secret} now")
 
-        [session] = list_chat_sessions(store)
-        assert secret not in session.title
-        assert session.title.startswith("use [")
+        [row] = query_chat_list(store, ChatListView()).rows
 
-    def test_counts_messages_from_checkpoint(self):
+        assert secret not in row.title
+        assert row.title.startswith("use [")
+
+    def test_pages_cover_every_row_once_for_both_sorts(self, list_store):
+        store = list_store
+        for index, title in enumerate(["delta", "Alpha", "charlie", "bravo", "echo"]):
+            _store_session(
+                store,
+                f"t{index}",
+                title=title,
+                pinned=index == 3,
+                last_activity=f"2026-01-0{index + 1}T00:00:00Z",
+            )
+        # Same instant and title as t1: the key breaks the tie.
+        _store_session(store, "t5", title="alpha", last_activity="2026-01-02T00:00:00Z")
+
+        recent = _all_pages(store, ChatListView(), limit=2)
+        by_name = _all_pages(store, ChatListView(sort="name"), limit=2)
+
+        assert recent == ["t3", "t4", "t2", "t5", "t1", "t0"]
+        assert by_name == ["t1", "t5", "t3", "t2", "t0", "t4"]
+        assert query_chat_list(store, ChatListView(), limit=2).total == 6
+
+    def test_query_matches_title_first_message_and_preview(self, list_store):
+        store = list_store
+        _store_session(store, "by_title", title="Budget review")
+        _store_session(store, "by_first", first_message="the BUDGET for q3")
+        _store_session(store, "by_preview", title="Plans", preview="see budget.xlsx")
+        _store_session(store, "miss", title="Holiday")
+
+        page = query_chat_list(store, ChatListView(q="budget"))
+
+        assert {row.thread_id for row in page.rows} == {"by_title", "by_first", "by_preview"}
+        assert page.total == 3
+
+    def test_source_and_thread_id_lookups(self, list_store):
+        store = list_store
+        _store_session(store, "web")
+        _store_session(store, "tg_1", source="telegram")
+        _store_session(store, "tg_2", source="telegram", archived=True)
+
+        telegram = query_chat_list(store, ChatListView(filter="all", source="telegram"), limit=0)
+        lookup = query_chat_list(store, ChatListView(filter="all", thread_ids=["tg_2", "gone"]))
+
+        assert (telegram.total, telegram.rows, telegram.next_cursor) == (2, [], None)
+        assert [row.thread_id for row in lookup.rows] == ["tg_2"]
+
+    def test_rejects_a_cursor_from_another_sort(self, list_store):
+        store = list_store
+        _store_session(store, "a")
+        _store_session(store, "b")
+        cursor = query_chat_list(store, ChatListView(), limit=1).next_cursor
+        assert cursor is not None
+
+        with pytest.raises(InvalidChatListCursor):
+            query_chat_list(store, ChatListView(sort="name"), cursor=cursor)
+        with pytest.raises(InvalidChatListCursor):
+            query_chat_list(store, ChatListView(), cursor="not-a-cursor")
+
+
+class TestBackfillSessionPreviews:
+    def test_writes_the_latest_message_once_and_skips_unreachable_history(self):
         store = InMemoryDocumentStore()
         store.upsert_checkpoint_thread_snapshot(
             CheckpointThreadSnapshot(
-                thread_id="thread_count",
+                thread_id="old",
                 checkpoint_id="cp-1",
                 checkpoint_ts="2026-01-01T00:00:00Z",
                 messages=[
-                    {"id": "u1", "type": "human", "content": "hi"},
-                    {"id": "a1", "type": "ai", "content": "hello"},
+                    {"id": "u1", "type": "human", "content": "question"},
+                    {"id": "a1", "type": "ai", "content": "  the\n answer  "},
+                    {"id": "a2", "type": "ai", "content": ""},
                 ],
             )
         )
-        _store_session(store, "thread_count")
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="down",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[],
+                messages_available=False,
+            )
+        )
+        _store_session(store, "old")
+        _store_session(store, "empty")
+        _store_session(store, "down")
+        _store_session(store, "done", preview="kept")
 
-        sessions = list_chat_sessions(store)
-        assert sessions[0].message_count == 2
+        assert backfill_session_previews(store) == 2
+        assert backfill_session_previews(store) == 0
 
+        def preview(thread_id):
+            payload = store.get_document(PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}")
+            return payload.payload.get("preview") if payload else None
+
+        assert preview("old") == "the answer"
+        assert preview("empty") == ""
+        assert preview("down") is None
+        assert preview("done") == "kept"
+
+
+class TestCheckpointMessages:
     def test_reads_tool_duration_from_checkpointed_tool_message(self):
         serialized = messages_to_dict(
             [

@@ -5,7 +5,7 @@ import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
 import { UI_EVENT } from '../../../realtime/eventVocabulary';
 import { createUuid } from '../../../lib/uuid';
 import { clearChatErrored, clearChatGenerating, markChatErrored, markChatGenerating, markChatUnread, touchChatSession } from '../state/actions';
-import { fetchChatSessions, selectChatActivityByThreadId, selectErroredChatIds, selectGeneratingChatIds, selectRequestIdByThreadId, selectUnreadChatIds } from '../state/chats';
+import { selectChatActivityByThreadId, selectErroredChatIds, selectGeneratingChatIds, selectRequestIdByThreadId, selectUnreadChatIds } from '../state/chats';
 import {
   createLiveAssistantTurn,
   applyAssistantMetadata,
@@ -52,7 +52,6 @@ export function useChatStream({
   cancelStream,
   observeResponseStream,
   dispatch,
-  getApiUrl,
   show,
   selectedBackendChatIdRef,
   reloadOpenChat,
@@ -575,11 +574,10 @@ export function useChatStream({
     }
     if (outcome.action === 'markUnread') {
       dispatch(clearChatGenerating(outcome.threadId));
-      dispatch(fetchChatSessions({ chatsUrl: getApiUrl('chats'), includeArchived: true }));
       dispatch(markChatUnread(outcome.threadId));
       dispatch(outcome.errored ? markChatErrored(outcome.threadId) : clearChatErrored(outcome.threadId));
     }
-  }, [dispatch, getApiUrl, reloadOpenChat]);
+  }, [dispatch, reloadOpenChat]);
   const handleSend = useCallback(async (content, attachments = []) => {
     preserveStreamInBackground();
     const userMessage = {

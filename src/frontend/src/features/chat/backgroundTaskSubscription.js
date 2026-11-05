@@ -37,7 +37,7 @@ subscribeUiEvent((event) => {
   for (const watch of watches.values()) void subscribe(watch, true);
 });
 
-export function watchBackgroundTasks(tasksUrl) {
+export function watchBackgroundTasks(tasksUrl, { serverRegistered = false } = {}) {
   const existing = watches.get(tasksUrl);
   if (existing) {
     existing.count += 1;
@@ -45,7 +45,7 @@ export function watchBackgroundTasks(tasksUrl) {
   }
   const watch = { tasksUrl, count: 1, request: null };
   watches.set(tasksUrl, watch);
-  void subscribe(watch);
+  if (!serverRegistered) void subscribe(watch);
   return () => release(watch);
 }
 

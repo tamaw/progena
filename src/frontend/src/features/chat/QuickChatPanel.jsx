@@ -765,6 +765,7 @@ export function QuickChatPanel({
         threadId={scratchThreadId}
         runsUrl={getApiUrl('runs')}
         chatsUrl={getApiUrl('chats')}
+        subscribeTasks
       />
       <StickyTodoProgress
         liveTurnStore={liveTurnStore}

@@ -13,7 +13,7 @@ import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSession
 import { reportFailure } from '../../../lib/failures';
 import { createUuid } from '../../../lib/uuid';
 import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession, reconcileChatPagination } from '../state/actions';
-import { deleteChatSession, fetchChatMessages, requestChatSessionDetail, requestChatSessionReconciliation, selectActiveChatSession, selectActiveChatSessionState, selectChatReconciliationState, selectChatSessions, selectChatSessionsState, updateChatSessionMetadata } from '../state/chats';
+import { deleteChatSession, fetchChatMessages, fetchChatSessions, requestChatSessionDetail, requestChatSessionReconciliation, selectActiveChatSession, selectActiveChatSessionState, selectChatReconciliationState, selectChatRowsById, selectChatSessions, selectChatSessionsState, updateChatSessionMetadata } from '../state/chats';
 import { savePreferences, selectPreferences, selectPreferencesSaveRequest } from '../../settings/state/preferences';
 import { selectModelProfiles } from '../../settings/state/modelProfiles';
 import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
@@ -27,7 +27,7 @@ import InlineFailure from '../../../components/InlineFailure';
 import PageShell from '../../../components/layout/PageShell';
 import DetailPane from '../../../components/layout/DetailPane';
 import { areChatTranscriptsEquivalent, mergeCanonicalMessages, excludeLiveOwnedMessage, shouldRetireLiveOwnerAfterCanonicalReconciliation, countTokens, countToolInvocations, deriveChatTitle, groupSessionItems, shouldShowChatContentLoading, getActiveRouteThreadId, shouldShowNewChatEmptyState, shouldDisableChatComposer, resolveInitialChatThreadId, shouldDeferInitialRosterSelection, shouldDeferRouteSelection, shouldDismissEmptySelection, shouldSkipRoutedMountOpen, isReopeningCurrentLocalDraft, shouldAdoptMaterializedDraft } from '../models/conversationModel';
-import { buildChatSessionItems, compareSessionItems, findAdjacentSessionItem, normalizeBackendChatMessage, shouldLoadSelectedBackendChat, sidebarEmptyMessage, visibleGroupsForFilter } from '../models/chatSessionsModel';
+import { buildChatSessionItems, findAdjacentSessionItem, normalizeBackendChatMessage, shouldLoadSelectedBackendChat, sidebarEmptyMessage, visibleGroupsForFilter } from '../models/chatSessionsModel';
 import { isEventVisible, loadStreamFilters } from '../models/streamFilters';
 import ChatMessages from '../components/ChatMessages';
 import { LiveConversationHeader } from '../components/ConversationHeader';
@@ -58,6 +58,10 @@ function alignSummaryMarkerAnchors(markers, canonicalMessages, renderedMessages)
       : marker;
   });
 }
+function sameSidebarView(left, right) {
+  return left?.q === right.q && left?.sort === right.sort && left?.filter === right.filter;
+}
+
 
 function ConversationPage() {
   const dispatch = useDispatch();
@@ -70,6 +74,7 @@ function ConversationPage() {
   const { connectionState, sendMessageStream, queueMessage, cancelStream, observeResponseStream } = useChatApi();
   const { show } = useNotifications();
   const backendChatSessions = useSelector(selectChatSessions);
+  const chatRowsById = useSelector(selectChatRowsById);
   const backendChatSessionsState = useSelector(selectChatSessionsState);
   const activeBackendChat = useSelector(selectActiveChatSession);
   const activeBackendChatState = useSelector(selectActiveChatSessionState);
@@ -124,10 +129,7 @@ function ConversationPage() {
   const derivedChatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
   // The open thread's session document, once Postgres has created it. Its title
   // is authoritative: anyone (the header, a workflow, Progena) may rename it.
-  const threadSession = useMemo(
-    () => backendChatSessions.find((session) => session.thread_id === threadId) ?? null,
-    [backendChatSessions, threadId],
-  );
+  const threadSession = threadId ? chatRowsById[threadId] || null : null;
   const chatTitle = threadSession?.title || derivedChatTitle;
   const [selectedBackendChatId, setSelectedBackendChatId] = useState(() => urlThreadId || null);
   // Thread-scoped header actions (AI Rename, Open in Quick Chat) target only the
@@ -143,6 +145,39 @@ function ConversationPage() {
   const [sidebarFilter, setSidebarFilter] = useState('all');
   const [sidebarQuery, setSidebarQuery] = useState('');
   const [sidebarSort, setSidebarSort] = useState('Recent');
+  const sidebarView = useMemo(() => ({
+    q: sidebarQuery,
+    sort: sidebarSort === 'Name' ? 'name' : 'recent',
+    filter: sidebarFilter === 'archived' ? 'archived' : 'active',
+  }), [sidebarFilter, sidebarQuery, sidebarSort]);
+  useEffect(() => {
+    const current = backendChatSessionsState.view;
+    if (
+      sameSidebarView(current, sidebarView)
+      && (backendChatSessionsState.loaded || backendChatSessionsState.loading)
+    ) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      dispatch(fetchChatSessions({ chatsUrl: getApiUrl('chats'), view: sidebarView, limit: 50 }));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [backendChatSessionsState.loaded, backendChatSessionsState.loading, backendChatSessionsState.view, dispatch, getApiUrl, sidebarView]);
+  const loadNextSidebarPage = useCallback(() => {
+    if (
+      !backendChatSessionsState.nextCursor
+      || backendChatSessionsState.loading
+      || backendChatSessionsState.loadingMore
+    ) {
+      return;
+    }
+    dispatch(fetchChatSessions({
+      chatsUrl: getApiUrl('chats'),
+      view: sidebarView,
+      cursor: backendChatSessionsState.nextCursor,
+      limit: 50,
+    }));
+  }, [backendChatSessionsState.loading, backendChatSessionsState.loadingMore, backendChatSessionsState.nextCursor, dispatch, getApiUrl, sidebarView]);
   // The no-route bootstrap creates a fresh draft session asynchronously. Keep
   // initial roster auto-selection behind that bootstrap; otherwise the two
   // mount effects race and the selected chat can oscillate between the draft
@@ -192,6 +227,9 @@ function ConversationPage() {
   // gets a new reference on every session snapshot, which would re-run them).
   const backendChatSessionsRef = useRef(backendChatSessions);
   const pendingOpenThreadIdRef = useRef(null);
+  // Ids whose detail request answered 404: unsent drafts, opened locally from
+  // then on so a routed draft URL does not request its detail again.
+  const missingThreadIdsRef = useRef(new Set());
   const selectionIntentRef = useRef(null);
   const foregroundOwnershipTokenRef = useRef(0);
   const reconciliationIntentRef = useRef(null);
@@ -274,14 +312,49 @@ function ConversationPage() {
     cancelStream,
     observeResponseStream,
     dispatch,
-    getApiUrl,
     show,
     selectedBackendChatIdRef,
     reloadOpenChat,
     onForegroundStreamStarted: beginForegroundStream,
     requestForegroundReconciliation,
   });
-  const chatQueue = useChatQueue(selectedBackendChatId);
+  const chatQueue = useChatQueue(
+    selectedBackendChatId,
+    activeBackendChat?.thread_id === selectedBackendChatId ? activeBackendChatState.queue : undefined,
+  );
+  const lastOpenRowActivityRef = useRef(null);
+  useEffect(() => {
+    if (threadSession?.thread_id === selectedBackendChatId) {
+      lastOpenRowActivityRef.current = threadSession.last_activity || null;
+    }
+  }, [selectedBackendChatId, threadSession?.last_activity, threadSession?.thread_id]);
+  useEffect(() => subscribeUiEvent((event) => {
+    if (event?.type !== UI_EVENT.CHAT_LIST_ROW_UPSERTED) return;
+    const row = event.payload?.row;
+    if (
+      row?.thread_id !== selectedBackendChatIdRef.current
+      || typeof row.last_activity !== 'string'
+      || activeStreamIdRef.current
+      || backgroundOriginChatIdRef.current === row.thread_id
+      || backgroundGeneratingChatIds.has(row.thread_id)
+    ) {
+      return;
+    }
+    const previous = lastOpenRowActivityRef.current;
+    lastOpenRowActivityRef.current = row.last_activity;
+    if (previous && row.last_activity > previous) {
+      requestForegroundReconciliation({
+        threadId: row.thread_id,
+        streamId: null,
+        forceCanonical: true,
+      });
+    }
+  }), [
+    activeStreamIdRef,
+    backgroundGeneratingChatIds,
+    backgroundOriginChatIdRef,
+    requestForegroundReconciliation,
+  ]);
 
 
   const liveContextUsage = useSyncExternalStore(
@@ -302,6 +375,34 @@ function ConversationPage() {
     [messages, modelProfiles],
   );
 
+  const openLocalDraft = useCallback((requestedThreadId) => {
+    const isReopeningCurrentDraft = isReopeningCurrentLocalDraft({
+      selectedBackendChatId,
+      currentThreadId: threadId,
+      requestedThreadId,
+    });
+    selectionIntentRef.current = { threadId: requestedThreadId };
+    if (!isReopeningCurrentDraft) {
+      preserveStreamInBackground();
+      beginForegroundStream();
+      retireForegroundStream();
+      setMessages([]);
+      setOldestMessageCursor(null);
+    }
+    materializedDraftThreadIdRef.current = null;
+    selectedBackendChatIdRef.current = null;
+    setSelectedBackendChatId(null);
+    dispatch(clearActiveChatSession());
+    setThreadId(requestedThreadId);
+  }, [
+    beginForegroundStream,
+    dispatch,
+    preserveStreamInBackground,
+    retireForegroundStream,
+    selectedBackendChatId,
+    threadId,
+  ]);
+
   const openBackendChat = useCallback(async (requestedThreadId) => {
     if (!requestedThreadId) {
       return;
@@ -309,27 +410,11 @@ function ConversationPage() {
     if (pendingOpenThreadIdRef.current === requestedThreadId) {
       return;
     }
-    // A thread with no session document is a local draft (nothing sent yet,
-    // or Postgres hasn't checkpointed its first message): open it locally
-    // instead of asking the backend for a session that doesn't exist.
-    if (!backendChatSessionsRef.current.some((session) => session.thread_id === requestedThreadId)) {
-      const isReopeningCurrentDraft = isReopeningCurrentLocalDraft({
-        selectedBackendChatId,
-        currentThreadId: threadId,
-        requestedThreadId,
-      });
-      selectionIntentRef.current = { threadId: requestedThreadId };
-      if (!isReopeningCurrentDraft) {
-        preserveStreamInBackground();
-        beginForegroundStream();
-        retireForegroundStream();
-        setMessages([]);
-        setOldestMessageCursor(null);
-      }
-      materializedDraftThreadIdRef.current = null;
-      selectedBackendChatIdRef.current = null;
-      setSelectedBackendChatId(null);
-      setThreadId(requestedThreadId);
+    if (
+      !backendChatSessionsRef.current.some((session) => session.thread_id === requestedThreadId)
+      && (requestedThreadId !== urlThreadId || missingThreadIdsRef.current.has(requestedThreadId))
+    ) {
+      openLocalDraft(requestedThreadId);
       return;
     }
     pendingOpenThreadIdRef.current = requestedThreadId;
@@ -357,6 +442,13 @@ function ConversationPage() {
     }));
     try {
       return await request.unwrap();
+    } catch (error) {
+      if (error?.status === 404 || error?.code === 'HTTP_404') {
+        missingThreadIdsRef.current.add(requestedThreadId);
+        openLocalDraft(requestedThreadId);
+        return undefined;
+      }
+      throw error;
     } finally {
       if (pendingOpenThreadIdRef.current === requestedThreadId) {
         pendingOpenThreadIdRef.current = null;
@@ -367,13 +459,10 @@ function ConversationPage() {
     beginForegroundStream,
     dispatch,
     getApiUrl,
+    openLocalDraft,
     pendingOpenThreadIdRef,
-    preserveStreamInBackground,
-    selectedBackendChatId,
-    retireForegroundStream,
     setIsGenerating,
-    setMessages,
-    threadId,
+    urlThreadId,
   ]);
   const acquireDraftChat = useCallback(async (requestedThreadId = null) => {
     // Local-only draft; the backend creates the session document when the
@@ -1182,6 +1271,7 @@ function ConversationPage() {
       firstMessageTime,
       archivedSessions,
       pinnedSessionIds,
+      sidebarQuery,
       backendChatSessions,
       backendChatsLoaded: backendChatSessionsState.loaded,
       // A local draft becomes its session's card as soon as the session exists.
@@ -1205,6 +1295,7 @@ function ConversationPage() {
       messages,
       pinnedSessionIds,
       selectedBackendChatId,
+      sidebarQuery,
       threadSession,
       threadId,
       totalTokenCount,
@@ -1217,26 +1308,13 @@ function ConversationPage() {
     [sessionItems],
   );
   const visibleSessionGroups = useMemo(() => {
-    const normalizedQuery = sidebarQuery.trim().toLowerCase();
-    const filtered = normalizedQuery
-      ? sessionItems.filter((item) => `${item.title} ${item.summary ?? ''}`.toLowerCase().includes(normalizedQuery))
-      : sessionItems;
-    // "Recent" (the default) sorts pinned-first then most-recent-activity
-    // first; grouping still buckets by recency afterward, so this is what
-    // actually determines order *within* each bucket instead of leaving it
-    // however the items happened to arrive in chats.order.
-    const sortedForGrouping = sidebarSort === 'Name' ? filtered : [...filtered].sort(compareSessionItems);
-    const groups = visibleGroupsForFilter({ sessionItems: sortedForGrouping, sidebarFilter, groupSessionItems });
-    // "Name" collapses the recency buckets into a single flat A→Z list (no header),
-    // keeping whatever the active filter already selected.
+    const groups = visibleGroupsForFilter({ sessionItems, sidebarFilter, groupSessionItems });
     if (sidebarSort === 'Name') {
-      const items = groups
-        .flatMap((group) => group.items)
-        .sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
+      const items = groups.flatMap((group) => group.items);
       return items.length ? [{ key: 'name', label: null, items }] : [];
     }
     return groups;
-  }, [sessionItems, sidebarFilter, sidebarQuery, sidebarSort]);
+  }, [sessionItems, sidebarFilter, sidebarSort]);
   const visibleSessionItems = useMemo(
     () => visibleSessionGroups.flatMap((group) => group.items),
     [visibleSessionGroups],
@@ -1539,6 +1617,7 @@ function ConversationPage() {
         sidebarSort={sidebarSort}
         setSidebarSort={setSidebarSort}
         visibleSessionGroups={visibleSessionGroups}
+        loadNextPage={loadNextSidebarPage}
         sidebarEmptyMessageText={sidebarEmptyMessageText}
         selectSessionItem={selectSessionItem}
       />
@@ -1658,6 +1737,20 @@ function ConversationPage() {
           threadId={threadId}
           runsUrl={getApiUrl('runs')}
           chatsUrl={getApiUrl('chats')}
+          // Only a persisted chat that is the one on screen watches its tasks.
+          // Opening it (the detail request) registers the interest, so wait for
+          // that answer, and a failed open (an unsent draft answers 404) watches
+          // nothing; a draft whose first message just created its session has no
+          // detail request and asks itself.
+          subscribeTasks={Boolean(
+            selectedBackendChatId
+            && threadId === selectedBackendChatId
+            && !(
+              activeBackendChatState.threadId === selectedBackendChatId
+              && (activeBackendChatState.loading || activeBackendChatState.error)
+            ),
+          )}
+          serverRegistered={activeBackendChat?.thread_id === threadId}
         />
         <StickyTodoProgress
           liveTurnStore={liveTurnStore}

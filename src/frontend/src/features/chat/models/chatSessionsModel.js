@@ -1,5 +1,4 @@
 import {
-  DEFAULT_CHAT_TITLE,
   buildSessionItems,
   formatPreview,
   formatRelativeAge,
@@ -371,11 +370,6 @@ function buildBackendSessionItem(
   const activityAt = toValidTimestamp(chat.last_activity)
     ?? toValidTimestamp(chat.created_at)
     ?? 0;
-  const messageCount = Number.isFinite(chat.message_count) ? chat.message_count : 0;
-  const summary = chat.preview
-    || (chat.history_unavailable
-      ? 'History unavailable'
-      : `${messageCount} ${messageCount === 1 ? 'message' : 'messages'}`);
   const selected = selectedBackendChatId === chat.thread_id;
   const activity = backgroundChatActivityByThreadId?.[chat.thread_id] || null;
   const generating = (backgroundGeneratingChatIds instanceof Set
@@ -390,7 +384,7 @@ function buildBackendSessionItem(
     title: chat.title || 'Untitled chat',
     meta: formatRelativeAge(activityAt) || formatRelativeAge(chat.created_at) || '',
     detail: chat.archived ? 'Archived' : delegating ? 'Delegating' : '',
-    summary,
+    summary: chat.preview || '',
     activityAt,
     bucket: getTimeBucket(activityAt),
     preview: formatPreview(chat.preview),
@@ -412,10 +406,8 @@ function buildBackendSessionItem(
     pinned: Boolean(chat.pinned),
     archived: Boolean(chat.archived),
     source: 'backend',
+    sessionSource: chat.source || 'backend',
     threadId: chat.thread_id,
-    messageCount,
-    toolCount: Number.isFinite(chat.tool_count) ? chat.tool_count : 0,
-    errorCount: Number.isFinite(chat.error_count) ? chat.error_count : 0,
   };
 }
 
@@ -452,6 +444,7 @@ export function buildChatSessionItems({
   firstMessageTime,
   archivedSessions,
   pinnedSessionIds,
+  sidebarQuery = '',
   backendChatSessions,
   selectedBackendChatId,
   unreadChatIds,
@@ -463,11 +456,8 @@ export function buildChatSessionItems({
   const shouldShowLocalCurrentSession =
     !selectedBackendChatId
     && messages.length > 0;
-  // Locally-archived sessions are independent persisted history, not the
-  // transient current draft - they must always be included regardless of
-  // whether a backend chat is currently selected. Only the draft card itself
-  // is gated on `shouldShowLocalCurrentSession`.
-  const localItems = buildSessionItems({
+  const normalizedQuery = sidebarQuery.trim().toLocaleLowerCase();
+  const allLocalItems = buildSessionItems({
     messages,
     threadId,
     chatTitle,
@@ -492,8 +482,10 @@ export function buildChatSessionItems({
         status: deriveChatStatus({ delegating, generating }),
       };
     });
+  const localItems = allLocalItems
+    .filter((item) => !normalizedQuery || item.title.toLocaleLowerCase().includes(normalizedQuery));
 
-  const localIds = new Set(localItems.map((item) => item.pinKey));
+  const localIds = new Set(allLocalItems.map((item) => item.pinKey));
   const backendItems = backendChatSessions
     .filter((chat) => !localIds.has(chat.thread_id))
     .map((chat) => buildBackendSessionItem(

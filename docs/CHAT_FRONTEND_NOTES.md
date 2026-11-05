@@ -33,11 +33,12 @@ operation.
 
 Relevant canonical types are:
 
-- `chat.sessions.snapshot` for a durable session-list snapshot;
-- `chat.session.created`, `chat.session.metadata.updated`, and
-  `chat.session.upserted` for session data;
-- request-scoped `chat.session.selected` for selecting/loading a detail;
-- `chat.session.deleted` for durable removal;
+- tab-targeted `chat.list.loaded` (first page) and `chat.list.page` (next page
+  on scroll) for the conversation list, built from session documents only;
+- `chat.list.row.upserted` and `chat.list.row.deleted` for one row, sent to
+  every tab after a create, rename, pin, archive, delete or finished turn;
+- tab-targeted `chat.session.selected` for opening a chat, carrying its
+  detail, queue and background tasks;
 - `chat.response.started`, `chat.response.completed`,
   `chat.response.failed`, and `chat.response.cancelled` for generation lifecycle.
 
@@ -89,10 +90,11 @@ are not part of this feature.
 
 ## Session card layout
 
-Cards have three rows: time/pin (top), title (middle), and counts (bottom).
-`meta` drives the top-row timestamp from backend `last_activity`, not
-`created_at`. `summary` remains hidden from the DOM but is searched by the
-sidebar filter.
+Cards have two rows: status dot, title and age (top), then the archived or
+delegating label and the stored `preview` (bottom). `meta` drives the age from
+backend `last_activity`, not `created_at`. Search, sort and the archived filter
+run on the server against title, first message and preview; the unread filter
+applies to the loaded rows.
 
 ## Thread routing
 

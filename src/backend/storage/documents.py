@@ -9,7 +9,6 @@ import hashlib
 import logging
 import threading
 from collections.abc import Callable, Iterable, Iterator
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -25,7 +24,6 @@ from psycopg_pool import ConnectionPool, PoolClosed
 from src.backend.integrations.runtime_history import (
     RuntimeConversationReader,
     RuntimeSummaryOccurrence,
-    RuntimeUnavailable,
 )
 from src.progena.documents.kinds import (
     CANVAS_DOCUMENT_KEY_PREFIX,
@@ -34,6 +32,7 @@ from src.progena.documents.kinds import (
     SESSION_KEY_PREFIX,
 )
 from src.progena.routines.store import ROUTINE_GRAPH_KEY_PREFIX
+from src.progena.sessions.titles import PLACEHOLDER_TITLES
 
 PROGENA_STATE_PREFIX = "progena.state"
 BACKEND_STATE_PREFIX = "backend.state"
@@ -41,9 +40,6 @@ BACKEND_STATE_PREFIX = "backend.state"
 # Postgres LISTEN/NOTIFY channel used to push store table changes to the backend.
 STORE_CHANGE_CHANNEL = "store_changed"
 _STORE_CHANGE_PREFIXES = (PROGENA_STATE_PREFIX, BACKEND_STATE_PREFIX)
-# Parallel runtime reads when the chat list needs messages for many threads.
-CONVERSATION_FETCH_CONCURRENCY = 8
-
 # Durable document event log: every create/update/delete of a state-namespace
 # document appends one ``document_events`` row (with before/after payloads and
 # the writer's origin) and NOTIFYs its sequence number on this channel.
@@ -79,6 +75,93 @@ class StoredDocument:
 
     payload: Any
     updated_at: datetime | None = None
+
+
+SessionRowSort = Literal["recent", "name"]
+SessionRowFilter = Literal["active", "archived", "all"]
+
+
+@dataclass(frozen=True)
+class SessionRowQuery:
+    """Which ``session:`` documents a conversation-list page covers, and in what order.
+
+    ``recent`` is pinned first, then latest activity; ``name`` is the display
+    title A→Z. ``q`` matches title, first message and preview, case-insensitively.
+    """
+
+    filter: SessionRowFilter = "active"
+    sort: SessionRowSort = "recent"
+    q: str = ""
+    source: str | None = None
+    thread_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SessionRow:
+    """One session document without its transcript, plus its keyset position.
+
+    ``position`` is ``(pinned, activity ISO instant, key)`` for ``recent`` and
+    ``(lower-case name, key)`` for ``name``; pass the last row's back as ``after``.
+    """
+
+    key: str
+    payload: dict[str, Any]
+    position: tuple[Any, ...]
+
+
+_SESSION_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def _session_instant(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def _session_activity(payload: dict[str, Any]) -> datetime:
+    return (
+        _session_instant(payload.get("last_activity"))
+        or _session_instant(payload.get("created_at"))
+        or _SESSION_EPOCH
+    )
+
+
+def _session_name(payload: dict[str, Any]) -> str:
+    title = str(payload.get("title") or "").strip()
+    if not title or title.lower() in PLACEHOLDER_TITLES:
+        return str(payload.get("first_message") or "").lower()
+    return title.lower()
+
+
+def _session_row_matches(key: str, payload: dict[str, Any], query: SessionRowQuery) -> bool:
+    archived = bool(payload.get("archived"))
+    if (query.filter == "active" and archived) or (query.filter == "archived" and not archived):
+        return False
+    if query.source is not None and payload.get("source") != query.source:
+        return False
+    if query.thread_ids and key.removeprefix(SESSION_KEY_PREFIX) not in query.thread_ids:
+        return False
+    if query.q:
+        needle = query.q.lower()
+        return any(
+            needle in str(payload.get(field) or "").lower()
+            for field in ("title", "first_message", "preview")
+        )
+    return True
+
+
+def _session_instant_sql(field: str) -> str:
+    """SQL for a payload ISO instant as ``timestamptz``; naive legacy values are UTC."""
+    path = f"value #>> '{{payload,{field}}}'"
+    return (
+        f"CASE WHEN {path} ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}T' THEN CASE"
+        f" WHEN {path} ~ '(Z|[+-][0-9]{{2}}(:?[0-9]{{2}})?)$' THEN ({path})::timestamptz"
+        f" ELSE ({path})::timestamp AT TIME ZONE 'UTC' END END"
+    )
 
 
 class DocumentEventPosition(NamedTuple):
@@ -253,6 +336,12 @@ class BackendDocumentStore(Protocol):
 
     def list_documents(self, prefix: str, key_prefix: str) -> list[tuple[str, StoredDocument]]: ...
 
+    def query_session_rows(
+        self, query: SessionRowQuery, *, after: tuple[Any, ...] | None, limit: int
+    ) -> tuple[list[SessionRow], int]:
+        """One keyset page of ``session:`` rows (no ``content``) and the view's total."""
+        ...
+
     def list_active_workflow_run_ids(self, parent_thread_id: str) -> list[str]:
         """Return compact active workflow identities owned by one chat thread."""
         ...
@@ -324,10 +413,6 @@ class BackendDocumentStore(Protocol):
 
     def inspect_schema(self) -> list[dict[str, Any]]: ...
 
-    def list_checkpoint_thread_snapshots(
-        self, *, limit: int = 50
-    ) -> list[CheckpointThreadSnapshot]: ...
-
     def list_checkpoint_message_blobs(
         self, *, before: datetime, limit: int | None = None
     ) -> tuple[list[CheckpointMessageBlob], bool]:
@@ -370,7 +455,7 @@ class BackendDocumentStore(Protocol):
 
 
 def _is_session_noise(prefix: str, key: str, before: Any, after: Any) -> bool:
-    """A session update touching only ``content``/``last_activity`` (every turn).
+    """A session update touching only ``content``/``preview``/``last_activity`` (every turn).
 
     Mirrors the Postgres capture trigger's noise filter: such updates log no event.
     """
@@ -378,7 +463,7 @@ def _is_session_noise(prefix: str, key: str, before: Any, after: Any) -> bool:
         return False
     if not isinstance(before, dict) or not isinstance(after, dict):
         return False
-    noise = ("content", "last_activity")
+    noise = ("content", "preview", "last_activity")
     return {k: v for k, v in before.items() if k not in noise} == {
         k: v for k, v in after.items() if k not in noise
     }
@@ -431,6 +516,40 @@ class InMemoryDocumentStore:
             ),
             key=lambda entry: entry[0],
         )
+
+    def query_session_rows(
+        self, query: SessionRowQuery, *, after: tuple[Any, ...] | None, limit: int
+    ) -> tuple[list[SessionRow], int]:
+        rows = [
+            (key, document.payload)
+            for (prefix, key), document in self._documents.items()
+            if prefix == PROGENA_STATE_PREFIX
+            and key.startswith(SESSION_KEY_PREFIX)
+            and isinstance(document.payload, dict)
+            and _session_row_matches(key, document.payload, query)
+        ]
+        if query.sort == "name":
+            positioned = sorted(((_session_name(p), key), key, p) for key, p in rows)
+            if after is not None:
+                positioned = [row for row in positioned if row[0] > (after[0], after[1])]
+            page = positioned[:limit]
+        else:
+            ranked = sorted(
+                (((bool(p.get("pinned")), _session_activity(p), key), key, p) for key, p in rows),
+                key=lambda row: row[0],
+                reverse=True,
+            )
+            if after is not None:
+                bound = (bool(after[0]), _session_instant(after[1]) or _SESSION_EPOCH, after[2])
+                ranked = [row for row in ranked if row[0] < bound]
+            page = [
+                ((pinned, activity.isoformat(), key), key, p)
+                for (pinned, activity, key), _key, p in ranked[:limit]
+            ]
+        return [
+            SessionRow(key, {k: copy.deepcopy(v) for k, v in p.items() if k != "content"}, position)
+            for position, key, p in page
+        ], len(rows)
 
     def search_documents(
         self,
@@ -947,16 +1066,6 @@ class InMemoryDocumentStore:
             }
         ]
 
-    def list_checkpoint_thread_snapshots(
-        self, *, limit: int = 50
-    ) -> list[CheckpointThreadSnapshot]:
-        snapshots = sorted(
-            self._checkpoint_threads.values(),
-            key=lambda snapshot: snapshot.checkpoint_ts or "",
-            reverse=True,
-        )
-        return snapshots[:limit] if limit > 0 else snapshots
-
     def list_checkpoint_message_blobs(
         self, *, before: datetime, limit: int | None = None
     ) -> tuple[list[CheckpointMessageBlob], bool]:
@@ -1295,14 +1404,14 @@ class PostgresDocumentStore:
                     IF TG_OP = 'UPDATE' AND OLD.value IS NOT DISTINCT FROM NEW.value THEN
                         RETURN NULL;
                     END IF;
-                    -- Noise filter: content/last_activity-only updates on session docs
-                    -- do not log an event, because they happen on every turn.
+                    -- Noise filter: content/preview/last_activity-only updates on session
+                    -- docs do not log an event, because they happen on every turn.
                     IF TG_OP = 'UPDATE'
                         AND row_prefix = 'progena.state'
                         AND COALESCE(NEW.key, OLD.key) LIKE '__SESSION_PREFIX__%'
-                        AND (OLD.value -> 'payload') - 'content' - 'last_activity'
+                        AND (OLD.value -> 'payload') - 'content' - 'preview' - 'last_activity'
                             IS NOT DISTINCT FROM
-                            (NEW.value -> 'payload') - 'content' - 'last_activity'
+                            (NEW.value -> 'payload') - 'content' - 'preview' - 'last_activity'
                     THEN
                         RETURN NULL;
                     END IF;
@@ -1824,6 +1933,99 @@ class PostgresDocumentStore:
             payload = value.get("payload") if isinstance(value, dict) else None
             results.append((str(row["key"]), StoredDocument(payload, row.get("updated_at"))))
         return results
+
+    def query_session_rows(
+        self, query: SessionRowQuery, *, after: tuple[Any, ...] | None, limit: int
+    ) -> tuple[list[SessionRow], int]:
+        params: dict[str, Any] = {
+            "prefix": PROGENA_STATE_PREFIX,
+            "key_like": _escape_like(SESSION_KEY_PREFIX) + "%",
+            "placeholders": sorted(PLACEHOLDER_TITLES),
+        }
+        conditions = ["prefix = %(prefix)s", "key LIKE %(key_like)s"]
+        if query.filter != "all":
+            params["archived"] = query.filter == "archived"
+            conditions.append(
+                "COALESCE((value #>> '{payload,archived}')::boolean, false) = %(archived)s"
+            )
+        if query.source is not None:
+            params["source"] = query.source
+            conditions.append("value #>> '{payload,source}' = %(source)s")
+        if query.thread_ids:
+            params["keys"] = [f"{SESSION_KEY_PREFIX}{thread_id}" for thread_id in query.thread_ids]
+            conditions.append("key = ANY(%(keys)s)")
+        if query.q:
+            params["q"] = f"%{_escape_like(query.q)}%"
+            conditions.append(
+                "(value #>> '{payload,title}' ILIKE %(q)s"
+                " OR value #>> '{payload,first_message}' ILIKE %(q)s"
+                " OR value #>> '{payload,preview}' ILIKE %(q)s)"
+            )
+        where = " AND ".join(conditions)
+        if query.sort == "name":
+            order = "name ASC, key ASC"
+            if after is not None:
+                params["after_name"], params["after_key"] = after[0], after[1]
+                boundary = (
+                    "WHERE name > %(after_name)s OR (name = %(after_name)s AND key > %(after_key)s)"
+                )
+            else:
+                boundary = ""
+        else:
+            order = "pinned DESC, activity DESC, key DESC"
+            if after is not None:
+                params["after_pinned"] = bool(after[0])
+                params["after_activity"] = _session_instant(after[1]) or _SESSION_EPOCH
+                params["after_key"] = after[2]
+                boundary = (
+                    "WHERE pinned < %(after_pinned)s OR (pinned = %(after_pinned)s AND ("
+                    "activity < %(after_activity)s OR (activity = %(after_activity)s"
+                    " AND key < %(after_key)s)))"
+                )
+            else:
+                boundary = ""
+        params["limit"] = limit
+        page_sql = f"""
+            WITH matched AS (
+                SELECT key COLLATE "C" AS key,
+                       (value -> 'payload') - 'content' AS payload,
+                       COALESCE((value #>> '{{payload,pinned}}')::boolean, false) AS pinned,
+                       COALESCE(
+                           {_session_instant_sql("last_activity")},
+                           {_session_instant_sql("created_at")},
+                           'epoch'::timestamptz
+                       ) AS activity,
+                       lower(CASE
+                           WHEN btrim(COALESCE(value #>> '{{payload,title}}', '')) = ''
+                             OR lower(btrim(value #>> '{{payload,title}}')) = ANY(%(placeholders)s)
+                           THEN COALESCE(value #>> '{{payload,first_message}}', '')
+                           ELSE btrim(value #>> '{{payload,title}}')
+                       END) COLLATE "C" AS name
+                FROM store
+                WHERE {where}
+            )
+            SELECT key, payload, pinned, activity, name FROM matched
+            {boundary}
+            ORDER BY {order}
+            LIMIT %(limit)s
+        """  # nosec B608 - fragments are constants; values are bound parameters
+        with self._cursor() as cur:
+            count_sql = f"SELECT count(*) AS total FROM store WHERE {where}"  # nosec B608
+            cur.execute(cast(LiteralString, count_sql), params)
+            total_row = cast(dict[str, Any], cur.fetchone())
+            cur.execute(cast(LiteralString, page_sql), params)
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        page: list[SessionRow] = []
+        for row in rows:
+            key = str(row["key"])
+            payload = row["payload"] if isinstance(row["payload"], dict) else {}
+            position: tuple[Any, ...] = (
+                (str(row["name"]), key)
+                if query.sort == "name"
+                else (bool(row["pinned"]), row["activity"].astimezone(UTC).isoformat(), key)
+            )
+            page.append(SessionRow(key, payload, position))
+        return page, int(total_row["total"])
 
     def list_active_workflow_run_ids(self, parent_thread_id: str) -> list[str]:
         with self._cursor() as cur:
@@ -2553,70 +2755,6 @@ class PostgresDocumentStore:
             has_more,
         )
 
-    def list_checkpoint_thread_snapshots(
-        self, *, limit: int = 50
-    ) -> list[CheckpointThreadSnapshot]:
-        """Return latest reconstructed message snapshots for LangGraph threads."""
-        with self._cursor() as cur:
-            cur.execute(
-                """
-                WITH ranked AS (
-                    SELECT
-                        c.thread_id,
-                        c.checkpoint_ns,
-                        c.checkpoint_id,
-                        c.checkpoint->>'ts' AS checkpoint_ts,
-                        row_number() OVER (
-                            PARTITION BY c.thread_id
-                            ORDER BY (c.checkpoint->>'ts')::timestamptz DESC, c.checkpoint_id DESC
-                        ) AS rn
-                    FROM checkpoints c
-                    -- Filters on channel_versions, not channel_values.
-                    WHERE c.checkpoint_ns = ''
-                      AND c.checkpoint ? 'channel_versions'
-                      AND c.checkpoint->'channel_versions' ? 'messages'
-                )
-                SELECT thread_id, checkpoint_ns, checkpoint_id, checkpoint_ts
-                FROM ranked
-                WHERE rn = 1
-                ORDER BY checkpoint_ts DESC
-                LIMIT %s
-                """,
-                (limit,),
-            )
-            rows = cast(list[dict[str, Any]], cur.fetchall())
-        targets = [
-            (
-                str(row["thread_id"]),
-                str(row["checkpoint_id"]) if row.get("checkpoint_id") else None,
-                row,
-            )
-            for row in rows
-            if isinstance(row.get("thread_id"), str) and row.get("thread_id")
-        ]
-
-        def _messages_or_unavailable(target: tuple[str, str | None, Any]) -> list[Any] | None:
-            # The list must still render while the runtime is down; None marks
-            # the thread's messages as unknown rather than empty.
-            thread_id, checkpoint_id, _row = target
-            try:
-                return self._checkpoint_messages(thread_id=thread_id, checkpoint_id=checkpoint_id)
-            except RuntimeUnavailable:
-                return None
-
-        with ThreadPoolExecutor(max_workers=CONVERSATION_FETCH_CONCURRENCY) as pool:
-            all_messages = list(pool.map(_messages_or_unavailable, targets))
-        return [
-            CheckpointThreadSnapshot(
-                thread_id=thread_id,
-                checkpoint_id=checkpoint_id,
-                checkpoint_ts=str(row["checkpoint_ts"]) if row.get("checkpoint_ts") else None,
-                messages=messages or [],
-                messages_available=messages is not None,
-            )
-            for (thread_id, checkpoint_id, row), messages in zip(targets, all_messages, strict=True)
-        ]
-
     def get_checkpoint_thread_snapshot(
         self,
         thread_id: str,
@@ -2624,8 +2762,7 @@ class PostgresDocumentStore:
         checkpoint_id: str | None = None,
         include_summary_occurrences: bool = False,
     ) -> CheckpointThreadSnapshot | None:
-        # Same channel_versions-vs-channel_values caveat as
-        # list_checkpoint_thread_snapshots() above.
+        # Filters on channel_versions, not channel_values.
         clauses = [
             sql.SQL("c.thread_id = %s"),
             sql.SQL("c.checkpoint_ns = ''"),

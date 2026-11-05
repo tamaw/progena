@@ -45,7 +45,7 @@ import { fetchSchedules, selectSchedulesState } from './state';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { selectRealtimeConnected } from '../../realtime/realtimeSlice';
 import { selectAgentName, selectPreferences } from '../settings/state/preferences';
-import { fetchChatSessions, selectChatSessions, selectChatSessionsState } from '../chat/state/chats';
+import { fetchChatSessions, selectChatLookupResults, selectChatRowsById } from '../chat/state/chats';
 
 const SCHEDULE_FILTERS = ['All', 'Active', 'Paused', 'Completed'];
 const SCHEDULE_SORTS = ['Type', 'Next', 'Status'];
@@ -272,10 +272,11 @@ function conversationIdFor(schedule) {
     : null;
 }
 
-function destinationLabel(schedule, chatsById) {
+function destinationLabel(schedule, chatsById, lookupResults) {
   const conversationId = conversationIdFor(schedule);
   if (!conversationId) return 'Standalone';
-  return chatsById.get(conversationId)?.title || 'Chat deleted';
+  if (chatsById.get(conversationId)?.title) return chatsById.get(conversationId).title;
+  return lookupResults[conversationId] === false ? 'Chat deleted' : 'Loading chat…';
 }
 
 function ScheduleRow({ schedule, selected, onSelect, timeZone, chatsById }) {
@@ -327,15 +328,15 @@ function SchedulesPage() {
   const agentName = useSelector(selectAgentName);
   const preferenceTimezone = useSelector((state) => selectPreferences(state).timezone);
   const realtimeConnected = useSelector(selectRealtimeConnected);
-  const chatSessions = useSelector(selectChatSessions);
-  const chatSessionsState = useSelector(selectChatSessionsState);
+  const chatRowsById = useSelector(selectChatRowsById);
+  const chatLookupResults = useSelector(selectChatLookupResults);
   const availableChats = useMemo(
-    () => chatSessions.filter((session) => !session.archived),
-    [chatSessions],
+    () => Object.values(chatRowsById).filter((session) => !session.archived),
+    [chatRowsById],
   );
   const chatsById = useMemo(
-    () => new Map(chatSessions.map((session) => [session.thread_id, session])),
-    [chatSessions],
+    () => new Map(Object.values(chatRowsById).map((session) => [session.thread_id, session])),
+    [chatRowsById],
   );
   const [createOpen, setCreateOpen] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
@@ -364,12 +365,21 @@ function SchedulesPage() {
       void requestSchedules();
     }
   }, [realtimeConnected, requestSchedules]);
-
+  const scheduleConversationIds = useMemo(
+    () => [...new Set(schedules.map(conversationIdFor).filter(Boolean))],
+    [schedules],
+  );
+  // Destination labels need only the chats schedules point at.
   useEffect(() => {
-    if (realtimeConnected && !chatSessionsState.loaded && !chatSessionsState.loading) {
-      dispatch(fetchChatSessions({ chatsUrl: getApiUrl('chats'), includeArchived: true }));
-    }
-  }, [chatSessionsState.loaded, chatSessionsState.loading, dispatch, getApiUrl, realtimeConnected]);
+    if (!realtimeConnected || !scheduleConversationIds.length) return;
+    dispatch(fetchChatSessions({
+      chatsUrl: getApiUrl('chats'),
+      view: { q: '', sort: 'recent', filter: 'all' },
+      threadIds: scheduleConversationIds,
+      limit: 200,
+      lookup: true,
+    }));
+  }, [dispatch, getApiUrl, realtimeConnected, scheduleConversationIds]);
 
 
   const store = useStore();
@@ -502,6 +512,17 @@ function SchedulesPage() {
   const editingIntent = Boolean(intentDraft.editing);
   const editingTrigger = Boolean(triggerDraft.editing);
   const editingDestination = Boolean(destinationDraft.editing);
+  // The destination picker lists recent chats, fetched only once it is shown.
+  const chatPickerOpen = createOpen || editingDestination;
+  useEffect(() => {
+    if (!realtimeConnected || !chatPickerOpen) return;
+    dispatch(fetchChatSessions({
+      chatsUrl: getApiUrl('chats'),
+      view: { q: '', sort: 'recent', filter: 'active' },
+      limit: 200,
+      lookup: true,
+    }));
+  }, [chatPickerOpen, dispatch, getApiUrl, realtimeConnected]);
 
   const reportActionFailure = useCallback((operation, result) => {
     if (!result?.ok && result?.error) {
@@ -1120,11 +1141,15 @@ function SchedulesPage() {
                             {selectedDestinationChat.title || 'Untitled chat'}
                           </Link>
                         ) : (
-                          <strong>{destinationLabel(selectedSchedule, chatsById)}</strong>
+                          <strong>{destinationLabel(selectedSchedule, chatsById, chatLookupResults)}</strong>
                         )}
                         <p>
                           {conversationIdFor(selectedSchedule)
-                            ? selectedDestinationChat ? 'Deliver into this chat' : 'The destination chat was deleted'
+                            ? selectedDestinationChat
+                              ? 'Deliver into this chat'
+                              : chatLookupResults[conversationIdFor(selectedSchedule)] === false
+                                ? 'The destination chat was deleted'
+                                : 'Loading destination chat'
                             : 'Runs outside a chat'}
                         </p>
                       </div>

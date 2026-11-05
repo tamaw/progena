@@ -44,7 +44,7 @@ shape:
 {
   "id": "ui-42",
   "seq": 42,
-  "type": "chat.sessions.snapshot",
+  "type": "chat.list.loaded",
   "scope": "chat",
   "session_id": null,
   "payload": {
@@ -58,7 +58,7 @@ shape:
 | --- | --- | --- |
 | `id` | `string` | Stream-global identifier, currently `ui-{seq}`. It is the deduplication and canonical replay cursor value. |
 | `seq` | `integer` | Increasing process-local sequence number. It defines the order of retained canonical replay events. |
-| `type` | `string` | Typed domain event, such as `chat.sessions.snapshot` or `logs.page.loaded`. |
+| `type` | `string` | Typed domain event, such as `chat.list.loaded` or `logs.page.loaded`. |
 | `scope` | `"global" \| "session" \| "chat"` | Event routing scope. It is not an arbitrary nullable string. |
 | `session_id` | `string \| null` | Session scope identifier when applicable. |
 | `payload` | `object` | Event-specific result data. Every event caused by a finite request also has `payload.request_id`. |
@@ -401,7 +401,7 @@ and sends it as `X-Operation-Id`. The successful response is exactly:
 ```json
 {
   "request_id": "4e58d2dc-88bf-4c10-9bf0-1f2ccce2c100",
-  "event_types": ["chat.sessions.snapshot"]
+  "event_types": ["chat.list.loaded"]
 }
 ```
 
@@ -456,9 +456,14 @@ delegated calls have ended. Background async launches do not enter the
 delegating state. Terminal lifecycle frames clear activity; there is no idle
 activity frame.
 
-When a thread is selected, its session detail is emitted as both the
-request-correlated `chat.session.upserted` and `chat.session.selected` event.
-That detail includes `active_request_id` and nullable `activity`
+Opening a thread (`GET /api/ui/chats/{thread_id}?client_id=`) emits one
+`chat.session.selected` to the requesting tab only; it is never replayed. Its
+payload is `{session, queue, background_tasks}`: the session detail, the
+runtime queue snapshot (`null` when the runtime cannot be reached; the page then
+requests `GET /api/chat/sessions/{id}/queue`), and `{thread_id, tasks, revision}`.
+The request also installs that tab's background-task interest for the thread,
+as `PUT .../background-tasks/subscription` would. The detail includes
+`active_request_id` and nullable `activity`
 (`"delegating"`, `"generating"`, or `null`) from the same volatile response
 registry, not persisted chat history. It also carries nullable `interruption`
 (`{next, at}`): when no response is active and the saved transcript ends
@@ -494,8 +499,8 @@ responses never are.
 
 | Domain | Browser routes | Result contract |
 | --- | --- | --- |
-| Chat sessions | `GET/POST /api/ui/chats`; `POST /api/ui/chats/draft`; `GET/PATCH/DELETE /api/ui/chats/{thread_id}`; `GET /api/ui/chats/{thread_id}/messages` | Canonical `ui.event` envelopes: `chat.sessions.snapshot`, `chat.session.created`, `chat.session.metadata.updated`, `chat.session.upserted`, request-correlated `chat.session.selected` (capped to the newest `CHAT_MESSAGE_PAGE_SIZE` messages, with `has_more_messages` and durable `background_workflow_run_ids` for active runs owned by that chat). Legacy workflow records without parent-chat metadata remain transcript-discovered. `chat.messages.page.loaded` supplies older-page pagination; `chat.session.deleted` removes a session. |
-| Chat background tasks | `GET /api/ui/chats/{thread_id}/background-tasks?client_id=`; `PUT /api/ui/chats/{thread_id}/background-tasks/subscription` | Targeted `chat.background_tasks.snapshot` and `chat.background_tasks.updated` contain `{thread_id,tasks,revision}` from durable `async_subagent_tasks` records. Revisions are monotonic per chat within a backend process; the browser ignores an older in-flight snapshot after a newer update. On `connection.ready`, it resets revision watermarks and resubscribes so a backend restart can replace cached tasks. A browser tab may subscribe to multiple viewed chats concurrently; interests are discarded on disconnect. No polling or full chat-session invalidation occurs. |
+| Chat sessions | `GET/POST /api/ui/chats`; `POST /api/ui/chats/draft`; `GET/PATCH/DELETE /api/ui/chats/{thread_id}`; `GET /api/ui/chats/{thread_id}/messages` | The conversation list is read from `session:` documents alone, never checkpoints. `GET /api/ui/chats?client_id=&q=&sort=recent\|name&filter=active\|archived\|all&source=&thread_id=&cursor=&limit=` (limit 0–200, default 50; `client_id` needs an active stream) emits `chat.list.loaded`, or `chat.list.page` when a cursor is given, to the requesting tab only: `{view, rows, total, next_cursor}`. A row is `{thread_id, title, source, pinned, archived, created_at, last_activity, preview}`; `title` is the display title and `preview` is the latest message as stored by the runtime after each turn (200 characters, secret-redacted). `recent` orders pinned first, then latest activity; `name` orders by display title. `q` matches title, first message and preview. Every tab receives `chat.list.row.upserted {row}` when a session is created, renamed, pinned, archived or finishes a turn, and `chat.list.row.deleted {thread_id}` when it is deleted; PATCH acknowledges `chat.list.row.upserted` (re-sent for a no-op) and DELETE `chat.list.row.deleted`. The tab-targeted `chat.session.selected` is capped to the newest `CHAT_MESSAGE_PAGE_SIZE` messages, with `has_more_messages` and durable `background_workflow_run_ids` for active runs owned by that chat. Legacy workflow records without parent-chat metadata remain transcript-discovered. `chat.messages.page.loaded` supplies older-page pagination. |
+| Chat background tasks | `GET /api/ui/chats/{thread_id}/background-tasks?client_id=`; `PUT /api/ui/chats/{thread_id}/background-tasks/subscription` | Targeted `chat.background_tasks.snapshot` and `chat.background_tasks.updated` contain `{thread_id,tasks,revision}` from durable `async_subagent_tasks` records. Opening a chat installs the interest and carries the first snapshot in `chat.session.selected`; the subscription route releases it and re-registers it. Revisions are monotonic per chat within a backend process; the browser ignores an older in-flight snapshot after a newer update. On `connection.ready`, it resets revision watermarks and resubscribes so a backend restart can replace cached tasks. A browser tab may subscribe to multiple viewed chats concurrently; interests are discarded on disconnect. No polling or full chat-session invalidation occurs. |
 | Generation | `POST /api/ui/responses`; `GET /api/ui/responses/{request_id}/stream`; `PUT /api/ui/responses/{generation_id}/cancel` | Canonical lifecycle envelopes: `chat.response.started`, transition-only `chat.response.activity`, `chat.response.completed`, `chat.response.failed`, `chat.response.cancelled`; dedicated response frames: `chat.response.delta`, `chat.response.event`; dedicated transport-only frames: `chat.response.heartbeat`, `chat.response.resync_required`; cancel acknowledgement declares `chat.response.cancel_requested` |
 | Agent profiles | `GET /api/ui/agent-profiles`; `GET /api/ui/agent-profiles/{agent_id}`; `PATCH /api/ui/agent-profiles/{agent_id}/graph` | Canonical `ui.event` envelopes: `agents.snapshot`, request-correlated `agent.selected` (the only event a detail read publishes; it also refreshes the roster entry), `agent.graph.updated` |
 | Inbox | `GET /api/ui/inbox`; `POST /api/ui/inbox/{message_id}/read`; `POST /api/ui/inbox/{message_id}/decision`; `DELETE /api/ui/inbox/{message_id}` | Canonical `ui.event` envelopes: `inbox.snapshot`, `inbox.message.upserted`, `inbox.message.deleted` |

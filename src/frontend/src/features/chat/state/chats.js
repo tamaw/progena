@@ -8,6 +8,7 @@
 import { createSelector } from '@reduxjs/toolkit';
 import { createAcknowledgedThunk, requestAcknowledged } from '../../../store/async';
 import { withQuery } from '../../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realtimeClient';
 import { deriveChatStatus } from '../models/chatStatus';
 import { failureMessage } from '../../../lib/failures';
 import { UI_EVENT } from '../../../realtime/eventVocabulary';
@@ -16,6 +17,7 @@ import { UI_EVENT } from '../../../realtime/eventVocabulary';
 const emptyActive = () => ({
   threadId: null,
   detail: null,
+  queue: null,
   loading: false,
   error: null,
   requestId: null,
@@ -41,13 +43,20 @@ export const initialState = {
   },
   chats: {
     byId: {},
+    tombstones: {},
+    view: { q: '', sort: 'recent', filter: 'active' },
     order: [],
+    total: 0,
+    nextCursor: null,
     loaded: false,
     loading: false,
+    loadingMore: false,
     error: null,
     requestId: null,
+    lookupRequestIds: {},
+    lookupResults: {},
+    sourceTotals: {},
     requestedAt: null,
-    lastRequestTotal: null,
     active: emptyActive(),
     reconciliation: emptyReconciliation(),
   },
@@ -59,62 +68,102 @@ function threadIdFor(session) {
     : null;
 }
 
-function replaceChatList(chats, sessions) {
-  chats.byId = {};
-  chats.order = [];
-  for (const session of Array.isArray(sessions) ? sessions : []) {
-    const threadId = threadIdFor(session);
-    if (!threadId || chats.byId[threadId]) {
-      continue;
-    }
-    chats.byId[threadId] = session;
-    chats.order.push(threadId);
-  }
-}
-
-function upsertChat(chats, session) {
-  const threadId = threadIdFor(session);
-  if (!threadId) {
-    return;
-  }
-  if (!chats.byId[threadId]) {
-    chats.order.unshift(threadId);
-  }
-  chats.byId[threadId] = {
-    ...(chats.byId[threadId] || {}),
-    ...session,
+function normalizeView(view = {}) {
+  return {
+    q: typeof view.q === 'string' ? view.q : '',
+    sort: view.sort === 'name' ? 'name' : 'recent',
+    filter: view.filter === 'archived' || view.filter === 'all' ? view.filter : 'active',
   };
 }
 
-function addChatIfMissing(chats, session) {
-  const threadId = threadIdFor(session);
-  if (!threadId || chats.byId[threadId]) {
-    return;
+function sameView(left, right) {
+  return left.q === right.q && left.sort === right.sort && left.filter === right.filter;
+}
+function rowMatchesFilter(row, view) {
+  return Boolean(
+    row
+    && (view.filter !== 'active' || !row.archived)
+    && (view.filter !== 'archived' || row.archived),
+  );
+}
+
+
+function rowMatchesView(row, view) {
+  if (!rowMatchesFilter(row, view)) {
+    return false;
   }
-  chats.byId[threadId] = session;
-  chats.order.unshift(threadId);
+  const query = view.q.trim().toLocaleLowerCase();
+  if (!query) return true;
+  return `${row.title || ''} ${row.preview || ''}`.toLocaleLowerCase().includes(query);
+}
+
+function compareRows(left, right, sort) {
+  if (sort === 'name') {
+    const title = String(left?.title || '').localeCompare(String(right?.title || ''), undefined, { sensitivity: 'base' });
+    return title || String(left?.thread_id || '').localeCompare(String(right?.thread_id || ''));
+  }
+  const pinned = Number(Boolean(right?.pinned)) - Number(Boolean(left?.pinned));
+  if (pinned) return pinned;
+  const activity = String(right?.last_activity || '').localeCompare(String(left?.last_activity || ''));
+  return activity || String(left?.thread_id || '').localeCompare(String(right?.thread_id || ''));
+}
+
+function sortOrder(chats) {
+  chats.order.sort((leftId, rightId) => compareRows(chats.byId[leftId], chats.byId[rightId], chats.view.sort));
+}
+
+function upsertCachedRow(chats, row) {
+  const threadId = threadIdFor(row);
+  if (!threadId || chats.tombstones[threadId]) return null;
+  chats.byId[threadId] = { ...(chats.byId[threadId] || {}), ...row };
+  return threadId;
+}
+
+function replaceChatList(chats, rows) {
+  const order = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const threadId = upsertCachedRow(chats, row);
+    if (threadId && !order.includes(threadId)) order.push(threadId);
+  }
+  chats.order = order;
+}
+
+function applyRowDelta(chats, row) {
+  const threadId = threadIdFor(row);
+  if (!threadId || chats.tombstones[threadId]) return;
+  const wasInView = chats.order.includes(threadId);
+  const previous = chats.byId[threadId];
+  const previouslyMatched = wasInView || rowMatchesView(previous, chats.view);
+  const matches = wasInView ? rowMatchesFilter(row, chats.view) : rowMatchesView(row, chats.view);
+  upsertCachedRow(chats, row);
+
+  if (wasInView && !matches) {
+    chats.order = chats.order.filter((id) => id !== threadId);
+  } else if (!wasInView && matches) {
+    chats.order.push(threadId);
+    sortOrder(chats);
+    if (chats.nextCursor && chats.order.indexOf(threadId) >= chats.order.length - 1) {
+      chats.order = chats.order.filter((id) => id !== threadId);
+    }
+  } else if (wasInView) {
+    sortOrder(chats);
+  }
+  if (!previouslyMatched && matches) chats.total += 1;
+  if (previouslyMatched && !matches) chats.total = Math.max(0, chats.total - 1);
 }
 
 function deleteChatFromList(chats, threadId) {
-  if (!threadId) {
-    return;
-  }
+  if (!threadId) return;
+  const wasMatched = rowMatchesView(chats.byId[threadId], chats.view);
   delete chats.byId[threadId];
+  chats.tombstones[threadId] = true;
   chats.order = chats.order.filter((item) => item !== threadId);
+  if (wasMatched) chats.total = Math.max(0, chats.total - 1);
 }
 
 function mergeActiveDetail(active, session) {
-  if (!session?.thread_id) {
-    return;
-  }
-  if (active.detail?.thread_id !== session.thread_id) {
-    return;
-  }
-  active.detail = {
-    ...active.detail,
-    ...session,
-    messages: active.detail.messages || [],
-  };
+  if (!session?.thread_id || active.detail?.thread_id !== session.thread_id) return;
+  active.detail = { ...active.detail, ...session, messages: active.detail.messages || [] };
 }
 
 function normalizeChatRuntimeIds(ids) {
@@ -227,15 +276,43 @@ function hydrateResponseTracking(runtime, session) {
   }
 }
 
-export const fetchChatSessions = createAcknowledgedThunk('uiData/fetchChatSessions', async ({ chatsUrl, includeArchived = true }, { requestId }) => {
-  return requestAcknowledged(
-    withQuery(chatsUrl, { include_archived: includeArchived ? 'true' : 'false' }),
-    { requestId },
-  );
-});
+function chatListUrl(chatsUrl, { view, cursor, limit = 50, source, threadIds = [] }) {
+  const params = new URLSearchParams({
+    client_id: realtimeClientId,
+    q: view.q,
+    sort: view.sort,
+    filter: view.filter,
+    limit: String(Math.max(0, Math.min(200, limit))),
+  });
+  if (cursor) params.set('cursor', cursor);
+  if (source) params.set('source', source);
+  for (const threadId of threadIds) {
+    if (typeof threadId === 'string' && threadId) params.append('thread_id', threadId);
+  }
+  return `${chatsUrl}${chatsUrl.includes('?') ? '&' : '?'}${params.toString()}`;
+}
+
+export const fetchChatSessions = createAcknowledgedThunk(
+  'uiData/fetchChatSessions',
+  async ({ chatsUrl, view, cursor = null, limit = 50, source = null, threadIds = [], lookup = false }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(
+      chatListUrl(chatsUrl, {
+        view: normalizeView(view),
+        cursor,
+        limit,
+        source,
+        threadIds,
+        lookup,
+      }),
+      { requestId },
+    );
+  },
+);
 export const requestChatSessionDetail = createAcknowledgedThunk('uiData/requestChatSessionDetail', async ({ chatsUrl, threadId }, { requestId }) => {
+  await waitForRealtimeClient();
   const acknowledgement = await requestAcknowledged(
-    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { request_id: requestId }),
+    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { client_id: realtimeClientId }),
     { requestId },
   );
   return { ...acknowledgement, threadId };
@@ -255,8 +332,9 @@ export const fetchChatMessages = createAcknowledgedThunk('uiData/fetchChatMessag
 // persisted canonical transcript without taking ownership of the selected
 // detail or putting ConversationPage into its blocking loading branch.
 export const requestChatSessionReconciliation = createAcknowledgedThunk('uiData/requestChatSessionReconciliation', async ({ chatsUrl, threadId }, { requestId }) => {
+  await waitForRealtimeClient();
   const acknowledgement = await requestAcknowledged(
-    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { request_id: requestId }),
+    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { client_id: realtimeClientId }),
     { requestId },
   );
   return { ...acknowledgement, threadId };
@@ -333,6 +411,7 @@ export const reducers = {
       ...state.chats.byId[threadId],
       last_activity: new Date().toISOString(),
     };
+    if (state.chats.order.includes(threadId)) sortOrder(state.chats);
   },
 };
 export const eventHandlers = {
@@ -427,29 +506,59 @@ export const eventHandlers = {
       threadId,
     );
   },
-  [UI_EVENT.CHAT_SESSIONS_SNAPSHOT]: (state, payload) => {
-    replaceChatList(state.chats, payload.sessions);
-    state.chats.loaded = true;
-    if (!state.chats.loading || payload.request_id === state.chats.requestId) {
-      state.chats.loading = false;
-      state.chats.error = null;
-      state.chats.requestId = null;
-      state.chats.requestedAt = new Date().toISOString();
+  [UI_EVENT.CHAT_LIST_LOADED]: (state, payload) => {
+    const requestId = payload?.request_id;
+    const isLookup = Boolean(requestId && state.chats.lookupRequestIds[requestId]);
+    if (!requestId || (!isLookup && requestId !== state.chats.requestId)) return;
+    const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+    if (isLookup) {
+      for (const row of rows) upsertCachedRow(state.chats, row);
+      const lookup = state.chats.lookupRequestIds[requestId];
+      for (const threadId of lookup.threadIds) {
+        state.chats.lookupResults[threadId] = rows.some((row) => row?.thread_id === threadId);
+      }
+      if (lookup.source) state.chats.sourceTotals[lookup.source] = Number.isInteger(payload?.total) ? payload.total : 0;
+      delete state.chats.lookupRequestIds[requestId];
+      return;
     }
-  },
-  [UI_EVENT.CHAT_SESSION_CREATED]: (state, payload) => {
-    upsertChat(state.chats, payload.session);
-    mergeActiveDetail(state.chats.active, payload.session);
+    if (!sameView(normalizeView(payload.view), state.chats.view)) return;
+    replaceChatList(state.chats, rows);
+    state.chats.total = Number.isInteger(payload?.total) ? payload.total : 0;
+    state.chats.nextCursor = typeof payload?.next_cursor === 'string' ? payload.next_cursor : null;
     state.chats.loaded = true;
+    state.chats.loading = false;
+    state.chats.loadingMore = false;
+    state.chats.error = null;
+    state.chats.requestId = null;
+    state.chats.requestedAt = new Date().toISOString();
   },
-  [UI_EVENT.CHAT_SESSION_METADATA_UPDATED]: (state, payload) => {
-    upsertChat(state.chats, payload.session);
-    mergeActiveDetail(state.chats.active, payload.session);
-    state.chats.loaded = true;
+  [UI_EVENT.CHAT_LIST_PAGE]: (state, payload) => {
+    const requestId = payload?.request_id;
+    if (!requestId || requestId !== state.chats.requestId || !sameView(normalizeView(payload.view), state.chats.view)) return;
+    for (const row of Array.isArray(payload?.rows) ? payload.rows : []) {
+      const threadId = upsertCachedRow(state.chats, row);
+      if (threadId && !state.chats.order.includes(threadId)) state.chats.order.push(threadId);
+    }
+    state.chats.total = Number.isInteger(payload?.total) ? payload.total : state.chats.total;
+    state.chats.nextCursor = typeof payload?.next_cursor === 'string' ? payload.next_cursor : null;
+    state.chats.loadingMore = false;
+    state.chats.error = null;
+    state.chats.requestId = null;
   },
-  [UI_EVENT.CHAT_SESSION_UPSERTED]: (state, payload) => {
-    addChatIfMissing(state.chats, payload.session);
-    state.chats.loaded = true;
+  [UI_EVENT.CHAT_LIST_ROW_UPSERTED]: (state, payload) => {
+    applyRowDelta(state.chats, payload?.row);
+    mergeActiveDetail(state.chats.active, payload?.row);
+  },
+  [UI_EVENT.CHAT_LIST_ROW_DELETED]: (state, payload) => {
+    const threadId = typeof payload?.thread_id === 'string' && payload.thread_id ? payload.thread_id : null;
+    deleteChatFromList(state.chats, threadId);
+    if (threadId) {
+      clearResponseTrackingForThread(state.chatRuntime, threadId);
+      state.chatRuntime.generatingChatIds = removeChatRuntimeId(state.chatRuntime.generatingChatIds, threadId);
+      state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
+      state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
+    }
+    if (state.chats.active.threadId === threadId) state.chats.active = emptyActive();
   },
   [UI_EVENT.CHAT_SESSION_SELECTED]: (state, payload) => {
     hydrateResponseTracking(state.chatRuntime, payload.session);
@@ -459,10 +568,9 @@ export const eventHandlers = {
       state.chats.reconciliation.error = null;
       return;
     }
-    if (state.chats.active.requestId && payload.request_id !== state.chats.active.requestId) {
-      return;
-    }
+    if (state.chats.active.requestId && payload.request_id !== state.chats.active.requestId) return;
     state.chats.active.detail = payload.session || null;
+    state.chats.active.queue = payload.queue || null;
     state.chats.active.threadId = payload.session?.thread_id || null;
     state.chats.active.loading = false;
     state.chats.active.error = null;
@@ -471,9 +579,7 @@ export const eventHandlers = {
     state.chats.active.pendingOlderPage = null;
   },
   [UI_EVENT.CHAT_MESSAGES_PAGE_LOADED]: (state, payload) => {
-    if (payload?.thread_id !== state.chats.active.threadId) {
-      return;
-    }
+    if (payload?.thread_id !== state.chats.active.threadId) return;
     state.chats.active.hasMoreMessages = Boolean(payload.has_more);
     state.chats.active.pendingOlderPage = {
       requestId: payload.request_id || null,
@@ -481,35 +587,38 @@ export const eventHandlers = {
       summaryMarkers: Array.isArray(payload.summary_markers) ? payload.summary_markers : [],
     };
   },
-  [UI_EVENT.CHAT_SESSION_DELETED]: (state, payload) => {
-    const threadId = typeof payload?.thread_id === 'string' && payload.thread_id
-      ? payload.thread_id
-      : null;
-    deleteChatFromList(state.chats, threadId);
-    if (threadId) {
-      clearResponseTrackingForThread(state.chatRuntime, threadId);
-      state.chatRuntime.generatingChatIds = removeChatRuntimeId(state.chatRuntime.generatingChatIds, threadId);
-      state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
-      state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
-    }
-    if (state.chats.active.threadId === threadId) {
-      state.chats.active = emptyActive();
-    }
-  },
 };
 
 export function buildExtraReducers(builder) {
   builder
     .addCase(fetchChatSessions.pending, (state, action) => {
-      state.chats.loading = true;
-      state.chats.error = null;
-      state.chats.requestId = action.meta.requestId;
-    })
-    .addCase(fetchChatSessions.rejected, (state, action) => {
-      if (state.chats.requestId !== action.meta.requestId) {
+      const { cursor = null, lookup = false, threadIds = [], source = null, view } = action.meta.arg;
+      if (lookup) {
+        state.chats.lookupRequestIds[action.meta.requestId] = { threadIds, source };
         return;
       }
+      state.chats.requestId = action.meta.requestId;
+      state.chats.error = null;
+      if (cursor) {
+        state.chats.loadingMore = true;
+        return;
+      }
+      state.chats.view = normalizeView(view);
+      state.chats.order = [];
+      state.chats.total = 0;
+      state.chats.nextCursor = null;
+      state.chats.loaded = false;
+      state.chats.loading = true;
+      state.chats.loadingMore = false;
+    })
+    .addCase(fetchChatSessions.rejected, (state, action) => {
+      if (state.chats.lookupRequestIds[action.meta.requestId]) {
+        delete state.chats.lookupRequestIds[action.meta.requestId];
+        return;
+      }
+      if (state.chats.requestId !== action.meta.requestId) return;
       state.chats.loading = false;
+      state.chats.loadingMore = false;
       state.chats.error = failureMessage(action.error?.message ? action.error : 'Failed to load chats').message;
       state.chats.requestId = null;
     })
@@ -544,6 +653,9 @@ export const selectChatSessions = createSelector(
   (order, byId) => order.map((threadId) => byId[threadId]).filter(Boolean),
 );
 export const selectChatSessionsState = (state) => state.uiData.chats;
+export const selectChatRowsById = (state) => state.uiData.chats.byId;
+export const selectChatLookupResults = (state) => state.uiData.chats.lookupResults;
+export const selectChatSourceTotals = (state) => state.uiData.chats.sourceTotals;
 export const selectUnreadChatIds = (state) => state.uiData.chatRuntime.unreadChatIds;
 export const selectGeneratingChatIds = (state) => state.uiData.chatRuntime.generatingChatIds;
 export const selectChatActivityByThreadId = (state) => state.uiData.chatRuntime.activityByThreadId;

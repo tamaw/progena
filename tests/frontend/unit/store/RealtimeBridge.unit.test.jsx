@@ -15,6 +15,7 @@ const bridge = vi.hoisted(() => {
     },
     dispatch: vi.fn(),
     fetchChatSessions: vi.fn((payload) => ({ type: 'ui/fetchChatSessions', payload })),
+    requestChatSessionReconciliation: vi.fn((payload) => ({ type: 'ui/requestChatSessionReconciliation', payload })),
     fetchInbox: vi.fn((payload) => ({ type: 'ui/fetchInbox', payload })),
     fetchModelProfiles: vi.fn((payload) => ({ type: 'ui/fetchModelProfiles', payload })),
     getApiUrl: vi.fn((path) => `/api/ui/${path}`),
@@ -80,7 +81,7 @@ vi.mock('@frontend/realtime/realtimeSlice', () => ({
 
 vi.mock("@frontend/features/chat/state/chats", () => ({
   fetchChatSessions: bridge.fetchChatSessions,
-  selectGeneratingChatIds: vi.fn(state => state?.uiData?.chatRuntime?.generatingChatIds || [])
+  requestChatSessionReconciliation: bridge.requestChatSessionReconciliation,
 }));
 vi.mock("@frontend/features/inbox/state", () => ({
   fetchInbox: bridge.fetchInbox
@@ -108,7 +109,9 @@ describe('RealtimeBridge reconnect recovery', () => {
     bridge.connected = true;
     bridge.state.uiData.chatRuntime.generatingChatIds = [];
     bridge.state.uiData.chatRuntime.responseThreadsByRequestId = {};
+    bridge.state.uiData.chats = { view: { q: 'release', sort: 'name', filter: 'archived' }, active: { threadId: null } };
     bridge.fetchChatSessions.mockClear();
+    bridge.requestChatSessionReconciliation.mockClear();
     bridge.fetchInbox.mockClear();
     bridge.fetchModelProfiles.mockClear();
     bridge.getApiUrl.mockClear();
@@ -118,79 +121,44 @@ describe('RealtimeBridge reconnect recovery', () => {
     bridge.resetHooks();
   });
 
-  it('defers chat recovery during a generating reconnect while keeping inbox recovery immediate', () => {
+  it('does not reconcile or fetch chats on the first connection', () => {
     renderBridge();
 
-    expect(snapshotCalls('ui/fetchChatSessions')).toEqual([
-      { type: 'ui/fetchChatSessions', payload: { chatsUrl: '/api/ui/chats', includeArchived: true } },
-    ]);
-    expect(snapshotCalls('ui/fetchInbox')).toEqual([
-      { type: 'ui/fetchInbox', payload: { inboxUrl: '/api/ui/inbox' } },
-    ]);
-
-    // The reconnect must reset both recovery guards, but only the lightweight
-    // inbox snapshot is allowed while streamed chat generation is active.
-    bridge.connected = false;
-    renderBridge();
-    bridge.state.uiData.chatRuntime.generatingChatIds = ['chat-in-progress'];
-    bridge.connected = true;
-    renderBridge();
-
-    expect(bridge.fetchChatSessions).toHaveBeenCalledTimes(1);
-    expect(bridge.fetchInbox).toHaveBeenCalledTimes(2);
-    expect(snapshotCalls('ui/fetchInbox')).toHaveLength(2);
-
-    // Once token painting is no longer active, the deferred authoritative
-    // roster is fetched once and remains deduplicated for this connection.
-    bridge.state.uiData.chatRuntime.generatingChatIds = [];
-    renderBridge();
-    expect(bridge.fetchChatSessions).toHaveBeenCalledTimes(2);
-    expect(bridge.fetchChatSessions).toHaveBeenLastCalledWith({
-      chatsUrl: '/api/ui/chats',
-      includeArchived: true,
-    });
-    renderBridge();
-    expect(bridge.fetchChatSessions).toHaveBeenCalledTimes(2);
-
-    // A later same-URL reconnect is still a fresh EventSource lifetime and
-    // therefore requires both authoritative baselines again.
-    bridge.connected = false;
-    renderBridge();
-    bridge.connected = true;
-    renderBridge();
-
-    expect(bridge.fetchChatSessions).toHaveBeenCalledTimes(3);
-    expect(bridge.fetchInbox).toHaveBeenCalledTimes(3);
-    expect(snapshotCalls('ui/fetchChatSessions')).toHaveLength(3);
-    expect(snapshotCalls('ui/fetchInbox')).toHaveLength(3);
+    expect(bridge.fetchChatSessions).not.toHaveBeenCalled();
+    expect(bridge.requestChatSessionReconciliation).not.toHaveBeenCalled();
   });
 
-  it('defers chat recovery while a foreground response is tracked through canonical lifecycle state', () => {
+  it('does not reconcile when selecting chats while connected', () => {
+    renderBridge();
+    bridge.state.uiData.chats.active.threadId = 'chat-open';
     renderBridge();
 
-    expect(snapshotCalls('ui/fetchChatSessions')).toEqual([
-      { type: 'ui/fetchChatSessions', payload: { chatsUrl: '/api/ui/chats', includeArchived: true } },
-    ]);
-    expect(snapshotCalls('ui/fetchInbox')).toEqual([
-      { type: 'ui/fetchInbox', payload: { inboxUrl: '/api/ui/inbox' } },
-    ]);
+    expect(bridge.requestChatSessionReconciliation).not.toHaveBeenCalled();
+  });
 
+  it('reconciles the open non-streaming chat and refetches its view on reconnect', () => {
+    renderBridge();
+    bridge.state.uiData.chats.active.threadId = 'chat-open';
     bridge.connected = false;
     renderBridge();
-    bridge.state.uiData.chatRuntime.responseThreadsByRequestId = { req_1: 'chat-active' };
     bridge.connected = true;
     renderBridge();
 
-    expect(bridge.fetchChatSessions).toHaveBeenCalledTimes(1);
-    expect(bridge.fetchInbox).toHaveBeenCalledTimes(2);
-
-    bridge.state.uiData.chatRuntime.responseThreadsByRequestId = {};
-    renderBridge();
-
-    expect(bridge.fetchChatSessions).toHaveBeenCalledTimes(2);
-    expect(bridge.fetchChatSessions).toHaveBeenLastCalledWith({
-      chatsUrl: '/api/ui/chats',
-      includeArchived: true,
-    });
+    expect(snapshotCalls('ui/fetchChatSessions')).toEqual([
+      {
+        type: 'ui/fetchChatSessions',
+        payload: {
+          chatsUrl: '/api/ui/chats',
+          view: { q: 'release', sort: 'name', filter: 'archived' },
+          limit: 50,
+        },
+      },
+    ]);
+    expect(snapshotCalls('ui/requestChatSessionReconciliation')).toEqual([
+      {
+        type: 'ui/requestChatSessionReconciliation',
+        payload: { chatsUrl: '/api/ui/chats', threadId: 'chat-open' },
+      },
+    ]);
   });
 });

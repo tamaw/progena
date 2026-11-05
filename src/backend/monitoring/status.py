@@ -36,6 +36,7 @@ from src.progena.documents.kinds import (
     INSTRUCTION_DOCUMENT_KEY_PREFIX,
     KNOWLEDGE_PAGE_KEY_PREFIX,
     REPO_KEY_PREFIX,
+    SESSION_KEY_PREFIX,
     WORKFLOW_DEFINITION_KEY_PREFIX,
     WORKFLOW_QUEUE_KEY_PREFIX,
     WORKFLOW_RUN_KEY_PREFIX,
@@ -54,6 +55,9 @@ _active_agent_profile_broadcast_tasks: set[asyncio.Task] = set()
 
 
 _active_model_profile_broadcast_tasks: set[asyncio.Task] = set()
+
+
+_active_chat_list_row_tasks: set[asyncio.Task] = set()
 
 
 async def _get_current_status() -> dict:
@@ -227,8 +231,6 @@ async def _broadcast_latest_status() -> None:
     try:
         current = await _get_current_status()
         events_stream.broadcast_ui_event(events_contracts.UiEvent.STATUS_UPDATED, current)
-        if events_stream._ui_stream_subscribers:
-            await chat_routes._broadcast_chat_sessions_snapshot()
     finally:
         _state_watch_push_task = None
 
@@ -260,6 +262,13 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
     global _state_watch_push_task
     if not events_stream._ui_stream_subscribers:
         return
+    if changed_key is not None and changed_key.startswith(SESSION_KEY_PREFIX):
+        # Every turn rewrites the session's preview and activity, which logs no
+        # document event; this is the only way that reaches the list.
+        thread_id = changed_key.removeprefix(SESSION_KEY_PREFIX)
+        row_task = asyncio.create_task(chat_routes.publish_chat_list_row(thread_id))
+        _active_chat_list_row_tasks.add(row_task)
+        row_task.add_done_callback(_active_chat_list_row_tasks.discard)
     try:
         if (
             changed_key is None

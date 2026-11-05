@@ -14,6 +14,7 @@ import src.backend.alerts.routes as alerts_routes
 import src.backend.attachments.store as attachments_store
 import src.backend.channels.manager as channels_manager
 import src.backend.chat.responses as chat_responses
+import src.backend.chat.service as chat_service
 import src.backend.events.contracts as events_contracts
 import src.backend.events.documents as events_documents
 import src.backend.events.routes as events_routes
@@ -211,6 +212,16 @@ async def lifespan(app: FastAPI):
     ) -> None:
         await integrations_runtime.start_sse_client_with_retry(client)
         await chat_responses.recover_runtime_queued_executions()
+        # Chats from before stored previews read their history once, here.
+        try:
+            backfilled = await asyncio.to_thread(
+                chat_service.backfill_session_previews, document_store
+            )
+        except Exception:
+            logger.exception("Chat preview backfill failed")
+        else:
+            if backfilled:
+                logger.info("Backfilled %d chat previews", backfilled)
 
     # Register client shutdown callback
     if lifecycle_state.client:

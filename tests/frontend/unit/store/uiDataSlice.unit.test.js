@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import reducer, { selectUnseenNavRoutes } from '@frontend/store/uiDataSlice';
 import { applyUiEvent } from '@frontend/store/uiEvents';
 import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession, markChatErrored, markChatGenerating, markChatUnread, setErroredChatIds, setGeneratingChatIds, setUnreadChatIds } from '@frontend/features/chat/state/actions';
-import { deleteChatSession, requestChatSessionDetail, requestChatSessionReconciliation, updateChatSessionMetadata, selectActiveChatSessionState, selectChatActivityByThreadId, selectChatActivityForThread, selectChatIndicators, selectChatReconciliationState, selectErroredChatIds, selectGeneratingChatIds, selectRequestIdByThreadId, selectRequestIdForThread, selectChatSessions, selectUnreadChatIds } from '@frontend/features/chat/state/chats';
+import { deleteChatSession, fetchChatSessions, requestChatSessionDetail, requestChatSessionReconciliation, updateChatSessionMetadata, selectActiveChatSessionState, selectChatActivityByThreadId, selectChatActivityForThread, selectChatIndicators, selectChatReconciliationState, selectErroredChatIds, selectGeneratingChatIds, selectRequestIdByThreadId, selectRequestIdForThread, selectChatSessions, selectUnreadChatIds } from '@frontend/features/chat/state/chats';
 import { kanbanSnapshotReceived } from '@frontend/features/tasks/actions';
 import { requestAgentDetail, selectActiveAgentProfile, selectRoutineLatestRunStatusByAgentId, selectAgentProfiles } from '@frontend/features/agents/state/agents';
 import { selectKanbanBoard, selectTaskActivityEntry, selectTaskContentEntry } from '@frontend/features/tasks/state';
@@ -15,65 +15,67 @@ import { scheduleSnapshotReceived } from '@frontend/features/schedules/actions';
 import { fetchTokenUsage, selectInsightsQueryState } from '@frontend/features/insights/state';
 import { CHAT_STATUS } from '@frontend/features/chat/models/chatStatus';
 
-const snapshot = (ids) => applyUiEvent({
-  type: 'chat.sessions.snapshot',
-  payload: { sessions: ids.map((id) => ({ thread_id: id })) },
-});
+function seedChats(ids) {
+  const view = { q: '', sort: 'recent', filter: 'active' };
+  let state = reducer(undefined, fetchChatSessions.pending('LIST', { chatsUrl: '/x', view }));
+  state = reducer(state, applyUiEvent({
+    type: 'chat.list.loaded',
+    payload: {
+      request_id: 'LIST',
+      view,
+      rows: ids.map((id) => ({ thread_id: id })),
+      total: ids.length,
+      next_cursor: null,
+    },
+  }));
+  return state;
+}
 
 describe('applyUiEvent reducer', () => {
-  it('snapshot replaces the chat list and marks loaded', () => {
-    const s = reducer(undefined, snapshot(['a', 'b']));
+  it('loads a correlated list response and marks the sidebar ready', () => {
+    const s = seedChats(['a', 'b']);
     expect(s.chats.order).toEqual(['a', 'b']);
     expect(s.chats.loaded).toBe(true);
   });
 
-  it('created prepends a new chat', () => {
-    let s = reducer(undefined, snapshot(['a']));
-    s = reducer(s, applyUiEvent({ type: 'chat.session.created', payload: { session: { thread_id: 'b', title: 'B' } } }));
+  it('upserts rows, preserves view order, and removes deleted rows', () => {
+    let s = seedChats(['a']);
+    s = reducer(s, applyUiEvent({
+      type: 'chat.list.row.upserted',
+      payload: { row: { thread_id: 'b', title: 'B', last_activity: '2026-01-02T00:00:00Z' } },
+    }));
     expect(s.chats.order).toEqual(['b', 'a']);
-    expect(s.chats.byId.b.title).toBe('B');
-  });
-
-  it('upserted adds only when missing and does not duplicate', () => {
-    let s = reducer(undefined, snapshot(['a']));
-    s = reducer(s, applyUiEvent({ type: 'chat.session.upserted', payload: { session: { thread_id: 'a', title: 'changed' } } }));
-    expect(s.chats.order).toEqual(['a']);
-    s = reducer(s, applyUiEvent({ type: 'chat.session.upserted', payload: { session: { thread_id: 'c' } } }));
-    expect(s.chats.order).toEqual(['c', 'a']);
-  });
-
-  it('deleted removes the chat and clears the active detail if it was selected', () => {
-    let s = reducer(undefined, snapshot(['a', 'b']));
-    s = reducer(s, applyUiEvent({ type: 'chat.session.deleted', payload: { thread_id: 'a' } }));
+    s = reducer(s, applyUiEvent({
+      type: 'chat.list.row.deleted',
+      payload: { thread_id: 'a' },
+    }));
     expect(s.chats.order).toEqual(['b']);
     expect(s.chats.byId.a).toBeUndefined();
   });
 
-  it('deleteChatSession.fulfilled acknowledges without changing chats until chat.session.deleted arrives', () => {
-    let s = reducer(undefined, snapshot(['a', 'b']));
+  it('does not change rows on acknowledgements before their row delta', () => {
+    let s = seedChats(['a', 'b']);
     s = reducer(s, deleteChatSession.fulfilled({
       request_id: 'REQ1',
-      event_types: ['chat.session.deleted', 'chat.sessions.snapshot'],
+      event_types: ['chat.list.row.deleted'],
     }, 'REQ1', {
       chatsUrl: '/x',
       threadId: 'a',
     }));
     expect(s.chats.order).toEqual(['a', 'b']);
-    expect(s.chats.byId.a).toBeDefined();
 
     s = reducer(s, applyUiEvent({
-      type: 'chat.session.deleted',
+      type: 'chat.list.row.deleted',
       payload: { thread_id: 'a', request_id: 'REQ1' },
     }));
     expect(s.chats.order).toEqual(['b']);
-    expect(s.chats.byId.a).toBeUndefined();
   });
 
-  it('updateChatSessionMetadata.fulfilled acknowledges without changing archive state until chat.session.metadata.updated arrives', () => {
-    let s = reducer(undefined, snapshot(['a', 'b']));
+  it('applies an archive row delta only after the acknowledgement', () => {
+    let s = seedChats(['a', 'b']);
     s = reducer(s, updateChatSessionMetadata.fulfilled({
       request_id: 'REQ1',
-      event_types: ['chat.session.metadata.updated', 'chat.sessions.snapshot'],
+      event_types: ['chat.list.row.upserted'],
     }, 'REQ1', {
       chatsUrl: '/x',
       threadId: 'a',
@@ -82,41 +84,14 @@ describe('applyUiEvent reducer', () => {
     expect(s.chats.byId.a.archived).toBeUndefined();
 
     s = reducer(s, applyUiEvent({
-      type: 'chat.session.metadata.updated',
+      type: 'chat.list.row.upserted',
       payload: {
         request_id: 'REQ1',
-        session: { thread_id: 'a', title: 'A', archived: true },
+        row: { thread_id: 'a', title: 'A', archived: true },
       },
     }));
     expect(s.chats.byId.a.archived).toBe(true);
-    expect(s.chats.order).toEqual(['a', 'b']);
-  });
-
-  it('updateChatSessionMetadata.fulfilled waits for the canonical snapshot to reorder a touched chat', () => {
-    let s = reducer(undefined, snapshot(['a', 'b', 'c']));
-    s = reducer(s, updateChatSessionMetadata.fulfilled({
-      request_id: 'REQ1',
-      event_types: ['chat.session.metadata.updated', 'chat.sessions.snapshot'],
-    }, 'REQ1', {
-      chatsUrl: '/x',
-      threadId: 'c',
-      patch: { title: 'New chat', touch: true },
-    }));
-    expect(s.chats.order).toEqual(['a', 'b', 'c']);
-
-    s = reducer(s, applyUiEvent({
-      type: 'chat.sessions.snapshot',
-      payload: {
-        request_id: 'REQ1',
-        sessions: [
-          { thread_id: 'c', title: 'New chat' },
-          { thread_id: 'a' },
-          { thread_id: 'b' },
-        ],
-      },
-    }));
-    expect(s.chats.order).toEqual(['c', 'a', 'b']);
-    expect(s.chats.byId.c.title).toBe('New chat');
+    expect(s.chats.order).toEqual(['b']);
   });
 
   it('selected applies matching detail with messages and preserves request identity for hydration', () => {
@@ -485,6 +460,7 @@ describe('applyUiEvent reducer', () => {
     expect(s.chats.active).toEqual({
       threadId: null,
       detail: null,
+      queue: null,
       loading: false,
       error: null,
       requestId: null,
@@ -715,7 +691,7 @@ describe('applyUiEvent reducer', () => {
 
 describe('selectChatSessions (memoized)', () => {
   it('returns a stable reference until the chat list changes', () => {
-    const s1 = reducer(undefined, snapshot(['a']));
+    const s1 = seedChats(['a']);
     const r1 = selectChatSessions({ uiData: s1 });
     expect(selectChatSessions({ uiData: s1 })).toBe(r1);
     // unrelated state change keeps the same chats refs → memo holds
@@ -723,9 +699,12 @@ describe('selectChatSessions (memoized)', () => {
   });
 
   it('recomputes after the chat list changes', () => {
-    const s1 = reducer(undefined, snapshot(['a']));
+    const s1 = seedChats(['a']);
     const r1 = selectChatSessions({ uiData: s1 });
-    const s2 = reducer(s1, applyUiEvent({ type: 'chat.session.created', payload: { session: { thread_id: 'b' } } }));
+    const s2 = reducer(s1, applyUiEvent({
+      type: 'chat.list.row.upserted',
+      payload: { row: { thread_id: 'b', last_activity: '2026-01-02T00:00:00Z' } },
+    }));
     const r2 = selectChatSessions({ uiData: s2 });
     expect(r2).not.toBe(r1);
     expect(r2.map((c) => c.thread_id)).toEqual(['b', 'a']);

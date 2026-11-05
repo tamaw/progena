@@ -16,6 +16,33 @@ describe('queue lifecycle ownership', () => {
   });
 });
 
+describe('chat list row updates', () => {
+  it('keeps an existing row when only a server-only first-message search match is unknown locally', () => {
+    const state = structuredClone(initialState);
+    state.chats.view = { q: 'server-only phrase', sort: 'recent', filter: 'active' };
+    state.chats.byId.chat = {
+      thread_id: 'chat',
+      title: 'Unrelated title',
+      preview: 'Unrelated preview',
+      archived: false,
+    };
+    state.chats.order = ['chat'];
+    state.chats.total = 1;
+
+    eventHandlers[UI_EVENT.CHAT_LIST_ROW_UPSERTED](state, {
+      row: {
+        thread_id: 'chat',
+        title: 'Still unrelated locally',
+        preview: 'Still unrelated locally',
+        archived: false,
+      },
+    });
+
+    expect(state.chats.order).toEqual(['chat']);
+    expect(state.chats.total).toBe(1);
+  });
+});
+
 describe('reconciled chat pagination', () => {
   const canonicalMessages = [
     { id: 'canonical-question', role: 'user', content: 'Latest question' },
