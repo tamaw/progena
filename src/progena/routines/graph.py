@@ -16,7 +16,6 @@ from pydantic import (
     SerializerFunctionWrapHandler,
     field_validator,
     model_serializer,
-    model_validator,
 )
 
 from src.progena.documents.catalog import load_schema
@@ -275,21 +274,11 @@ class AgentNodeConfig(BaseModel):
         return data
 
 
-class A2AResponseCorrectionConfig(BaseModel):
-    """Bound on same-content correction requests after a contract violation."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    # Correction sends only; the original request is never counted or repeated.
-    max_attempts: int = Field(default=0, ge=0, le=3)
-
-
 class A2ANodeConfig(BaseModel):
-    """One-shot delegation to a registered Agent2Agent-protocol peer.
+    """A2A delegation with optional schema validation and native feedback retries.
 
-    ``response_schema`` opts the node into a strict sole-JSON-object reply
-    contract; ``response_correction`` additionally allows a bounded number of
-    same-content correction requests. See docs/a2a-response-contracts.md.
+    ``response_schema`` validates completed output. The ordinary node retry
+    policy bounds any same-context attempts to repair that output.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -298,16 +287,9 @@ class A2ANodeConfig(BaseModel):
     prompt_template: str | None = None
     prompt_file: str | None = None
     response_schema: dict[str, Any] | None = None
-    response_correction: A2AResponseCorrectionConfig | None = None
     retry: RetryPolicyConfig | None = None
     timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
-
-    @model_validator(mode="after")
-    def correction_requires_schema(self) -> A2ANodeConfig:
-        if self.response_correction is not None and self.response_schema is None:
-            raise ValueError("response_correction requires response_schema")
-        return self
 
 
 class NoopNodeConfig(BaseModel):

@@ -373,50 +373,6 @@ def test_rejects_unknown_or_incomplete_strict_node_config(node: dict[str, object
         validate_routine_graph_payload(payload)
 
 
-def _a2a_payload(config: dict[str, object]) -> dict[str, object]:
-    return {
-        "id": "a2a",
-        "name": "A2A",
-        "description": "",
-        "version": "2.0.0",
-        "entry": "call",
-        "nodes": [{"id": "call", "kind": "a2a", "output_key": "out", "config": config}],
-        "edges": [],
-    }
-
-
-def test_accepts_a2a_response_contract_and_bounded_correction() -> None:
-    graph = validate_routine_graph_payload(
-        _a2a_payload(
-            {
-                "agent_name": "peer",
-                "prompt_template": "go",
-                "response_schema": {"type": "object", "required": ["ok"]},
-                "response_correction": {"max_attempts": 2},
-            }
-        )
-    )
-    config = graph.nodes[0].config
-    assert config.response_schema == {"type": "object", "required": ["ok"]}
-    assert config.response_correction is not None
-    assert config.response_correction.max_attempts == 2
-
-
-@pytest.mark.parametrize(
-    "extra",
-    [
-        {"response_correction": {"max_attempts": 1}},
-        {"response_schema": {"type": "object"}, "response_correction": {"max_attempts": 4}},
-        {"response_schema": {"type": "object"}, "response_correction": {"max_attempts": 1.5}},
-        {"response_schema": {"type": "object"}, "response_correction": {"retry": 1}},
-    ],
-)
-def test_rejects_unbounded_or_schema_less_a2a_correction(extra: dict[str, object]) -> None:
-    payload = _a2a_payload({"agent_name": "peer", "prompt_template": "go", **extra})
-    with pytest.raises(ValueError, match="schema validation failed"):
-        validate_routine_graph_payload(payload)
-
-
 def test_rejects_unknown_foreach_send_config_field() -> None:
     payload = {
         "id": "strict-foreach",

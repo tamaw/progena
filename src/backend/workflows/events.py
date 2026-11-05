@@ -25,7 +25,7 @@ from src.progena.routines.lifecycle import (
     ROUTINE_RUN_ACTIVE_STATUSES,
     ROUTINE_RUN_RESUMABLE_STATUSES,
 )
-from src.progena.routines.response_contracts import browser_run_meta
+from src.progena.routines.node_output import browser_run_meta
 from src.progena.runtime.ownership import EXECUTING_ROUTINE_STATUSES
 
 
@@ -126,7 +126,7 @@ async def read_run_state(agent_id: str, thread_id: str, doc_store=None) -> dict[
         values = checkpoint.checkpoint.get("channel_values", {})
         payload.update(
             found=True,
-            # Raw A2A contract attempt replies stay in the checkpoint only.
+            # Raw node-output attempt replies stay in the checkpoint only.
             run_meta=browser_run_meta(values.get("run_meta") or {}),
             data=values.get("data") or {},
         )

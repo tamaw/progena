@@ -13,7 +13,6 @@ This folder intentionally contains a small, maintained set of docs centered on t
 - **[LOCAL_STARTUP.md](LOCAL_STARTUP.md)** - Local development prerequisites and startup commands
 - **[CHAT_FRONTEND_NOTES.md](CHAT_FRONTEND_NOTES.md)** - Chat rendering, streaming, and frontend implementation notes
 - **[ACP_AGENTS.md](ACP_AGENTS.md)** - ACP sidecars and runtime integration
-- **[a2a-response-contracts.md](a2a-response-contracts.md)** - Opt-in strict A2A routine-node reply contracts and bounded same-content correction
 
 ## Review follow-ups
 

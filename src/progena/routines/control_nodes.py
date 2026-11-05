@@ -626,6 +626,12 @@ def _build_retry_exhausted_handler(
         if node_meta is not None:
             failed_node_id, entry = node_meta
             update["run_meta"] = {failed_node_id: [entry]}
+        else:
+            node_output = getattr(error.error, "node_output", None)
+            if node_output is not None:
+                update["run_meta"] = {
+                    node_id: [{"error": str(error.error), "node_output": node_output}]
+                }
         return Command(update=update, goto=route_to)
 
     return recover
