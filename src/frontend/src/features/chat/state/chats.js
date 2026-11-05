@@ -12,7 +12,27 @@ import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realt
 import { deriveChatStatus } from '../models/chatStatus';
 import { failureMessage } from '../../../lib/failures';
 import { UI_EVENT } from '../../../realtime/eventVocabulary';
+import { forgetServerRegistration, noteServerRegistration } from '../backgroundTaskSubscription';
 
+// Opening a chat installs this tab's background-task interest server-side.
+// Its stream event can arrive before the HTTP acknowledgement, so the
+// registration is noted up front and withdrawn if the request fails.
+async function requestChatDetail(chatsUrl, threadId, requestId) {
+  await waitForRealtimeClient();
+  const chatUrl = `${chatsUrl}/${encodeURIComponent(threadId)}`;
+  const tasksUrl = `${chatUrl}/background-tasks`;
+  noteServerRegistration(tasksUrl);
+  try {
+    const acknowledgement = await requestAcknowledged(
+      withQuery(chatUrl, { client_id: realtimeClientId }),
+      { requestId },
+    );
+    return { ...acknowledgement, threadId };
+  } catch (error) {
+    forgetServerRegistration(tasksUrl);
+    throw error;
+  }
+}
 
 const emptyActive = () => ({
   threadId: null,
@@ -309,14 +329,10 @@ export const fetchChatSessions = createAcknowledgedThunk(
     );
   },
 );
-export const requestChatSessionDetail = createAcknowledgedThunk('uiData/requestChatSessionDetail', async ({ chatsUrl, threadId }, { requestId }) => {
-  await waitForRealtimeClient();
-  const acknowledgement = await requestAcknowledged(
-    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { client_id: realtimeClientId }),
-    { requestId },
-  );
-  return { ...acknowledgement, threadId };
-});
+export const requestChatSessionDetail = createAcknowledgedThunk(
+  'uiData/requestChatSessionDetail',
+  ({ chatsUrl, threadId }, { requestId }) => requestChatDetail(chatsUrl, threadId, requestId),
+);
 export const fetchChatMessages = createAcknowledgedThunk('uiData/fetchChatMessages', async ({ chatsUrl, threadId, beforeMessageId, limit }, { requestId }) => {
   const acknowledgement = await requestAcknowledged(
     withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}/messages`, {
@@ -331,14 +347,10 @@ export const fetchChatMessages = createAcknowledgedThunk('uiData/fetchChatMessag
 // A completed foreground stream is already visible locally. This fetches the
 // persisted canonical transcript without taking ownership of the selected
 // detail or putting ConversationPage into its blocking loading branch.
-export const requestChatSessionReconciliation = createAcknowledgedThunk('uiData/requestChatSessionReconciliation', async ({ chatsUrl, threadId }, { requestId }) => {
-  await waitForRealtimeClient();
-  const acknowledgement = await requestAcknowledged(
-    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { client_id: realtimeClientId }),
-    { requestId },
-  );
-  return { ...acknowledgement, threadId };
-});
+export const requestChatSessionReconciliation = createAcknowledgedThunk(
+  'uiData/requestChatSessionReconciliation',
+  ({ chatsUrl, threadId }, { requestId }) => requestChatDetail(chatsUrl, threadId, requestId),
+);
 export const updateChatSessionMetadata = createAcknowledgedThunk('uiData/updateChatSessionMetadata', async ({ chatsUrl, threadId, patch }, { requestId }) => {
   const acknowledgement = await requestAcknowledged(
     `${chatsUrl}/${encodeURIComponent(threadId)}`,

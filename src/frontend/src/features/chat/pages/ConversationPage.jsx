@@ -1763,7 +1763,6 @@ function ConversationPage() {
               )
             ),
           )}
-          serverRegistered={activeBackendChat?.thread_id === threadId}
         />
         <StickyTodoProgress
           liveTurnStore={liveTurnStore}

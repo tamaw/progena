@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Link } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { selectRealtimeStreamReady } from '../../../realtime/realtimeSlice';
@@ -92,7 +92,7 @@ function useTrackedWorkflowRows({ messages, liveActivity, workflowRunIds, runsUr
 }
 
 function useActivities({
-  messages, liveTurnStore, threadId, workflowRunIds, runsUrl, hydrateRuns, asyncTaskRecords, tasksUrl, subscribeTasks, serverRegistered,
+  messages, liveTurnStore, threadId, workflowRunIds, runsUrl, hydrateRuns, asyncTaskRecords, tasksUrl, subscribeTasks,
 }) {
   const liveActivity = useLiveBackgroundActivity(liveTurnStore);
   const { rows, runRequests, refresh, runIdsKey } = useTrackedWorkflowRows({
@@ -108,16 +108,9 @@ function useActivities({
       .map((runId) => watchBackgroundRunTrace(`${runsUrl}/subscription`, 'workflow', runId));
     return () => releases.forEach((release) => release());
   }, [runIdsKey, runsUrl]);
-  // Whether the server already holds the interest only matters when the watch
-  // starts: a later detail reload flipping it must not release the watch, or
-  // the release would drop the interest that reload just registered.
-  const serverRegisteredRef = useRef(serverRegistered);
-  useEffect(() => {
-    serverRegisteredRef.current = serverRegistered;
-  }, [serverRegistered]);
   useEffect(() => {
     if (!subscribeTasks || !tasksUrl) return undefined;
-    return watchBackgroundTasks(tasksUrl, { serverRegistered: serverRegisteredRef.current });
+    return watchBackgroundTasks(tasksUrl);
   }, [subscribeTasks, tasksUrl]);
   const activities = useMemo(
     () => deriveBackgroundActivities({
@@ -259,7 +252,7 @@ function useElapsedClock(active) {
 
 /** Sticky, chat-scoped work that survives a root reply ending. */
 export function BackgroundActivity({
-  messages, liveTurnStore, threadId, workflowRunIds, runsUrl, chatsUrl, subscribeTasks = false, serverRegistered = false,
+  messages, liveTurnStore, threadId, workflowRunIds, runsUrl, chatsUrl, subscribeTasks = false,
 }) {
   const asyncTaskRecords = useSelector((state) => selectBackgroundTasks(state, threadId));
   const tasksUrl = threadId && chatsUrl
@@ -267,7 +260,7 @@ export function BackgroundActivity({
     : null;
   const { active, refresh } = useActivities({
     messages, liveTurnStore, threadId, workflowRunIds, runsUrl, hydrateRuns: true,
-    asyncTaskRecords, tasksUrl, subscribeTasks, serverRegistered,
+    asyncTaskRecords, tasksUrl, subscribeTasks,
   });
   const now = useElapsedClock(active.length > 0);
   if (!active.length) return null;
