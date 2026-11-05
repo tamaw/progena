@@ -49,6 +49,9 @@ function deriveConnectionState(pendingStreams, emptyState = 'disconnected') {
 
 const FRONTEND_RESPONSE_OPTIONS_KEY = '__frontendResponse';
 const RESPONSE_TERMINAL_DRAIN_MS = 50;
+// The canonical terminal can overtake content on the request stream. Wait for
+// that stream to close, but bound the wait if it never does.
+const RESPONSE_TERMINAL_CONTENT_TIMEOUT_MS = 5000;
 const RESPONSE_HEARTBEAT_STALE_MS = 45000;
 const RESPONSE_WATCHDOG_POLL_MS = 15000;
 const RESPONSE_RECONNECT_DELAY_MS = 1000;
@@ -60,21 +63,43 @@ function responseStreamUrl(responsesUrl, requestId, after) {
   return after ? withQuery(url, { after }) : url;
 }
 
-function cleanupPendingTransport(pending) {
+function closePendingSource(pending) {
   pending.eventSource?.close();
   pending.eventSource = null;
-  if (pending.reconnectTimer !== null) {
-    clearTimeout(pending.reconnectTimer);
-    pending.reconnectTimer = null;
-  }
   if (pending.watchdogTimer !== null) {
     clearInterval(pending.watchdogTimer);
     pending.watchdogTimer = null;
+  }
+}
+
+function cleanupPendingTransport(pending) {
+  closePendingSource(pending);
+  if (pending.reconnectTimer !== null) {
+    clearTimeout(pending.reconnectTimer);
+    pending.reconnectTimer = null;
   }
   if (pending.terminalTimer !== null) {
     clearTimeout(pending.terminalTimer);
     pending.terminalTimer = null;
   }
+}
+
+// One request's transport state, shared by sends and observed responses.
+function createPendingStream({
+  onChunk, onComplete, onError, onStreamEvent,
+  acknowledged = false, allowDesyncedCompletion = false, owner = null,
+}) {
+  let resolve;
+  const terminal = new Promise((settle) => { resolve = settle; });
+  return {
+    onChunk, onComplete, onError, onStreamEvent, resolve, terminal,
+    allowDesyncedCompletion, owner, acknowledged,
+    cancelRequested: false, streamObserved: false, eventSource: null,
+    reconnectTimer: null, watchdogTimer: null, terminalTimer: null, lastEventAt: null,
+    lastEventId: null, connectAttempts: 0, openedOnce: false, desynced: false,
+    desyncReason: null, terminalEvent: null, finalized: false, receivedFrameIds: [],
+    connect: null,
+  };
 }
 
 function rememberResponseFrameId(pending, frameId) {
@@ -164,8 +189,11 @@ export function useChatApi() {
       pending.onError?.(buildDesyncCompletionError(pending.desyncReason));
       setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
     } else {
+      // EventSource cannot distinguish a clean EOF from a dropped connection.
+      // Preserve received content, but let canonical history confirm completeness.
       pending.onComplete?.(
         terminalType === UI_EVENT.CHAT_RESPONSE_CANCELLED ? 'cancelled' : 'completed',
+        { contentComplete: false },
       );
       setConnectionState(deriveConnectionState(pendingStreamsRef.current));
     }
@@ -234,11 +262,11 @@ export function useChatApi() {
     };
 
     const connect = () => {
-      if (!isCurrent() || pending.cancelRequested || pending.desynced || pending.terminalEvent) {
+      if (!isCurrent() || pending.cancelRequested || pending.desynced || pending.finalized) {
         return;
       }
 
-      cleanupPendingTransport(pending);
+      closePendingSource(pending);
       pending.lastEventAt = Date.now();
 
       const streamUrl = responseStreamUrl(responsesUrl, requestId, pending.lastEventId);
@@ -278,10 +306,6 @@ export function useChatApi() {
         } else {
           pending.onStreamEvent?.(payload);
         }
-
-        if (pending.terminalEvent) {
-          scheduleTerminalFinalization(requestId, pending);
-        }
       };
 
       source.onopen = () => {
@@ -317,10 +341,14 @@ export function useChatApi() {
           // leave the fallback reason in place
         }
 
-        markDesynced(reason);
         if (pending.terminalEvent) {
+          // The response already finished; only its replay is unavailable.
+          // Complete it as undelivered so canonical history supplies content.
+          closePendingSource(pending);
           scheduleTerminalFinalization(requestId, pending, 0);
+          return;
         }
+        markDesynced(reason);
       });
       source.onerror = () => {
         if (!isCurrent() || pending.eventSource !== source || pending.finalized) {
@@ -328,6 +356,8 @@ export function useChatApi() {
         }
 
         if (pending.terminalEvent) {
+          // A close bounds the drain wait, not proof that all frames arrived.
+          closePendingSource(pending);
           scheduleTerminalFinalization(requestId, pending);
           return;
         }
@@ -348,7 +378,21 @@ export function useChatApi() {
       }, RESPONSE_WATCHDOG_POLL_MS);
     };
 
+    pending.connect = connect;
     connect();
+  }, [scheduleTerminalFinalization]);
+
+  // Finalize a terminal response only after its request stream has drained,
+  // reopening it from the last cursor when it is between connections.
+  const awaitTerminalContent = useCallback((requestId, pending) => {
+    if (pending.eventSource === null) {
+      if (pending.reconnectTimer !== null) {
+        clearTimeout(pending.reconnectTimer);
+        pending.reconnectTimer = null;
+      }
+      if (pending.acknowledged) pending.connect?.();
+    }
+    scheduleTerminalFinalization(requestId, pending, RESPONSE_TERMINAL_CONTENT_TIMEOUT_MS);
   }, [scheduleTerminalFinalization]);
 
   const consumeStreamEvent = useCallback((event) => {
@@ -378,13 +422,13 @@ export function useChatApi() {
     pending.streamObserved = true;
     pending.terminalEvent = { type, payload };
 
-    if (pending.desynced || pending.eventSource === null || pending.cancelRequested) {
+    if (pending.desynced || pending.cancelRequested) {
       scheduleTerminalFinalization(requestId, pending, 0);
       return;
     }
 
-    scheduleTerminalFinalization(requestId, pending);
-  }, [scheduleTerminalFinalization]);
+    awaitTerminalContent(requestId, pending);
+  }, [awaitTerminalContent, scheduleTerminalFinalization]);
 
   useEffect(() => subscribeUiEvent(consumeStreamEvent), [consumeStreamEvent]);
 
@@ -395,37 +439,11 @@ export function useChatApi() {
       const url = getApiUrl('responses');
       const { backendMetadata, allowDesyncedCompletion } = splitResponseMetadata(metadata);
 
-      let resolveTerminal;
-      const terminal = new Promise((resolve) => {
-        resolveTerminal = resolve;
-      });
       const acknowledgementController = new AbortController();
-      const pending = {
-        onChunk,
-        onComplete,
-        onError,
-        onStreamEvent,
-        resolve: resolveTerminal,
-        terminal,
-        cancelRequested: false,
-        acknowledged: false,
-        streamObserved: false,
-        eventSource: null,
-        reconnectTimer: null,
-        watchdogTimer: null,
-        terminalTimer: null,
-        lastEventAt: null,
-        lastEventId: null,
-        connectAttempts: 0,
-        openedOnce: false,
-        desynced: false,
-        desyncReason: null,
-        allowDesyncedCompletion,
-        owner,
-        terminalEvent: null,
-        finalized: false,
-        receivedFrameIds: [],
-      };
+      const pending = createPendingStream({
+        onChunk, onComplete, onError, onStreamEvent, allowDesyncedCompletion, owner,
+      });
+      const { resolve: resolveTerminal, terminal } = pending;
 
       // Register before dispatch: the backend can broadcast `started` before
       // the 202 acknowledgement reaches the browser.
@@ -449,9 +467,11 @@ export function useChatApi() {
         if (activeAcknowledgementRef.current?.requestId === requestId) {
           activeAcknowledgementRef.current = null;
         }
-        if (pendingStreamsRef.current.get(requestId) === pending && !pending.cancelRequested && !pending.terminalEvent) {
+        if (pendingStreamsRef.current.get(requestId) === pending && !pending.cancelRequested && !pending.finalized) {
           pending.acknowledged = true;
           setConnectionState(deriveConnectionState(pendingStreamsRef.current));
+          // A terminal that overtook the acknowledgement still has retained
+          // content to replay; its close then completes the request.
           openResponseStream(requestId, pending, url);
         }
       } catch (error) {
@@ -513,16 +533,9 @@ export function useChatApi() {
       };
     }
 
-    let resolveTerminal;
-    const terminal = new Promise((resolve) => { resolveTerminal = resolve; });
-    const pending = {
-      onChunk, onComplete, onError, onStreamEvent, resolve: resolveTerminal, terminal,
-      allowDesyncedCompletion: false, owner: null,
-      cancelRequested: false, acknowledged: true, streamObserved: false, eventSource: null,
-      reconnectTimer: null, watchdogTimer: null, terminalTimer: null, lastEventAt: null,
-      lastEventId: null, connectAttempts: 0, openedOnce: false, desynced: false,
-      desyncReason: null, terminalEvent: null, finalized: false, receivedFrameIds: [],
-    };
+    const pending = createPendingStream({
+      onChunk, onComplete, onError, onStreamEvent, acknowledged: true,
+    });
     pendingStreamsRef.current.set(requestId, pending);
     activeStreamRequestIdRef.current = requestId;
     setConnectionState(deriveConnectionState(pendingStreamsRef.current));
@@ -534,7 +547,7 @@ export function useChatApi() {
       pendingStreamsRef.current.delete(requestId);
       if (activeStreamRequestIdRef.current === requestId) activeStreamRequestIdRef.current = null;
       setConnectionState(deriveConnectionState(pendingStreamsRef.current));
-      resolveTerminal();
+      pending.resolve();
     };
   }, [getApiUrl, openResponseStream]);
 

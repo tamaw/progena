@@ -12,7 +12,7 @@ import useAiRename, { aiRenameBlockedReason, createAiRenameAction } from '../hoo
 import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
 import { reportFailure } from '../../../lib/failures';
 import { createUuid } from '../../../lib/uuid';
-import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession } from '../state/actions';
+import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession, reconcileChatPagination } from '../state/actions';
 import { deleteChatSession, fetchChatMessages, requestChatSessionDetail, requestChatSessionReconciliation, selectActiveChatSession, selectActiveChatSessionState, selectChatReconciliationState, selectChatSessions, selectChatSessionsState, updateChatSessionMetadata } from '../state/chats';
 import { savePreferences, selectPreferences, selectPreferencesSaveRequest } from '../../settings/state/preferences';
 import { selectModelProfiles } from '../../settings/state/modelProfiles';
@@ -630,7 +630,14 @@ function ConversationPage() {
       ? messages
       : isSpectatedReconciliation
         ? canonicalMessages
-        : mergeCanonicalMessages(messages, canonicalMessages);
+        : mergeCanonicalMessages(messages, canonicalMessages, {
+          // Only the raw persisted ID is a trusted pagination boundary;
+          // normalizeBackendChatMessage may synthesize an index-based ID.
+          preserveBeforeId: chatReconciliationState.detail.has_more_messages
+            && typeof chatReconciliationState.detail.messages?.[0]?.id === 'string'
+            ? chatReconciliationState.detail.messages[0].id
+            : null,
+        });
     setSummaryMarkers((current) => mergeConversationSummaryMarkers(
       current,
       alignSummaryMarkerAnchors(
@@ -639,6 +646,18 @@ function ConversationPage() {
         nextMessages,
       ),
     ));
+    const preserveOlderMessages = nextMessages.length > canonicalMessages.length;
+    dispatch(reconcileChatPagination({
+      threadId: intent.threadId,
+      requestId,
+      preserveOlderMessages,
+    }));
+    if (!preserveOlderMessages) {
+      // No older prefix survived. Render-equivalent rows may retain client IDs;
+      // pagination must still start from the canonical persisted boundary.
+      const persistedStartId = chatReconciliationState.detail.messages?.[0]?.id;
+      setOldestMessageCursor(typeof persistedStartId === 'string' ? persistedStartId : null);
+    }
     if (!isCanonicalEquivalent) {
       // A spectated turn (someone else's send into a thread this page is
       // just watching) never had the interleaved user message locally --
@@ -657,7 +676,7 @@ function ConversationPage() {
         setLiveAssistantTurn(null);
       }
     }
-  }, [chatReconciliationState, liveTurnStore, messages, selectedBackendChatId, setLiveAssistantTurn]);
+  }, [chatReconciliationState, dispatch, liveTurnStore, messages, selectedBackendChatId, setLiveAssistantTurn]);
 
   useEffect(() => {
     if (!activeBackendChat?.thread_id) {

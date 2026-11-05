@@ -2199,6 +2199,24 @@ describe('finalizeLiveAssistantTurn', () => {
       expect(result.timelineItems[0].content).toBe('(No response text)');
     });
 
+    it('does not fabricate the no-response placeholder for content the transport never delivered', () => {
+      const result = finalizeLiveAssistantTurn(baseTurn(), {
+        status: 'completed', now: NOW, contentComplete: false,
+      });
+
+      expect(result).toBeNull();
+    });
+
+    it('keeps partial streamed text when the transport did not drain', () => {
+      const turn = applyAssistantChunk(baseTurn(), 'Partial answer', NOW);
+      const result = finalizeLiveAssistantTurn(turn, {
+        status: 'completed', now: NOW + 1, contentComplete: false,
+      });
+
+      expect(result.content).toBe('Partial answer');
+      expect(result.isStreaming).toBe(false);
+    });
+
     it('ignores hidden pending_response node updates when deciding whether to show the no-response placeholder', () => {
       const turn = applyAssistantStreamEvent(
         baseTurn(),

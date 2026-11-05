@@ -7,6 +7,7 @@ export const clearChatUnread = createAction('uiData/clearChatUnread');
 export const markChatErrored = createAction('uiData/markChatErrored');
 export const markChatGenerating = createAction('uiData/markChatGenerating');
 export const markChatUnread = createAction('uiData/markChatUnread');
+export const reconcileChatPagination = createAction('uiData/reconcileChatPagination');
 export const setErroredChatIds = createAction('uiData/setErroredChatIds');
 export const setGeneratingChatIds = createAction('uiData/setGeneratingChatIds');
 export const setUnreadChatIds = createAction('uiData/setUnreadChatIds');

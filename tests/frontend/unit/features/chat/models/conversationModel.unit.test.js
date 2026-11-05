@@ -375,6 +375,52 @@ describe('mergeCanonicalMessages', () => {
     expect(merged).toEqual(canonical);
     expect(merged[0]).toBe(canonical[0]);
   });
+
+  it('retains an older page loaded during reconciliation while replacing the canonical tail', () => {
+    const older = { id: 'older-page', role: 'user', content: 'Earlier page' };
+    const anchor = { id: 'persisted-anchor', role: 'user', content: 'Latest question' };
+    const partial = { id: 'local-answer', role: 'assistant', content: 'Partial answer' };
+    const stale = { id: 'stale-extra', role: 'assistant', content: 'Must not survive' };
+    const confirmed = { id: 'confirmed-answer', role: 'assistant', content: 'Complete answer' };
+    const currentMessages = [older, anchor, partial, stale];
+
+    const merged = mergeCanonicalMessages(currentMessages, [anchor, confirmed], {
+      preserveBeforeId: anchor.id,
+    });
+
+    expect(merged).toEqual([older, anchor, confirmed]);
+    expect(merged[0]).toBe(older);
+    expect(merged[1]).toBe(anchor);
+  });
+
+  it('does not preserve omitted rows when canonical history is complete or empty', () => {
+    const older = { id: 'older-page', role: 'user', content: 'Earlier page' };
+    const anchor = { id: 'persisted-anchor', role: 'user', content: 'Latest question' };
+    const currentMessages = [older, anchor];
+
+    expect(mergeCanonicalMessages(currentMessages, [anchor])).toEqual([anchor]);
+    expect(mergeCanonicalMessages(currentMessages, [], {
+      preserveBeforeId: anchor.id,
+    })).toEqual([]);
+  });
+
+  it('does not infer a pagination prefix from repeated text when the ID anchor is absent', () => {
+    const older = { id: 'older-page', role: 'user', content: 'Repeated question' };
+    const partial = { id: 'local-answer', role: 'assistant', content: 'Partial answer' };
+    const canonical = [
+      { id: 'different-question', role: 'user', content: 'Repeated question' },
+      { id: 'confirmed-answer', role: 'assistant', content: 'Complete answer' },
+    ];
+    const merged = mergeCanonicalMessages([older, partial], canonical, {
+      preserveBeforeId: 'different-question',
+    });
+
+    expect(merged).toHaveLength(2);
+    expect(merged.map((message) => message.content)).toEqual([
+      'Repeated question', 'Complete answer',
+    ]);
+    expect(merged).not.toContain(partial);
+  });
 });
 
 describe('canonical assistant visual ownership', () => {

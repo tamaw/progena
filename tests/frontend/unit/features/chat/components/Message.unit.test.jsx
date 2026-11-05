@@ -290,16 +290,61 @@ describe('terminal replies without tool work', () => {
 });
 
 describe('scheduled task input', () => {
-  it('renders persisted scheduled user input as a scheduled task', async () => {
-    await renderMessage({
-      id: 'scheduled-user',
-      role: 'user',
-      content: 'Run the report',
-      isScheduled: true,
-    });
+  const scheduled = {
+    id: 'scheduled-user',
+    role: 'user',
+    content: 'Run the report\n\nInclude every **regional** total.',
+    timestamp: 1_000,
+    isScheduled: true,
+    scheduled: { schedule_id: 'schedule-1', run_id: 'run-1' },
+  };
 
-    expect(host.textContent).toContain('Scheduled task');
-    expect(host.textContent).toContain('Scheduled');
-    expect(host.querySelector('.message.scheduled')).not.toBeNull();
+  it('identifies scheduled input by title and dot colour without a Scheduled badge', async () => {
+    await renderMessage(scheduled);
+
+    expect(host.querySelector('.tool-call-entry__title')?.textContent).toBe('Scheduled task');
+    expect(host.querySelector('.scheduled-badge')).toBeNull();
+    expect(host.textContent.replace('Scheduled task', '')).not.toMatch(/Scheduled/);
+    expect(host.querySelector('.entry__badge--user.entry__badge--scheduled')).not.toBeNull();
+    expect(host.querySelector('.msg__time')).not.toBeNull();
+  });
+
+  it('collapses the body behind a native disclosure that keeps the full text', async () => {
+    await renderMessage(scheduled);
+
+    const details = host.querySelector('details.tool-event-disclosure');
+    const summary = details.querySelector(':scope > summary');
+    expect(details.open).toBe(false);
+    expect(summary.getAttribute('aria-label')).toBe('Scheduled task: Run the report');
+    expect(summary.querySelector('.tool-call-entry__summary').textContent).toBe('Run the report');
+    expect(details.querySelector('.message.scheduled .message-content').innerHTML)
+      .toContain('<strong>regional</strong>');
+
+    await act(async () => summary.click());
+    expect(details.open).toBe(true);
+    await act(async () => summary.click());
+    expect(details.open).toBe(false);
+  });
+
+  it('keeps actions out of the summary and copies the full body', async () => {
+    const writeText = vi.fn().mockResolvedValue();
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    await renderMessage(scheduled);
+
+    const details = host.querySelector('details.tool-event-disclosure');
+    expect(details.querySelector('summary button')).toBeNull();
+    const copy = details.querySelector(':scope > .scheduled-task__actions button[aria-label="Copy message"]');
+    await act(async () => copy.click());
+
+    expect(writeText).toHaveBeenCalledWith(scheduled.content);
+  });
+
+  it('leaves ordinary user messages expanded with their Message heading', async () => {
+    await renderMessage({ id: 'ordinary', role: 'user', content: 'Plain request', timestamp: 1_000 });
+
+    expect(host.querySelector('details')).toBeNull();
+    expect(host.querySelector('.msg__role')?.textContent).toBe('Message');
+    expect(host.querySelector('.entry__badge--scheduled')).toBeNull();
+    expect(host.querySelector('.message-content')?.textContent).toContain('Plain request');
   });
 });

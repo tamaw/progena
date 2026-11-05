@@ -188,11 +188,12 @@ export function useChatStream({
     && activeStreamIdRef.current === execution.streamId
   ), []);
 
-  const publishQueuedExecution = useCallback((execution, { status = 'unknown', errorMessage } = {}) => {
+  const publishQueuedExecution = useCallback((execution, { status = 'unknown', errorMessage, contentComplete } = {}) => {
     const message = finalizeLiveAssistantTurn(execution.turn, {
       status,
       now: Date.now(),
       errorMessage,
+      contentComplete,
       interruptionReason: status === 'cancelled' ? 'user_cancelled' : undefined,
     });
     if (!message) {
@@ -359,11 +360,11 @@ export function useChatStream({
               : applyAssistantStreamEvent(execution.turn, streamEvent);
             renderQueuedExecution(execution);
           },
-          onComplete: (status) => {
+          onComplete: (status, { contentComplete = true } = {}) => {
             if (queuedExecutionsRef.current.get(execution.requestId) !== execution) return;
             flushQueuedText(execution);
             const finalStatus = execution.terminalStatus || status;
-            const completed = publishQueuedExecution(execution, { status: finalStatus });
+            const completed = publishQueuedExecution(execution, { status: finalStatus, contentComplete });
             queuedExecutionsRef.current.delete(execution.requestId);
             execution.cleanup = null;
             if (!isQueuedExecutionOwner(execution)) return;
@@ -676,7 +677,7 @@ export function useChatStream({
           updateTextTurn(chunk);
         },
         // onComplete
-        (status) => {
+        (status, { contentComplete = true } = {}) => {
           const stale = isStale();
           if (!stale) {
             flushPendingText(streamId);
@@ -727,6 +728,7 @@ export function useChatStream({
                   status,
                   now: Date.now(),
                   interruptionReason: status === 'cancelled' ? 'user_cancelled' : undefined,
+                  contentComplete,
                 })
                 : null;
               if (committed) {
@@ -740,7 +742,8 @@ export function useChatStream({
                 backgroundOriginChatIdRef.current = null;
               }
               setIsGenerating(false);
-              requestForegroundReconciliation({ threadId: originChatId, streamId });
+              // Content the transport never delivered exists only canonically.
+              requestForegroundReconciliation({ threadId: originChatId, streamId, forceCanonical: !contentComplete });
             });
           });
         },

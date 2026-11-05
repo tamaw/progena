@@ -1946,6 +1946,34 @@ class TestUIStreamEvents:
         alerts_payload = payload["payload"].get("alerts") or payload["payload"]
         assert any(a["id"] == alert.id for a in alerts_payload.get("alerts", []))
 
+    @pytest.mark.asyncio
+    async def test_ui_stream_after_query_replays_missed_envelopes(self, monkeypatch):
+        """A fresh EventSource cannot send Last-Event-ID; ``after`` resumes it."""
+        from fastapi.responses import Response
+
+        monkeypatch.setattr(monitoring_status, "start_status_monitor", lambda: None)
+        monkeypatch.setattr(
+            monitoring_status, "_get_current_status", AsyncMock(return_value={"connected": True})
+        )
+        delivered = events_stream.broadcast_ui_event("chat.response.started", {"n": 1})
+        missed = events_stream.broadcast_ui_event("chat.response.completed", {"n": 2})
+
+        async def first_event(**cursor: str | None) -> dict[str, Any]:
+            generator = events_routes.ui_stream(Response(), client_id=None, **cursor)
+            try:
+                event = await generator.__anext__()
+            finally:
+                await generator.aclose()
+            assert isinstance(event.data, dict)
+            return event.data
+
+        resumed = await first_event(last_event_id=None, after=delivered.id)
+        assert resumed["id"] == missed.id
+        assert resumed["type"] == "chat.response.completed"
+
+        header_wins = await first_event(last_event_id=missed.id, after=delivered.id)
+        assert header_wins["type"] == "connection.ready"
+
 
 class TestWorkspaceBridgeActions:
     """Tests for backend action bridge endpoints."""

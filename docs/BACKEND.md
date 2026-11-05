@@ -83,7 +83,9 @@ has the matching request ID, which these connection events do not.
 ## Canonical replay, reconnect, and resync
 
 The backend retains the most recent **200 broadcast application envelopes** in
-memory. A reconnect may supply `Last-Event-ID: ui-N`; the server replays
+memory. A reconnect may supply `Last-Event-ID: ui-N` (or, from a newly constructed
+`EventSource` that cannot set that header, the `after=ui-N` query parameter;
+the header wins); the server replays
 retained envelopes whose `seq` is greater than `N`, in order, then emits
 `connection.ready`, then delivers new queued events.
 
@@ -369,6 +371,27 @@ The dedicated stream never carries lifecycle ownership. It does **not** emit
 `chat.response.cancelled`. Once the backend knows the request has reached a
 terminal lifecycle outcome, the dedicated stream closes after it has replayed or
 flushed every queued retained content frame.
+
+The canonical terminal can therefore reach the browser before the last content
+frames. A client finalizes the turn when the dedicated stream it opened closes
+after the terminal (reopening from its cursor if it was between connections),
+or after a five-second bounded wait. A browser `EventSource` cannot distinguish
+a clean EOF from a dropped connection, so neither an opened connection nor its
+close confirms complete delivery. The client preserves received content and
+reconciles with canonical history after finalization, including on timeout,
+expired replay or Stop. Unconfirmed empty turns do not render an empty-reply
+placeholder while that reconciliation is pending.
+
+Canonical chat-detail reads return the latest message page. Terminal
+reconciliation preserves already-loaded older pages only before a matching
+persisted first-message ID in a partial canonical page. The canonical tail
+replaces provisional content; a complete, empty or non-overlapping response
+does not authorize preserving an unmatched prefix. When no prefix survives,
+pagination adopts the canonical `has_more_messages` flag and persisted first
+message ID, not a reused client row ID. When an older prefix survives, its
+existing paging availability is retained: a partial canonical tail does not
+imply there are more messages before that loaded prefix. Paging updates must
+match both the selected thread and the current reconciliation request.
 
 ## Finite request acknowledgement and correlation
 

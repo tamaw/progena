@@ -307,6 +307,20 @@ export const reducers = {
   clearActiveChatSession(state) {
     state.chats.active = emptyActive();
   },
+  reconcileChatPagination(state, action) {
+    const { threadId, requestId, preserveOlderMessages } = action.payload;
+    const reconciliation = state.chats.reconciliation;
+    if (
+      preserveOlderMessages
+      || state.chats.active.threadId !== threadId
+      || reconciliation.threadId !== threadId
+      || reconciliation.requestId !== requestId
+      || !reconciliation.detail
+    ) {
+      return;
+    }
+    state.chats.active.hasMoreMessages = Boolean(reconciliation.detail.has_more_messages);
+  },
   // Optimistic bump so the sidebar re-sorts a chat to the top of "Recent" the
   // instant a message is sent, instead of waiting for the stream to finish and
   // a fresh chat list snapshot to arrive.

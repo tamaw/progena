@@ -1287,29 +1287,6 @@
     cursor: not-allowed;
 }
 
-/* Scheduled Message */
-.message.scheduled {
-    border-left: 3px solid var(--color-warning, #f0ad4e);
-    background-color: rgba(240, 173, 78, 0.08);
-}
-
-.scheduled-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--spacing-xs);
-    padding: 2px 8px;
-    margin-bottom: var(--spacing-sm);
-    font-size: var(--font-size-xs);
-    font-weight: 500;
-    color: var(--color-warning, #f0ad4e);
-    background-color: rgba(240, 173, 78, 0.15);
-    border-radius: var(--border-radius-sm);
-}
-
-.scheduled-badge svg {
-    stroke: currentColor;
-}
-
 /* Loading State */
 .chat-loading {
     display: flex;
@@ -2312,6 +2289,11 @@ pre.mermaid svg {
     min-height: 100%;
 }
 
+.msg__entry-main > .tool-call-entry__disclosure {
+    align-self: stretch;
+    min-width: 0;
+}
+
 .message {
     max-width: none;
     padding: 0;
@@ -2334,24 +2316,6 @@ pre.mermaid svg {
     width: 100%;
     background: transparent;
     color: var(--color-text-primary);
-}
-
-.message.scheduled {
-    border-left: 0;
-    background: transparent;
-}
-
-.scheduled-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    margin: 0;
-    padding: 2px 7px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--color-warning) 15%, transparent);
-    color: var(--color-warning);
-    font-size: 10.5px;
-    font-weight: 600;
 }
 
 .message-content,
@@ -2536,6 +2500,16 @@ pre.mermaid svg {
 
 .chat-transcript .entry__badge--user {
     color: var(--color-user-bg);
+}
+
+.chat-transcript .entry__badge--scheduled {
+    color: var(--color-scheduled);
+}
+
+/* An opened scheduled prompt keeps its actions beside, not inside, the summary. */
+.scheduled-task__actions {
+    display: flex;
+    margin-bottom: 2px;
 }
 
 .chat-transcript .entry__badge--assistant {
@@ -2739,10 +2713,6 @@ pre.mermaid svg {
     color: var(--color-text-muted);
     cursor: pointer;
     transition: max-width var(--transition-fast), gap var(--transition-fast), padding var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
-}
-
-.tool-call-entry__line .msg-action-btn {
-    color: inherit;
 }
 
 .msg-action-btn:hover,

@@ -244,19 +244,24 @@ export function areChatTranscriptsEquivalent(localMessages, persistedMessages) {
   ));
 }
 
-// Canonical reconciliation may correct one terminal row. Keep every unchanged
-// local object so memoized historical cards retain their rendered Markdown and
-// do not re-highlight earlier code blocks when only another row changed.
-export function mergeCanonicalMessages(localMessages, canonicalMessages) {
+// A paginated canonical tail may correct a terminal row without owning loaded
+// older pages. Preserve a prefix only before an explicit persisted-ID anchor.
+// Keep unchanged row objects so historical Markdown does not re-render.
+export function mergeCanonicalMessages(localMessages, canonicalMessages, { preserveBeforeId = null } = {}) {
   if (!Array.isArray(localMessages) || !Array.isArray(canonicalMessages)) {
     return canonicalMessages;
   }
 
-  const merged = canonicalMessages.map((canonicalMessage, index) => (
-    areChatMessagesRenderEquivalent(localMessages[index], canonicalMessage)
-      ? localMessages[index]
-      : canonicalMessage
-  ));
+  const prefixLength = preserveBeforeId && canonicalMessages[0]?.id === preserveBeforeId
+    ? Math.max(0, localMessages.findIndex((message) => message.id === preserveBeforeId))
+    : 0;
+  const merged = localMessages.slice(0, prefixLength);
+  canonicalMessages.forEach((canonicalMessage, index) => {
+    const localMessage = localMessages[prefixLength + index];
+    merged.push(areChatMessagesRenderEquivalent(localMessage, canonicalMessage)
+      ? localMessage
+      : canonicalMessage);
+  });
   const unchanged = merged.length === localMessages.length
     && merged.every((message, index) => message === localMessages[index]);
   return unchanged ? localMessages : merged;
