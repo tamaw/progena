@@ -42,6 +42,68 @@
     "session_id": {"type": ["string", "null"], "readOnly": true, "description": "ACP session id; later turns resume it."},
     "turn": {"type": "integer", "minimum": 0, "readOnly": true, "description": "Number of turns started."},
     "output": {"type": ["string", "null"], "readOnly": true, "description": "Agent reply text of the last finished turn."},
+    "evidence": {
+      "type": ["object", "null"],
+      "readOnly": true,
+      "description": "Integrity reference for the retained transcript source of the current or most recently completed turn. This describes where exact transcript detail may be read; it is not task-success or test evidence.",
+      "properties": {
+        "provider": {"type": "string", "const": "claude_native"},
+        "session_id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+        "cwd": {"type": "string"},
+        "line_start": {"type": "integer", "minimum": 0},
+        "line_end": {"type": "integer", "minimum": 0},
+        "byte_start": {"type": "integer", "minimum": 0},
+        "byte_end": {"type": "integer", "minimum": 0},
+        "block_size": {"type": "integer", "const": 1048576},
+        "block_sha256": {"type": "array", "items": {"type": "string", "pattern": "^[a-f0-9]{64}$"}},
+        "verified": {"type": "boolean", "const": true},
+        "awaiting_identity": {"type": "boolean", "const": true},
+        "final_output_available": {"type": "boolean"},
+        "final_message_line": {"type": "integer", "minimum": 0},
+        "output_truncated": {"type": "boolean"}
+      },
+      "additionalProperties": false,
+      "anyOf": [
+        {"type": "null"},
+        {
+          "required": ["provider", "session_id", "line_start", "byte_start"],
+          "not": {
+            "anyOf": [
+              {"required": ["line_end"]},
+              {"required": ["byte_end"]},
+              {"required": ["block_size"]},
+              {"required": ["block_sha256"]}
+            ]
+          }
+        },
+        {
+          "required": ["provider", "session_id", "line_start", "line_end", "byte_start", "byte_end", "block_size", "block_sha256"]
+        },
+        {
+          "required": ["output_truncated", "final_output_available"],
+          "not": {
+            "anyOf": [
+              {"required": ["provider"]},
+              {"required": ["session_id"]},
+              {"required": ["cwd"]},
+              {"required": ["line_start"]},
+              {"required": ["line_end"]},
+              {"required": ["byte_start"]},
+              {"required": ["byte_end"]},
+              {"required": ["block_size"]},
+              {"required": ["block_sha256"]},
+              {"required": ["verified"]},
+              {"required": ["awaiting_identity"]},
+              {"required": ["final_message_line"]}
+            ]
+          },
+          "properties": {
+            "output_truncated": {"const": true},
+            "final_output_available": {"const": false}
+          }
+        }
+      ]
+    },
     "summary": {"type": ["string", "null"], "readOnly": true, "description": "First line of the last output."},
     "stop_reason": {"type": ["string", "null"], "readOnly": true},
     "last_error": {"type": ["string", "null"], "readOnly": true},
@@ -60,7 +122,10 @@
       }
     },
     "stalled": {"type": "boolean", "readOnly": true, "description": "True while a working turn has shown no agent activity for PROGENA_ACP_STALL_SECONDS."},
+    "stall_episode": {"type": "integer", "minimum": 0, "readOnly": true},
+    "material_event_acknowledgements": {"type": "object", "additionalProperties": {"type": "string"}, "readOnly": true},
     "history": {"type": "array", "items": {"type": "object"}, "readOnly": true, "description": "Finished turns: turn, status, prompt, output, summary, stop_reason, last_error, completed_at."},
+    "input_history": {"type": "array", "items": {"type": "object"}, "readOnly": true, "description": "Resolved human input requests retained for exact result reads."},
     "pending_input": {
       "type": ["object", "null"],
       "readOnly": true,

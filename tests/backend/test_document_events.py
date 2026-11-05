@@ -9,6 +9,7 @@ import src.backend.workflows.runtime as workflows_runtime
 from src.backend.events.documents import (
     DocumentEventDispatcher,
     TypedDocumentEvent,
+    list_document_types,
     seed_document_types,
 )
 from src.backend.storage.documents import (
@@ -25,12 +26,14 @@ from src.backend.workflows.service import (
     _execute_document_node,
     build_manual_trigger_event,
     list_workflow_runs,
+    refresh_acp_task_workflow_schemas,
     save_workflow_definition,
 )
 from src.progena.documents.kinds import KNOWLEDGE_PAGE_KEY_PREFIX, SESSION_KEY_PREFIX
 from src.progena.documents.types import BUILTIN_DOCUMENT_TYPES, resolve_document_type
+from src.progena.llm.structured import validate_against_schema
 from src.progena.workflows.derivation import derive_workflow_port_schemas
-from src.progena.workflows.documents import default_workflow_definition
+from src.progena.workflows.documents import default_workflow_definition, workflow_definition_key
 from src.progena.workflows.models import (
     WorkflowNodeDocumentCreate,
     WorkflowNodeDocumentDelete,
@@ -546,6 +549,115 @@ def test_event_ports_are_typed_documents_and_match_paths_are_validated():
     bad = _workflow({"document_type": "kanban_card", "match": {"after.nope": 1}}, {}, [])
     with pytest.raises(ValueError, match="unknown path"):
         validate_workflow_definition_payload(derive_workflow_port_schemas(bad, BUILTIN_TYPES))
+
+
+def test_refresh_acp_task_workflow_schemas_updates_stale_ports_without_running_workflows(store):
+    workflow = _workflow(
+        {
+            "document_type": "acp_task",
+            "key": "acp_task:task-1",
+            "operations": ["updated"],
+            "match": {"after.agent_name": "claude"},
+        },
+        {"details": {"kind": "unpack", "title": "Task details"}},
+        [("event", "after", "details", "value")],
+    )
+    workflow.update(
+        {
+            "title": "Watch Claude",
+            "description": "Retain task event behavior",
+            "enabled": False,
+            "paused": True,
+        }
+    )
+    definition = save_workflow_definition(store, workflow)
+    stale = definition.model_dump(mode="json", by_alias=True)
+    event = stale["graph"]["nodes"]["event"]
+    drifted_fields = {
+        "evidence",
+        "input_history",
+        "material_event_acknowledgements",
+        "stall_episode",
+    }
+    for side in ("before", "after"):
+        properties = event["output_schema"]["properties"][side]["properties"]
+        for field in drifted_fields:
+            properties.pop(field)
+    details_properties = stale["graph"]["nodes"]["details"]["output_schema"]["properties"]
+    for field in drifted_fields:
+        details_properties.pop(field)
+    store.save_document(PROGENA_STATE_PREFIX, workflow_definition_key(definition.id), stale)
+    store.save_document(PROGENA_STATE_PREFIX, "workflow:invalid-unrelated", {"invalid": True})
+
+    task_event = {
+        "event_id": 1,
+        "document_type": "acp_task",
+        "key": "acp_task:task-1",
+        "id": "task-1",
+        "op": "updated",
+        "timestamp": "2026-11-05T00:00:00Z",
+        "changed_fields": ["evidence"],
+        "after": {
+            "agent_name": "claude",
+            "evidence": {
+                "provider": "claude_native",
+                "session_id": "12345678-1234-1234-1234-123456789abc",
+                "line_start": 0,
+                "byte_start": 0,
+            },
+        },
+    }
+    assert validate_against_schema(task_event, event["output_schema"]) is not None
+
+    assert refresh_acp_task_workflow_schemas(store) == 1
+    refreshed = store.get_document(
+        PROGENA_STATE_PREFIX, workflow_definition_key(definition.id)
+    ).payload
+    refreshed_event = refreshed["graph"]["nodes"]["event"]
+    assert validate_against_schema(task_event, refreshed_event["output_schema"]) is None
+    current_schema = list_document_types(store)["acp_task"].load_schema()
+    assert current_schema is not None
+    expected_fields = current_schema["properties"]
+    assert refreshed_event["output_schema"]["properties"]["after"]["properties"] == expected_fields
+    assert refreshed["graph"]["nodes"]["details"]["output_schema"]["properties"] == expected_fields
+    assert {
+        key: refreshed[key] for key in ("id", "title", "description", "enabled", "paused", "ui")
+    } == {key: stale[key] for key in ("id", "title", "description", "enabled", "paused", "ui")}
+    assert refreshed["graph"]["edges"] == stale["graph"]["edges"]
+    assert {key: refreshed_event[key] for key in ("key", "operations", "match")} == {
+        key: event[key] for key in ("key", "operations", "match")
+    }
+    assert list_workflow_runs(store, workflow_id=definition.id) == []
+    assert store.get_document(PROGENA_STATE_PREFIX, "workflow:invalid-unrelated").payload == {
+        "invalid": True
+    }
+
+    assert refresh_acp_task_workflow_schemas(store) == 0
+    assert (
+        store.get_document(PROGENA_STATE_PREFIX, workflow_definition_key(definition.id)).payload
+        == refreshed
+    )
+
+
+def test_workflow_document_write_cannot_replace_supervisor_evidence(store):
+    from src.backend.workflows.service import _execute_document_write_node
+
+    key = "acp_task:protected"
+    original = {"agent_name": "claude", "status": "completed", "evidence": None}
+    store.save_document(PROGENA_STATE_PREFIX, key, original)
+    node = WorkflowNodeDocumentWrite(document_type="acp_task")
+
+    _execute_document_write_node(
+        store,
+        node,
+        {
+            "id": "protected",
+            "evidence": {"output_truncated": True, "final_output_available": False},
+        },
+        "attempted-evidence-write",
+    )
+
+    assert store.get_document(PROGENA_STATE_PREFIX, key).payload == original
 
 
 def test_match_path_requires_presence():
