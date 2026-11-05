@@ -17,6 +17,7 @@ const COLLAPSED_ROW_HEIGHT = 38;
 const EXPANDED_ROW_HEIGHT = 180;
 const OVERSCAN_ROWS = 8;
 const INCREMENTAL_LIMIT = 250;
+const INITIAL_LIMIT = 500;
 const WEEKDAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
 function toDateInputValue(date) {
@@ -490,7 +491,7 @@ function LogsPage() {
       const acknowledgement = await getLogs(buildQueryParams(requestFilters, {
         format: 'json',
         after: incremental ? newestCursorRef.current || undefined : undefined,
-        limit: incremental ? INCREMENTAL_LIMIT : 0,
+        limit: incremental ? INCREMENTAL_LIMIT : INITIAL_LIMIT,
       }));
       if (requestVersion === requestVersionRef.current) {
         setPendingLogRequest({

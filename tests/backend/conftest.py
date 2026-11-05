@@ -85,6 +85,21 @@ def isolate_uvicorn_logging():
 
 
 @pytest.fixture
+def ui_stream():
+    """Register one canonical-stream subscriber as client ``tab-1`` and yield its queue."""
+    from src.backend.events import stream as events_stream
+
+    queue: asyncio.Queue = asyncio.Queue()
+    events_stream._ui_stream_subscribers[queue] = None
+    events_stream._ui_stream_clients[queue] = "tab-1"
+    try:
+        yield queue
+    finally:
+        events_stream._ui_stream_subscribers.pop(queue, None)
+        events_stream._ui_stream_clients.pop(queue, None)
+
+
+@pytest.fixture
 def client():
     """Provide a TestClient for the FastAPI app."""
     from fastapi.testclient import TestClient

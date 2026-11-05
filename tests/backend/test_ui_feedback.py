@@ -430,21 +430,23 @@ class TestStateReaderFileOperations:
 class TestLogsEndpoint:
     """Tests for logs endpoint used by logs page."""
 
-    def test_logs_endpoint(self, client):
+    def test_logs_endpoint(self, client, ui_stream):
         """Test /api/ui/logs returns the finite UI acknowledgement contract."""
         request_id = "ui-feedback-logs"
-        response = client.get("/api/ui/logs", headers={"X-Operation-Id": request_id})
+        response = client.get(
+            "/api/ui/logs?client_id=tab-1", headers={"X-Operation-Id": request_id}
+        )
         assert response.status_code == 202
         assert response.json() == {
             "request_id": request_id,
             "event_types": ["logs.page.loaded"],
         }
 
-    def test_logs_with_level_filter(self, client):
+    def test_logs_with_level_filter(self, client, ui_stream):
         """Test logs endpoint filters by level without changing its acknowledgement."""
         request_id = "ui-feedback-error-logs"
         response = client.get(
-            "/api/ui/logs?level=ERROR",
+            "/api/ui/logs?level=ERROR&client_id=tab-1",
             headers={"X-Operation-Id": request_id},
         )
         assert response.status_code == 202

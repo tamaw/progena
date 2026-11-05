@@ -199,16 +199,15 @@ def test_list_includes_skills(harness):
     assert alpha["skills"] == [{"id": "demo", "name": "Demo", "description": "x", "tags": ["t"]}]
 
 
-def test_detail_publishes_upsert_and_selected(harness):
+def test_detail_publishes_only_selected(harness):
     client, events = harness
     response = client.get(
         "/api/ui/agent-profiles/alpha",
         headers={"X-Operation-Id": "req-1"},
     )
-    assert_acknowledged(response, ["agent.upserted", "agent.selected"], "req-1")
-    types = [e[0] for e in events]
-    assert "agent.upserted" in types
-    selected = next(kwargs for t, p, kwargs in events if t == "agent.selected")
+    assert_acknowledged(response, ["agent.selected"], "req-1")
+    assert [e[0] for e in events] == ["agent.selected"]
+    selected = events[0][2]
     assert selected["request_id"] == "req-1"
 
 
@@ -242,9 +241,9 @@ def test_graph_update_persists_and_broadcasts(harness):
     assert graph_payload["graph"]["entry"] == "a"
     # Persisted: subsequent detail broadcasts the new graph data
     detail_resp = client.get("/api/ui/agent-profiles/alpha")
-    assert_acknowledged(detail_resp, ["agent.upserted", "agent.selected"])
-    detail_upserted = next(p for t, p, _ in events if t == "agent.upserted")
-    assert detail_upserted["agent"]["graph"]["status"] == "Designed"
+    assert_acknowledged(detail_resp, ["agent.selected"])
+    detail_selected = next(p for t, p, _ in events if t == "agent.selected")
+    assert detail_selected["agent"]["graph"]["status"] == "Designed"
 
 
 def test_graph_update_invalid_returns_422(harness):
@@ -332,14 +331,12 @@ def test_detail_a2a_reads_through_registry(harness, monkeypatch):
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [_a2a_profile()])
     response = client.get("/api/ui/agent-profiles/a2a-example-agent?request_id=r2")
-    assert_acknowledged(
-        response, ["agent.upserted", "agent.selected"], "test-middleware-request-id"
-    )
+    assert_acknowledged(response, ["agent.selected"], "test-middleware-request-id")
     # Agent data is broadcast, not in the response
-    upserted_event = next(p for t, p, _ in events if t == "agent.upserted")
-    assert upserted_event["agent"]["status"] == "running"
-    assert [t["id"] for t in upserted_event["agent"]["tasks"]] == ["t1"]
-    assert upserted_event["agent"]["metrics"]["checkpoints"] == "1"
+    selected_event = next(p for t, p, _ in events if t == "agent.selected")
+    assert selected_event["agent"]["status"] == "running"
+    assert [t["id"] for t in selected_event["agent"]["tasks"]] == ["t1"]
+    assert selected_event["agent"]["metrics"]["checkpoints"] == "1"
     assert client.get("/api/ui/agent-profiles/a2a-missing").status_code == 404
 
 

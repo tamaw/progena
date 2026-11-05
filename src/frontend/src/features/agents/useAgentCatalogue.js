@@ -28,6 +28,7 @@ export default function useAgentCatalogue({ kind, routeBase, detailSuffix = '' }
   const activeAgent = useSelector(selectActiveAgentProfile);
   const activeAgentState = useSelector(selectActiveAgentProfileState);
   const requestedListRef = useRef(null);
+  const reconnectedRef = useRef(false);
 
   const agents = useMemo(() => fetchedAgents.filter(CATALOGUE_KIND[kind]), [fetchedAgents, kind]);
   const selectedAgentId = routeAgentId ?? null;
@@ -44,10 +45,18 @@ export default function useAgentCatalogue({ kind, routeBase, detailSuffix = '' }
   useEffect(() => {
     if (!realtimeConnected) {
       requestedListRef.current = null;
+      reconnectedRef.current = true;
       return;
     }
+    // A loaded roster is kept current by snapshots and upserts, so mounting
+    // another catalogue page must not re-request it. Only a reconnect does.
+    if (agentsState.loaded && !reconnectedRef.current) {
+      requestedListRef.current = agentsUrl;
+      return;
+    }
+    reconnectedRef.current = false;
     loadRoster();
-  }, [loadRoster, realtimeConnected]);
+  }, [agentsState.loaded, agentsUrl, loadRoster, realtimeConnected]);
 
   const selectAgent = useCallback((id, { replace = false } = {}) => {
     navigate(makePath(id), { replace });

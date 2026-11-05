@@ -1,7 +1,7 @@
 import { UI_EVENT } from '../../../realtime/eventVocabulary';
 /**
  * Agents domain: the agent roster plus the active (selected) agent detail and
- * graph, kept live by `agents.snapshot` / `agent.upserted` / `agent.selected` /
+ * graph, kept live by `agents.snapshot` / `agent.selected` /
  * `agent.graph.updated` events on /api/ui/stream.
  */
 import { createSelector } from '@reduxjs/toolkit';
@@ -253,9 +253,6 @@ export const eventHandlers = {
       state.agents.requestId = null;
     }
   },
-  [UI_EVENT.AGENT_UPSERTED]: (state, payload) => {
-    upsertAgent(state.agents, payload.agent);
-  },
   [UI_EVENT.AGENT_DELETED]: (state, payload) => {
     const agentId = payload.agent_id;
     if (typeof agentId !== 'string') return;
@@ -276,6 +273,8 @@ export const eventHandlers = {
     // must not land is another agent's detail after the selection moved on.
     const incoming = payload.agent?.id || null;
     if (incoming && state.agents.deletedIds[incoming]) return;
+    // The detail request publishes only this event, so it also refreshes the roster entry.
+    upsertAgent(state.agents, payload.agent);
     if (incoming) {
       if (state.agents.active.agentId && incoming !== state.agents.active.agentId) return;
     } else if (state.agents.active.requestId && payload.request_id !== state.agents.active.requestId) {

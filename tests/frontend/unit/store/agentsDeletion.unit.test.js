@@ -28,7 +28,7 @@ describe('agent deletion notifications', () => {
     let state = populated();
     state = reducer(state, applyUiEvent({ type: 'agents.snapshot', payload: { agents: [{ id: 'two' }] } }));
     expect(state.agents.active.agentId).toBeNull();
-    state = reducer(state, applyUiEvent({ type: 'agent.upserted', payload: { agent: { id: 'one' } } }));
+    state = reducer(state, applyUiEvent({ type: 'agents.snapshot', payload: { agents: [{ id: 'one' }, { id: 'two' }] } }));
     state = reducer(state, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'one' } } }));
     expect(state.agents.active.agentId).toBe('one');
   });

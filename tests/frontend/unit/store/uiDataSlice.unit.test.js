@@ -783,15 +783,6 @@ describe('agent reducers', () => {
     expect(s.agents.active.detail.graph).toEqual(graph);
   });
 
-  it('agent.upserted merges into an existing agent and appends new ones', () => {
-    let s = reducer(undefined, agentsSnapshot(['alpha']));
-    s = reducer(s, applyUiEvent({ type: 'agent.upserted', payload: { agent: { id: 'alpha', role: 'changed' } } }));
-    expect(s.agents.order).toEqual(['alpha']);
-    expect(s.agents.byId.alpha.role).toBe('changed');
-    s = reducer(s, applyUiEvent({ type: 'agent.upserted', payload: { agent: { id: 'gamma' } } }));
-    expect(s.agents.order).toEqual(['alpha', 'gamma']);
-  });
-
   it('agent.selected ignores a reply for an agent the selection has moved off', () => {
     let s = reducer(undefined, requestAgentDetail.pending('REQ1', {
       agentsUrl: '/x', agentId: 'alpha',
@@ -815,6 +806,16 @@ describe('agent reducers', () => {
     expect(s.agents.active.requestId).toBe('REQ2');
     s = reducer(s, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'alpha' }, request_id: 'REQ1' } }));
     expect(selectActiveAgentProfile({ uiData: s })).toEqual({ id: 'alpha' });
+  });
+
+  it('agent.selected refreshes the roster entry, and never resurrects a deleted agent', () => {
+    let s = reducer(undefined, agentsSnapshot(['alpha']));
+    s = reducer(s, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'alpha', role: 'detail' } } }));
+    expect(s.agents.byId.alpha.role).toBe('detail');
+    s = reducer(s, applyUiEvent({ type: 'agent.deleted', payload: { agent_id: 'alpha' } }));
+    s = reducer(s, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'alpha', role: 'late' } } }));
+    expect(s.agents.byId.alpha).toBeUndefined();
+    expect(s.agents.order).toEqual([]);
   });
 
   it('agents.snapshot carries A2A fields (skills, url, transport) through to selectors', () => {

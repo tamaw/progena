@@ -17,7 +17,6 @@
     "AGENT_ROUTINE_SUBSCRIPTION_UPDATED": "agent.routine.subscription.updated",
     "AGENT_SELECTED": "agent.selected",
     "AGENT_SKILL_CONTENT_UPDATED": "agent.skill.content.updated",
-    "AGENT_UPSERTED": "agent.upserted",
     "AGENTS_SNAPSHOT": "agents.snapshot",
     "ALERT": "alert",
     "ALERTS_UPDATED": "alerts.updated",

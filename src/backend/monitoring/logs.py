@@ -31,6 +31,7 @@ async def get_logs(
     end_date: str | None = Query(default=None, alias="end"),
     after: str | None = None,
     limit: int = 500,
+    client_id: str = Query(min_length=1, max_length=64),
     format: str = "text",
     search_mode: str = "plain",
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
@@ -41,11 +42,14 @@ async def get_logs(
     Args:
         level: Filter by log level (debug, info, warn, error)
         search: Search string to filter logs
-        limit: Maximum number of lines to return (default 500)
+        limit: Maximum number of lines to return (default 500; 0 returns every match)
         format: Response format - "text" for raw logs, "json" for structured
+        client_id: Active canonical-stream client that receives the page event
 
     Returns recent logs from the agent.
     """
+    if client_id not in events_stream._ui_stream_clients.values():
+        raise HTTPException(status_code=409, detail="An active UI stream is required")
     request_id = http_requests.request_correlation_id(request, x_request_id)
     state_reader = monitoring_state.get_state_reader()
     if search_mode not in {"plain", "regex"}:
@@ -129,7 +133,10 @@ async def get_logs(
         "folders": state_reader.get_log_folders(),
     }
     events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.LOGS_PAGE_LOADED, page_payload, request_id=request_id
+        events_contracts.UiEvent.LOGS_PAGE_LOADED,
+        page_payload,
+        request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.LOGS_PAGE_LOADED]

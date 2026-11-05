@@ -1396,7 +1396,7 @@ class TestLogsEndpoint:
     """Tests for /api/ui/logs endpoint."""
 
     def test_logs_json_groups_sources_by_folder_and_preserves_log_timestamp(
-        self, client, kanban_state_reader
+        self, client, kanban_state_reader, ui_stream
     ):
         """Test endpoint accepts group/source params."""
         builder_dir = kanban_state_reader.logs_dir / "builder"
@@ -1412,7 +1412,7 @@ class TestLogsEndpoint:
         )
 
         response = client.get(
-            "/api/ui/logs?format=json&folder=builder&file=builder/builder.log&start=2026-03-01&end=2026-03-12&limit=0"
+            "/api/ui/logs?format=json&folder=builder&file=builder/builder.log&start=2026-03-01&end=2026-03-12&limit=0&client_id=tab-1"
         )
 
         assert response.status_code == 202
@@ -1422,7 +1422,7 @@ class TestLogsEndpoint:
         assert "event_types" in data
 
     def test_logs_json_supports_incremental_cursor_and_regex_search(
-        self, client, kanban_state_reader
+        self, client, kanban_state_reader, ui_stream
     ):
         """Test cursor-based incremental fetches and regex search."""
         base_time = datetime.now(UTC).replace(microsecond=0)
@@ -1452,19 +1452,19 @@ class TestLogsEndpoint:
         )
 
         full_response = client.get(
-            "/api/ui/logs?format=json&search=beta|alpha&search_mode=regex&limit=0"
+            "/api/ui/logs?format=json&search=beta|alpha&search_mode=regex&limit=0&client_id=tab-1"
         )
         assert full_response.status_code == 202
         data = full_response.json()
         assert_acknowledgement_body(data)
 
-    def test_logs_json_supports_date_range_filter(self, client, kanban_state_reader):
+    def test_logs_json_supports_date_range_filter(self, client, kanban_state_reader, ui_stream):
         """Test inclusive start/end date filtering."""
         range_end = datetime.now(UTC).date()
         range_start = range_end - timedelta(days=1)
 
         response = client.get(
-            f"/api/ui/logs?format=json&start={range_start.isoformat()}&end={range_end.isoformat()}&limit=0"
+            f"/api/ui/logs?format=json&start={range_start.isoformat()}&end={range_end.isoformat()}&limit=0&client_id=tab-1"
         )
 
         assert response.status_code == 202
@@ -1829,7 +1829,7 @@ class TestLogsPage:
     """Tests for the Logs API endpoint."""
 
     def test_logs_page_loaded_event_carries_complete_causal_payload(
-        self, client, kanban_state_reader
+        self, client, kanban_state_reader, ui_stream
     ):
         """The acknowledgement resolves only through the correlated page payload."""
 
@@ -1838,23 +1838,18 @@ class TestLogsPage:
             encoding="utf-8",
         )
         request_id = "59251b89-8ddb-4e18-913b-566e2419c139"
-        event_start = len(events_stream._ui_event_replay)
         response = client.get(
             "/api/ui/logs?format=json&folder=root&file=progena.log"
-            "&start=2026-03-01&end=2026-03-12&limit=10",
+            "&start=2026-03-01&end=2026-03-12&limit=10&client_id=tab-1",
             headers={"X-Operation-Id": request_id},
         )
 
         assert_acknowledged(
             response, ["logs.page.loaded"], request_id=request_id, check_request_id_header=True
         )
-        emitted = events_stream._ui_event_replay[event_start:]
-        event = next(
-            envelope
-            for envelope in emitted
-            if envelope.type == "logs.page.loaded"
-            and envelope.payload.get("request_id") == request_id
-        )
+        event = ui_stream.get_nowait()["envelope"]
+        assert event.type == "logs.page.loaded"
+        assert event.payload.get("request_id") == request_id
         payload = event.payload
         assert set(payload) == {
             "entries",
@@ -1896,6 +1891,32 @@ class TestLogsPage:
             "newest_cursor": payload["newest_cursor"],
             "cursor_found": payload["cursor_found"],
         }
+
+    def test_logs_page_loaded_event_reaches_only_the_requesting_tab(
+        self, client, kanban_state_reader, ui_stream
+    ):
+        other_tab: asyncio.Queue = asyncio.Queue()
+        events_stream._ui_stream_subscribers[other_tab] = None
+        events_stream._ui_stream_clients[other_tab] = "tab-2"
+        replay_start = len(events_stream._ui_event_replay)
+        try:
+            response = client.get("/api/ui/logs?format=json&client_id=tab-1")
+            assert response.status_code == 202
+            assert ui_stream.get_nowait()["envelope"].type == "logs.page.loaded"
+            assert other_tab.empty()
+        finally:
+            events_stream._ui_stream_subscribers.pop(other_tab, None)
+            events_stream._ui_stream_clients.pop(other_tab, None)
+        assert not [
+            envelope
+            for envelope in events_stream._ui_event_replay[replay_start:]
+            if envelope.type == "logs.page.loaded"
+        ]
+
+    def test_logs_page_requires_an_active_stream_for_the_client(self, client, kanban_state_reader):
+        response = client.get("/api/ui/logs?format=json&client_id=missing-tab")
+
+        assert response.status_code == 409
 
 
 class TestUIStreamEvents:

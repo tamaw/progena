@@ -6,13 +6,14 @@ import { UI_EVENT } from '../../realtime/eventVocabulary';
 
 import { createAcknowledgedThunk, requestAcknowledged } from '../../store/async';
 import { withQuery } from '../../store/http';
+import { realtimeClientId } from '../../realtime/realtimeClient';
 
 export const fetchLogs = createAcknowledgedThunk('uiData/fetchLogs', ({ logsUrl, params = {} }, { requestId }) => {
   const filtered = {};
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== '') filtered[key] = String(value);
   });
-  return requestAcknowledged(withQuery(logsUrl, filtered), { requestId });
+  return requestAcknowledged(withQuery(logsUrl, { ...filtered, client_id: realtimeClientId }), { requestId });
 });
 
 const MAX_COMPLETED_EXPORTS = 10;

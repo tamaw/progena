@@ -580,18 +580,12 @@ def create_agent_profile_router(
             raise HTTPException(status_code=404, detail="Agent not found")
         profile = AgentProfile(**agent)
         broadcast_ui_event(
-            events_contracts.UiEvent.AGENT_UPSERTED,
-            {"agent": profile.model_dump(by_alias=True)},
-            request_id=request_id,
-        )
-        broadcast_ui_event(
             events_contracts.UiEvent.AGENT_SELECTED,
             {"agent": profile.model_dump(by_alias=True)},
             request_id=request_id,
         )
         return http_contracts.acknowledgement_response(
-            request_id,
-            [events_contracts.UiEvent.AGENT_UPSERTED, events_contracts.UiEvent.AGENT_SELECTED],
+            request_id, [events_contracts.UiEvent.AGENT_SELECTED]
         )
 
     @router.patch(

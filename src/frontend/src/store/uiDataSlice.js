@@ -68,7 +68,6 @@ const NAV_ACTIVITY_EVENT_ROUTES = {
   [UI_EVENT.TASK_ACTIVITY_UPDATED]: '/tasks',
   [UI_EVENT.AGENTS_SNAPSHOT]: '/agents',
   [UI_EVENT.INSTRUCTIONS_SNAPSHOT]: '/instructions',
-  [UI_EVENT.AGENT_UPSERTED]: '/agents',
   'agent.routine.run.started': '/routines',
   'agent.routine.run.completed': '/routines',
   'agent.routine.run.failed': '/routines',
