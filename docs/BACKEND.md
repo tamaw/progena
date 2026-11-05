@@ -387,7 +387,11 @@ reconciliation preserves already-loaded older pages only before a matching
 persisted first-message ID in a partial canonical page. The canonical tail
 replaces provisional content; a complete, empty or non-overlapping response
 does not authorize preserving an unmatched prefix. When no prefix survives,
-pagination resumes from the canonical persisted ID, not a reused client row ID.
+pagination adopts the canonical `has_more_messages` flag and persisted first
+message ID, not a reused client row ID. When an older prefix survives, its
+existing paging availability is retained: a partial canonical tail does not
+imply there are more messages before that loaded prefix. Paging updates must
+match both the selected thread and the current reconciliation request.
 
 ## Finite request acknowledgement and correlation
 

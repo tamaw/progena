@@ -12,7 +12,7 @@ import useAiRename, { aiRenameBlockedReason, createAiRenameAction } from '../hoo
 import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
 import { reportFailure } from '../../../lib/failures';
 import { createUuid } from '../../../lib/uuid';
-import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession } from '../state/actions';
+import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession, reconcileChatPagination } from '../state/actions';
 import { deleteChatSession, fetchChatMessages, requestChatSessionDetail, requestChatSessionReconciliation, selectActiveChatSession, selectActiveChatSessionState, selectChatReconciliationState, selectChatSessions, selectChatSessionsState, updateChatSessionMetadata } from '../state/chats';
 import { savePreferences, selectPreferences, selectPreferencesSaveRequest } from '../../settings/state/preferences';
 import { selectModelProfiles } from '../../settings/state/modelProfiles';
@@ -646,7 +646,13 @@ function ConversationPage() {
         nextMessages,
       ),
     ));
-    if (nextMessages.length === canonicalMessages.length) {
+    const preserveOlderMessages = nextMessages.length > canonicalMessages.length;
+    dispatch(reconcileChatPagination({
+      threadId: intent.threadId,
+      requestId,
+      preserveOlderMessages,
+    }));
+    if (!preserveOlderMessages) {
       // No older prefix survived. Render-equivalent rows may retain client IDs;
       // pagination must still start from the canonical persisted boundary.
       const persistedStartId = chatReconciliationState.detail.messages?.[0]?.id;
@@ -670,7 +676,7 @@ function ConversationPage() {
         setLiveAssistantTurn(null);
       }
     }
-  }, [chatReconciliationState, liveTurnStore, messages, selectedBackendChatId, setLiveAssistantTurn]);
+  }, [chatReconciliationState, dispatch, liveTurnStore, messages, selectedBackendChatId, setLiveAssistantTurn]);
 
   useEffect(() => {
     if (!activeBackendChat?.thread_id) {
