@@ -38,10 +38,11 @@ it on for a live routine is a separate, explicitly approved change.
 }
 ```
 
-- `response_schema` is a JSON Schema object, or `{"$ref": "#/$defs/<name>"}`
-  into the graph's own `$defs`. Nested references must also stay graph-local
-  (`#...`). Remote, file, or undefined references are rejected when the graph is
-  compiled.
+- `response_schema` is a JSON Schema object, including references into its inline
+  `$defs` or the graph's own `$defs`. Sibling constraints beside `$ref` remain
+  effective according to the declared dialect. Nested references must also stay
+  local (`#...`). Remote, file, or undefined references are rejected when the
+  graph is compiled.
 - `response_correction.max_attempts` is the number of correction sends allowed
   after the original request. It defaults to 0 and is limited to 0–3, and it
   requires `response_schema`. The original request is never counted and never
@@ -63,6 +64,7 @@ The completed reply must be exactly one JSON object. Only JSON whitespace
 - duplicate keys at any depth
 - `NaN`, `Infinity`, and numbers that overflow to infinity
 - malformed JSON or lone surrogate Unicode escapes
+- integers exceeding the interpreter's decimal-digit decoding limit
 
 The object is then validated offline against the schema. No reference is
 fetched over the network or from the filesystem. Validation covers what the
@@ -86,6 +88,10 @@ newlines and must collectively form exactly one JSON object. No candidate is
 selected merely because it validates. With no textual artifact, the agent's
 status message is used. Task history, which also contains the caller's request,
 is never inspected.
+
+A task's `completed` status remains authoritative even if it supplied no usable
+agent text. Its empty reply violates the response contract; it is never
+downgraded to an incomplete task that ordinary retries can redispatch.
 
 Only a **completed** reply that violates the contract qualifies for
 correction. None of the following ever becomes a correction:

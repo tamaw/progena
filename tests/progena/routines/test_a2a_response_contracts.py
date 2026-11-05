@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import sys
 from typing import Any
 from unittest.mock import Mock, patch
 
@@ -443,22 +444,6 @@ def test_multiple_result_artifacts_remain_a_strictly_invalid_reply() -> None:
                 "kind": "message",
                 "role": "user",
                 "parts": [{"kind": "text", "text": "PRIVATE-CALLER-PROMPT"}],
-            },
-            False,
-        ),
-        (
-            {
-                "kind": "task",
-                "id": "task-1",
-                "contextId": "ctx-1",
-                "status": {
-                    "state": "completed",
-                    "message": {
-                        "kind": "message",
-                        "role": "user",
-                        "parts": [{"kind": "text", "text": "PRIVATE-CALLER-PROMPT"}],
-                    },
-                },
             },
             False,
         ),
@@ -1040,3 +1025,113 @@ async def test_failed_exchange_record_persists_in_the_run_checkpoint() -> None:
         '{"verdict": "PRIVATE-REPLY-1"}',
         '{"verdict": "PRIVATE-REPLY-2"}',
     ]
+
+
+@pytest.mark.parametrize("retry_on", ["all", "model_response"])
+@pytest.mark.parametrize("caller_echo", [False, True])
+async def test_completed_task_without_agent_text_does_not_replay_original(
+    retry_on: str, caller_echo: bool
+) -> None:
+    original = _task("PRIVATE-CALLER-PROMPT")
+    if caller_echo:
+        original["result"]["status"]["message"]["role"] = "user"
+    else:
+        original["result"]["status"].pop("message")
+    peer = Peer(original, _task(VALID, task_id="correction"))
+    runnable = compile_routine_graph(
+        _graph(
+            _a2a_config(
+                response_correction={"max_attempts": 1},
+                retry={"max_retries": 2, "retry_on": retry_on, "initial_interval": 0.001},
+            )
+        ),
+        model=CountingModel(),
+        tool_registry=_registry(),
+    )
+
+    with patch(SEND, new=peer):
+        result = await runnable.ainvoke(_graph_input())
+
+    assert result["data"]["review_json"] == {"verdict": "approve", "score": 7}
+    assert len(peer.calls) == 2
+    assert sum(c["request"] == "Review draft D-1 and return your verdict" for c in peer.calls) == 1
+    assert "PRIVATE-CALLER-PROMPT" not in peer.calls[1]["request"]
+    record = result["run_meta"]["call"][0]["a2a_contract"]
+    assert record["attempts"][0]["task_state"] == "completed"
+    assert record["attempts"][0]["diagnostics"] == [{"path": "$", "code": "empty_reply"}]
+
+
+@pytest.mark.parametrize("retry_on", ["all", "model_response"])
+async def test_integer_limit_in_correction_does_not_replay_original(retry_on: str) -> None:
+    previous_limit = sys.get_int_max_str_digits()
+    limit = sys.int_info.str_digits_check_threshold
+    sys.set_int_max_str_digits(limit)
+    try:
+        oversized = '{"verdict":"approve","score":' + "1" * (limit + 1) + "}"
+        peer = Peer(_task("{}"), _task(oversized))
+        runnable = compile_routine_graph(
+            _graph(
+                _a2a_config(
+                    response_correction={"max_attempts": 1},
+                    retry={"max_retries": 2, "retry_on": retry_on, "initial_interval": 0.001},
+                )
+            ),
+            model=CountingModel(),
+            tool_registry=_registry(),
+        )
+
+        with patch(SEND, new=peer), pytest.raises(A2AContractTerminalError) as exc:
+            await runnable.ainvoke(_graph_input())
+
+        assert exc.value.code == "corrections_exhausted"
+        assert len(peer.calls) == 2
+        assert (
+            sum(c["request"] == "Review draft D-1 and return your verdict" for c in peer.calls) == 1
+        )
+        assert exc.value.a2a_contract["attempts"][-1]["diagnostics"] == [
+            {"path": "$", "code": "malformed_json"}
+        ]
+    finally:
+        sys.set_int_max_str_digits(previous_limit)
+
+
+@pytest.mark.parametrize(
+    "dialect",
+    [
+        "http://json-schema.org/draft-07/schema",
+        "http://json-schema.org/draft-07/schema#",
+        "https://json-schema.org/draft/2020-12/schema",
+        "https://json-schema.org/draft/2020-12/schema#",
+    ],
+)
+def test_standard_dialect_identifiers_accept_empty_fragment_variants(dialect: str) -> None:
+    contract = ResponseContract({**SCHEMA, "$schema": dialect})
+    assert contract.check(VALID).value == {"verdict": "approve", "score": 7}
+
+
+async def test_top_level_reference_keeps_sibling_constraints() -> None:
+    peer = Peer(_task("{}"))
+    node = _node(
+        _a2a_config(response_schema={"$ref": "#/$defs/Base", "required": ["score"]}),
+        defs={"Base": {"type": "object"}},
+    )
+    with patch(SEND, new=peer), pytest.raises(A2AContractTerminalError) as exc:
+        await node(_state())
+
+    assert exc.value.code == "contract_violation"
+    assert exc.value.a2a_contract["attempts"][0]["diagnostics"] == [
+        {"path": "$", "code": "missing_required", "missing": ["score"]}
+    ]
+    assert len(peer.calls) == 1
+
+
+async def test_top_level_reference_resolves_inline_definitions() -> None:
+    peer = Peer(_task(VALID))
+    node = _node(
+        _a2a_config(response_schema={"$ref": "#/$defs/Review", "$defs": {"Review": SCHEMA}})
+    )
+    with patch(SEND, new=peer):
+        update = await node(_state())
+
+    assert update["data"]["review_json"] == {"verdict": "approve", "score": 7}
+    assert len(peer.calls) == 1

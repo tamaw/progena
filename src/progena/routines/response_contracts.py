@@ -219,11 +219,9 @@ def classify_reply(payload: Any) -> A2AReply:
     state = raw_state if raw_state in _TASK_STATES else "unknown"
     status_text = ""
     message_id = None
-    has_peer_reply = False
     if isinstance(status, dict) and isinstance(status.get("message"), dict):
         message = status["message"]
         if str(message.get("role") or "").strip().lower() == "agent":
-            has_peer_reply = True
             status_text = _parts_text(message.get("parts"))
             message_id = _optional_id(message.get("messageId"))
 
@@ -239,11 +237,8 @@ def classify_reply(payload: Any) -> A2AReply:
     # artifact, separated so multiple JSON objects remain invalid rather than
     # silently selecting one that happens to satisfy the contract.
     text = "\n".join(artifact_texts) if artifact_texts else status_text
-    has_peer_reply = has_peer_reply or bool(artifact_texts)
-    if state == "completed" and not has_peer_reply:
-        # A completed task with only a user/unknown status payload has no
-        # peer-authored reply to correct. Keep its ordinary retry semantics.
-        state = "unknown"
+    # Task completion is authoritative even when no usable reply was supplied.
+    # Empty text must fail the contract, not become a retry of completed work.
     return A2AReply(
         "task",
         state,
@@ -339,7 +334,7 @@ class ResponseContract:
 
             dialect = root.get("$schema")
             supported_dialects = {
-                validator.ID_OF(validator.META_SCHEMA)
+                identifier.removesuffix("#")
                 for validator in (
                     validators.Draft3Validator,
                     validators.Draft4Validator,
@@ -348,9 +343,10 @@ class ResponseContract:
                     validators.Draft201909Validator,
                     validators.Draft202012Validator,
                 )
+                if (identifier := validator.ID_OF(validator.META_SCHEMA)) is not None
             }
             if dialect is not None and (
-                not isinstance(dialect, str) or dialect not in supported_dialects
+                not isinstance(dialect, str) or dialect.removesuffix("#") not in supported_dialects
             ):
                 raise A2AContractConfigError(
                     "response_schema declares an unsupported JSON Schema dialect"
@@ -596,7 +592,7 @@ def parse_sole_json_object(text: str) -> tuple[dict[str, Any] | None, dict[str, 
             "line": exc.lineno,
             "column": exc.colno,
         }
-    except RecursionError:
+    except (RecursionError, ValueError):
         return None, {"path": "$", "code": "malformed_json"}
     if text[end:].strip(_JSON_WHITESPACE):
         return None, {"path": "$", "code": "trailing_content"}

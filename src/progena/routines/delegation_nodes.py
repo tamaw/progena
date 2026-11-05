@@ -187,7 +187,7 @@ def _build_a2a_node(
     # Contract configuration is checked at compile time, before any dispatch,
     # so a bad schema or missing validator never consumes a correction.
     contract: ResponseContract | None = None
-    schema = _resolve_response_schema(node.id, "a2a", config, defs)
+    schema = config.get("response_schema")
     if schema is not None:
         try:
             contract = ResponseContract(schema, defs)
