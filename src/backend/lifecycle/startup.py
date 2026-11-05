@@ -24,6 +24,7 @@ import src.backend.lifecycle.state as lifecycle_state
 import src.backend.lifecycle.watchers as lifecycle_watchers
 import src.backend.schedules.service as schedules_service
 import src.backend.storage.documents as storage_documents
+import src.backend.workflows.service as workflows_service
 from src.progena.settings.providers import (
     configure_provider_repository,
     provider_database_url,
@@ -51,6 +52,7 @@ async def lifespan(app: FastAPI):
         runtime_url=lifecycle_state.config.progena_runtime_url,
     )
     events_documents.seed_document_types(document_store)
+    await asyncio.to_thread(workflows_service.refresh_acp_task_workflow_schemas, document_store)
     attachment_blob_store = attachments_store.configure_attachment_blob_store(
         lifecycle_state.config.database_url
     )
