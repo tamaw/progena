@@ -29,7 +29,6 @@ _MAX_LISTED_NAMES = 32
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,63}$")
 _JSON_WHITESPACE = " \t\n\r"
 _REF_KEYWORDS = ("$ref", "$dynamicRef", "$recursiveRef")
-_DEFS_PREFIX = "#/$defs/"
 _DECLINE_SENTINEL = "CONTRACT_CORRECTION_UNAVAILABLE"
 _RANGE_KEYWORDS = frozenset(
     {
@@ -177,6 +176,11 @@ def _parts_text(parts: Any) -> str:
             continue
         nested = part.get("root")
         root = nested if isinstance(nested, dict) else part
+        # An A2A Part is a tagged union. Only canonical TextParts are reply
+        # content; a peer-supplied field on DataPart/FilePart must not become
+        # trusted contract input or appear in a correction audit.
+        if root.get("kind") != "text":
+            continue
         text = root.get("text")
         if isinstance(text, str):
             chunks.append(text)
@@ -190,14 +194,15 @@ def _optional_id(value: Any) -> str | None:
 def classify_reply(payload: Any) -> A2AReply:
     """Classify a successful ``A2AClient.send_message`` result payload.
 
-    Text comes only from peer-authored content (an agent message, a task's
-    status message, or its artifacts) -- never from task history, which also
-    contains the caller's own request.
+    Text comes only from canonical peer-authored A2A content: an agent
+    ``Message``, a completed task's agent status message, or its TextPart
+    artifacts. Task history also contains the caller's own request and is
+    never inspected.
     """
     if not isinstance(payload, dict):
         return A2AReply("unknown", "unknown", "", None, None, None)
     kind = str(payload.get("kind") or "").strip().lower()
-    if kind == "message" or (not kind and "parts" in payload and "status" not in payload):
+    if kind == "message":
         role = str(payload.get("role") or "").strip().lower()
         return A2AReply(
             "message",
@@ -207,24 +212,38 @@ def classify_reply(payload: Any) -> A2AReply:
             _optional_id(payload.get("contextId")),
             _optional_id(payload.get("messageId")),
         )
+    if kind != "task":
+        return A2AReply("unknown", "unknown", "", None, None, None)
     status = payload.get("status")
     raw_state = str(status.get("state") or "").strip().lower() if isinstance(status, dict) else ""
     state = raw_state if raw_state in _TASK_STATES else "unknown"
-    text = ""
+    status_text = ""
     message_id = None
+    has_peer_reply = False
     if isinstance(status, dict) and isinstance(status.get("message"), dict):
         message = status["message"]
-        if str(message.get("role") or "agent").strip().lower() != "user":
-            text = _parts_text(message.get("parts"))
+        if str(message.get("role") or "").strip().lower() == "agent":
+            has_peer_reply = True
+            status_text = _parts_text(message.get("parts"))
             message_id = _optional_id(message.get("messageId"))
-    if not text.strip():
-        artifacts = payload.get("artifacts")
-        if isinstance(artifacts, list):
-            for artifact in reversed(artifacts):
-                if isinstance(artifact, dict):
-                    text = _parts_text(artifact.get("parts"))
-                    if text.strip():
-                        break
+
+    artifact_texts: list[str] = []
+    artifacts = payload.get("artifacts")
+    if isinstance(artifacts, list):
+        for artifact in artifacts:
+            if isinstance(artifact, dict):
+                artifact_text = _parts_text(artifact.get("parts"))
+                if artifact_text.strip():
+                    artifact_texts.append(artifact_text)
+    # Artifacts are the completed Task's result. Preserve every textual
+    # artifact, separated so multiple JSON objects remain invalid rather than
+    # silently selecting one that happens to satisfy the contract.
+    text = "\n".join(artifact_texts) if artifact_texts else status_text
+    has_peer_reply = has_peer_reply or bool(artifact_texts)
+    if state == "completed" and not has_peer_reply:
+        # A completed task with only a user/unknown status payload has no
+        # peer-authored reply to correct. Keep its ordinary retry semantics.
+        state = "unknown"
     return A2AReply(
         "task",
         state,
@@ -255,56 +274,112 @@ def _collect_property_names(schema: Any, names: set[str]) -> None:
             _collect_property_names(item, names)
 
 
-def _check_refs(schema: Any, defs: dict[str, Any]) -> None:
-    if isinstance(schema, dict):
-        for keyword in _REF_KEYWORDS:
-            ref = schema.get(keyword)
-            if ref is None:
-                continue
-            if not isinstance(ref, str) or not ref.startswith("#"):
-                raise A2AContractConfigError(
-                    "response_schema may only reference graph-local '#/$defs/<name>' schemas"
-                )
-            if ref.startswith(_DEFS_PREFIX) and ref[len(_DEFS_PREFIX) :] not in defs:
-                raise A2AContractConfigError(
-                    "response_schema references an undefined graph-local $defs entry"
-                )
-        for value in schema.values():
-            _check_refs(value, defs)
-    elif isinstance(schema, list):
-        for item in schema:
-            _check_refs(item, defs)
+def _preflight_references(
+    schema: Any,
+    resolver: Any,
+    specification: Any,
+    visited: set[tuple[int, str]] | None = None,
+) -> None:
+    """Resolve every declared local reference before any peer is dispatched."""
+    if not isinstance(schema, dict):
+        return
+    if visited is None:
+        visited = set()
+    key = (id(schema), str(getattr(resolver, "_base_uri", "")))
+    if key in visited:
+        return
+    visited.add(key)
+    for keyword in _REF_KEYWORDS:
+        ref = schema.get(keyword)
+        if ref is None:
+            continue
+        if not isinstance(ref, str) or not ref.startswith("#"):
+            raise A2AContractConfigError(
+                "response_schema $ref may only reference graph-local '#...' schemas"
+            )
+        resolver.lookup(ref)
+
+    subresources = list(specification.subresources_of(schema))
+    # Graph definitions deliberately live under $defs even in older schemas
+    # whose dialect predates that keyword.
+    defs = schema.get("$defs")
+    if isinstance(defs, dict):
+        subresources.extend(defs.values())
+    for subresource in subresources:
+        _preflight_references(
+            subresource,
+            resolver.in_subresource(specification.create_resource(subresource)),
+            specification,
+            visited,
+        )
 
 
 class ResponseContract:
     """A checked, offline JSON Schema contract for one A2A node."""
 
-    def __init__(self, schema: dict[str, Any], defs: dict[str, dict[str, Any]] | None = None):
+    def __init__(self, schema: dict[str, Any], defs: dict[str, Any] | None = None):
         try:
             from jsonschema import validators
             from referencing import Registry
+            from referencing.jsonschema import specification_with
         except ImportError as exc:  # pragma: no cover - a declared dependency
             raise A2AContractConfigError(
                 "response_schema validation is unavailable (jsonschema is not installed)"
             ) from exc
         if not isinstance(schema, dict):
             raise A2AContractConfigError("response_schema must be a JSON object")
-        merged_defs = {**(defs or {}), **(schema.get("$defs") or {})}
-        _check_refs(schema, merged_defs)
-        _check_refs(merged_defs, merged_defs)
-        root = {**schema, "$defs": merged_defs} if merged_defs else dict(schema)
-        validator_cls = validators.validator_for(root, default=validators.Draft202012Validator)
+        if defs is not None and not isinstance(defs, dict):
+            raise A2AContractConfigError("graph-local $defs must be a JSON object")
+        inline_defs = schema.get("$defs")
+        if inline_defs is not None and not isinstance(inline_defs, dict):
+            raise A2AContractConfigError("response_schema $defs must be a JSON object")
         try:
+            merged_defs = {**(defs or {}), **(inline_defs or {})}
+            root = {**schema, "$defs": merged_defs} if merged_defs else dict(schema)
+
+            dialect = root.get("$schema")
+            supported_dialects = {
+                validator.ID_OF(validator.META_SCHEMA)
+                for validator in (
+                    validators.Draft3Validator,
+                    validators.Draft4Validator,
+                    validators.Draft6Validator,
+                    validators.Draft7Validator,
+                    validators.Draft201909Validator,
+                    validators.Draft202012Validator,
+                )
+            }
+            if dialect is not None and (
+                not isinstance(dialect, str) or dialect not in supported_dialects
+            ):
+                raise A2AContractConfigError(
+                    "response_schema declares an unsupported JSON Schema dialect"
+                )
+            validator_cls = validators.validator_for(root, default=validators.Draft202012Validator)
             validator_cls.check_schema(root)
+            dialect_id = dialect or validators.Draft202012Validator.ID_OF(
+                validators.Draft202012Validator.META_SCHEMA
+            )
+            assert dialect_id is not None
+            specification = specification_with(dialect_id)
+            registry = Registry()
+            _preflight_references(
+                root,
+                registry.resolver_with_root(specification.create_resource(root)),
+                specification,
+            )
+            # The registry has no retrieval callback: only the root schema and
+            # graph-local definitions can resolve.
+            validator = validator_cls(root, registry=registry)
+            names: set[str] = set()
+            _collect_property_names(root, names)
+        except A2AContractConfigError:
+            raise
         except Exception as exc:
-            # The validator's message may quote schema text; keep it out.
+            # Validator and reference errors can quote schema text; keep it out.
             raise A2AContractConfigError("response_schema is not a valid JSON Schema") from exc
-        # An empty registry never retrieves: no network or filesystem reference
-        # resolution, only the graph-local $defs merged above.
-        self._validator = validator_cls(root, registry=Registry())
+        self._validator = validator
         self._schema = root
-        names: set[str] = set()
-        _collect_property_names(root, names)
         self._known_names = names
 
     @property
@@ -316,16 +391,22 @@ class ResponseContract:
         if diagnostic is not None:
             return ContractCheck(None, [diagnostic])
         assert value is not None
-        diagnostics: list[dict[str, Any]] = []
-        errors = sorted(
-            self._validator.iter_errors(value),
-            key=lambda error: (len(error.absolute_path), [str(p) for p in error.absolute_path]),
-        )
-        for error in errors:
-            if len(diagnostics) >= _MAX_DIAGNOSTICS:
-                diagnostics.append({"code": "more_problems_omitted"})
-                break
-            diagnostics.append(self._diagnostic(error))
+        try:
+            errors = sorted(
+                self._validator.iter_errors(value),
+                key=lambda error: (len(error.absolute_path), [str(p) for p in error.absolute_path]),
+            )
+            diagnostics: list[dict[str, Any]] = []
+            for error in errors:
+                if len(diagnostics) >= _MAX_DIAGNOSTICS:
+                    diagnostics.append({"code": "more_problems_omitted"})
+                    break
+                diagnostics.append(self._diagnostic(error))
+        except Exception:
+            # A declared schema should have been fully usable at compile time,
+            # but a validator/reference edge case after a completed peer reply
+            # must not expose peer data or escape as a retryable node failure.
+            return ContractCheck(value, [{"path": "$", "code": "schema_validation_failed"}])
         return ContractCheck(value, diagnostics)
 
     def required_summary(self) -> dict[str, Any]:
@@ -452,6 +533,35 @@ def _finite_float(text: str) -> float:
     return value
 
 
+def _contains_invalid_surrogate(value: Any) -> bool:
+    values = [value]
+    while values:
+        current = values.pop()
+        if isinstance(current, dict):
+            values.extend(current.keys())
+            values.extend(current.values())
+            continue
+        if isinstance(current, list):
+            values.extend(current)
+            continue
+        if not isinstance(current, str):
+            continue
+        index = 0
+        while index < len(current):
+            codepoint = ord(current[index])
+            if 0xD800 <= codepoint <= 0xDBFF:
+                if index + 1 >= len(current):
+                    return True
+                if not 0xDC00 <= ord(current[index + 1]) <= 0xDFFF:
+                    return True
+                index += 2
+                continue
+            if 0xDC00 <= codepoint <= 0xDFFF:
+                return True
+            index += 1
+    return False
+
+
 _DECODER = json.JSONDecoder(
     object_pairs_hook=_pairs_without_duplicates,
     parse_constant=_reject_constant,
@@ -492,6 +602,8 @@ def parse_sole_json_object(text: str) -> tuple[dict[str, Any] | None, dict[str, 
         return None, {"path": "$", "code": "trailing_content"}
     if not isinstance(value, dict):  # pragma: no cover - guarded by the '{' check
         return None, {"path": "$", "code": "not_an_object", "expected_type": ["object"]}
+    if _contains_invalid_surrogate(value):
+        return None, {"path": "$", "code": "invalid_unicode"}
     return value, None
 
 

@@ -23,6 +23,7 @@ from typing import Annotated, Any, TypedDict
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langgraph.cache.memory import InMemoryCache
+from langgraph.errors import NodeTimeoutError
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
@@ -86,6 +87,9 @@ from .state import (
 )
 
 _SEED_NODE_ID = ROUTINE_SEED_NODE_ID
+# The exchange enforces its send deadline; allow it to report terminal failure
+# before LangGraph's outer watchdog cancels it and discards its attempt record.
+_A2A_CONTRACT_CLEANUP_SECONDS = 1.0
 
 
 def _retry_model_response(exc: Exception) -> bool:
@@ -108,7 +112,7 @@ def _retry_transient(exc: Exception) -> bool:
     return bool(callable(predicate) and predicate(exc))
 
 
-def _retry_policy(config: dict[str, Any]) -> RetryPolicy | None:
+def _retry_policy(config: dict[str, Any], *, contracted_a2a: bool = False) -> RetryPolicy | None:
     """Build a RetryPolicy from a ``retry`` sub-dict.
 
     The compiler merges execution-policy defaults with explicit node values
@@ -137,6 +141,15 @@ def _retry_policy(config: dict[str, Any]) -> RetryPolicy | None:
             else _retry_transient
         ),
     }
+    if contracted_a2a:
+        predicate = values["retry_on"]
+
+        def retry_contract(exc: Exception) -> bool:
+            # An outer run/idle watchdog may interrupt a correction. It cannot
+            # know whether the peer already completed the original action.
+            return not isinstance(exc, NodeTimeoutError) and predicate(exc)
+
+        values["retry_on"] = retry_contract
     return RetryPolicy(**values)
 
 
@@ -692,15 +705,17 @@ def compile_routine_graph(
         config = _node_config(node)
         retry_config = {"retry": {**policy_defaults["retry"], **config.get("retry", {})}}
         recovery_target = error_routes.get(node.id)
+        contracted_a2a = node.kind == "a2a" and config.get("response_schema") is not None
+        watchdog_timeout = _node_timeout(config, policy_defaults)
+        if contracted_a2a and watchdog_timeout is not None:
+            watchdog_timeout += _A2A_CONTRACT_CLEANUP_SECONDS
         node_options: dict[str, Any] = {
-            "retry_policy": _retry_policy(retry_config),
+            "retry_policy": _retry_policy(retry_config, contracted_a2a=contracted_a2a),
             "cache_policy": _cache_policy(config, cache_namespace),
             "defer": node.id in fan_in_targets,
-            "timeout": TimeoutPolicy(
-                run_timeout=_node_timeout(config, policy_defaults), idle_timeout=policy.idle_timeout
-            )
+            "timeout": TimeoutPolicy(run_timeout=watchdog_timeout, idle_timeout=policy.idle_timeout)
             if policy.idle_timeout is not None
-            else _node_timeout(config, policy_defaults),
+            else watchdog_timeout,
         }
         if recovery_target is not None:
             node_options["error_handler"] = _build_retry_exhausted_handler(node.id, recovery_target)

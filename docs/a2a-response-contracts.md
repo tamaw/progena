@@ -47,9 +47,11 @@ it on for a live routine is a separate, explicitly approved change.
   requires `response_schema`. The original request is never counted and never
   repeated.
 
-Schema validity and validator availability (`jsonschema`, a direct dependency)
-are checked when the graph is compiled. A configuration problem never reaches a
-peer and never uses up a correction.
+Schema validity, local reference resolution and validator availability
+(`jsonschema`, a direct dependency) are checked when the graph is compiled.
+The default dialect is Draft 2020-12; explicitly declared Draft 3, 4, 6, 7,
+2019-09 and 2020-12 dialects are supported. Unknown dialects fail closed. A
+configuration problem never reaches a peer and never uses up a correction.
 
 ## Strict reply contract
 
@@ -60,15 +62,16 @@ The completed reply must be exactly one JSON object. Only JSON whitespace
 - arrays and other non-object values
 - duplicate keys at any depth
 - `NaN`, `Infinity`, and numbers that overflow to infinity
-- malformed JSON
+- malformed JSON or lone surrogate Unicode escapes
 
 The object is then validated offline against the schema. No reference is
 fetched over the network or from the filesystem. Validation covers what the
-schema can express: required fields, types, `enum`/`const`, numeric and length
-bounds, forbidden extra properties, and declarative conditions
-(`if`/`then`/`else`, `dependentRequired`, `anyOf`/`oneOf`/`not`). `format` is an
-annotation only. Rules that live only in downstream nodes are outside the
-contract. A downstream failure never triggers an upstream correction.
+schema's declared dialect can express: required fields, types, `enum`/`const`,
+numeric and length bounds, forbidden extra properties, and declarative conditions
+(`if`/`then`/`else`, `dependentRequired`, `anyOf`/`oneOf`/`not` where supported by
+that dialect). `format` is an annotation only. Rules that live only in downstream
+nodes are outside the contract. A downstream failure never triggers an upstream
+correction.
 
 On acceptance the node writes the raw reply text to `<output_key>` and the
 validated object to `<output_key>_json`, and appends the accepted reply to
@@ -76,9 +79,13 @@ validated object to `<output_key>_json`, and appends the accepted reply to
 
 ## What qualifies for correction
 
-Reply text is taken from peer-authored content only: a direct agent `Message`,
-the task's status message, or its artifacts. It is never taken from task
-history, which also contains the caller's request.
+Reply text is taken only from agent-role messages and canonical text parts.
+For completed tasks, textual result artifacts take precedence over status
+messages such as “Done”; all textual artifacts are combined in order with
+newlines and must collectively form exactly one JSON object. No candidate is
+selected merely because it validates. With no textual artifact, the agent's
+status message is used. Task history, which also contains the caller's request,
+is never inspected.
 
 Only a **completed** reply that violates the contract qualifies for
 correction. None of the following ever becomes a correction:
@@ -116,7 +123,11 @@ reported.
 
 One deadline covers the original send and every correction. The node
 `timeout`, or the execution-policy attempt timeout, starts when the node starts
-and is not reset for each correction.
+and is not reset for each correction. Each correction await independently
+enforces the remaining budget. The outer run watchdog has one second of
+cleanup grace to let the exchange report its terminal result; this does not
+extend its send budget. An outer run or idle watchdog abort is not retryable
+for contracted A2A nodes, so a watchdog race cannot restart the original action.
 
 ## Terminal failures and retries
 
@@ -131,7 +142,7 @@ Each of these raises `A2AContractTerminalError` with a fixed `code`:
 | `correction_send_failed` | The peer rejected the continuation, or a transport error occurred during a correction. |
 | `correction_not_completed` | A correction reply was not a completed task or message. |
 | `correction_declined` | The peer answered `CONTRACT_CORRECTION_UNAVAILABLE`. |
-| `deadline_exceeded` | No time was left for another correction. |
+| `deadline_exceeded` | The shared deadline elapsed before or during a correction. |
 
 The compiled retry predicates for `transient`, `model_response`, and `all`
 exclude this error type. A terminal contract failure therefore never re-sends
@@ -156,13 +167,14 @@ Each execution stores an ordered `a2a_contract` record in the node's
   diagnostics
 - the final `outcome`
 
-The record is written on success through the node update. On failure it is
-attached to the exception and persisted by the routine executor's existing
-failed-node path (`subagent.py`, `compiled.aupdate_state`). Raw replies appear
-only there. Error strings, `data.errors`, and the run-state UI event
-(`read_run_state`) carry codes and summaries: in browser payloads each attempt's
-`reply` is replaced by `reply_chars`. Only the accepted reply becomes normal
-output.
+The record is written on success through the node update. On an uncaught failure
+it is attached to the exception and persisted by the routine executor's existing
+failed-node path (`routines/subagent.py`, `compiled.aupdate_state`). An `error`
+recovery edge carries the same failed-node metadata into state before continuing.
+Raw replies remain in the checkpoint. Error strings, `data.errors`, and the
+run-state UI event (`read_run_state`) carry codes and summaries: in browser
+payloads each attempt's `reply` is replaced by `reply_chars`. Only the accepted
+reply becomes normal output.
 
 Cancellation, or a LangGraph node-timeout watchdog that fires before the
 node's own deadline, interrupts the node before it can return or raise its

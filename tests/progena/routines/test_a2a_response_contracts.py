@@ -206,6 +206,7 @@ def _state() -> dict[str, Any]:
         ('{"a": NaN}', "non_finite_number"),
         ('{"a": -Infinity}', "non_finite_number"),
         ('{"a": 1e999}', "non_finite_number"),
+        (r'{"a": "\ud800"}', "invalid_unicode"),
         ('{"a": 1,}', "malformed_json"),
         ('{"a": ', "malformed_json"),
     ],
@@ -335,6 +336,42 @@ def test_graph_local_defs_resolve_without_network() -> None:
     assert contract.check('{"score": -1}').diagnostics[0]["code"] == "out_of_range"
 
 
+def test_local_recursive_schema_and_draft_seven_are_supported() -> None:
+    recursive = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$ref": "#/$defs/Node",
+        "$defs": {
+            "Node": {
+                "type": "object",
+                "properties": {"child": {"$ref": "#/$defs/Node"}},
+            }
+        },
+    }
+    assert ResponseContract(recursive).check('{"child": {"child": {}}}').valid
+
+    draft_seven = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {"score": {"type": "integer", "exclusiveMinimum": 0}},
+    }
+    assert ResponseContract(draft_seven).check('{"score": 1}').valid
+
+
+def test_undefined_local_pointer_and_unsupported_dialect_fail_at_compile() -> None:
+    for schema in (
+        {"$ref": "#/not-a-schema"},
+        {"$schema": "https://example.test/private-dialect", "type": "object"},
+        {"$defs": []},
+    ):
+        with pytest.raises(A2AContractConfigError):
+            ResponseContract(schema)
+
+
+def test_schema_literal_named_ref_is_not_treated_as_a_reference() -> None:
+    schema = {"type": "object", "const": {"$ref": "https://example.test/literal"}}
+    assert ResponseContract(schema).check('{"$ref": "https://example.test/literal"}').valid
+
+
 @pytest.mark.parametrize(
     "schema",
     [
@@ -375,6 +412,73 @@ def test_classify_reply_never_reads_caller_history() -> None:
     assert classify_reply(payload).text == VALID
     direct = classify_reply(_message(VALID)["result"])
     assert (direct.kind, direct.state, direct.context_id) == ("message", "completed", "ctx-1")
+
+
+def test_completed_task_prefers_result_artifacts_over_generic_status() -> None:
+    payload = _task("Done")["result"]
+    payload["artifacts"] = [{"parts": [{"kind": "text", "text": VALID}]}]
+    reply = classify_reply(payload)
+    assert reply.completed
+    assert reply.text == VALID
+
+
+def test_multiple_result_artifacts_remain_a_strictly_invalid_reply() -> None:
+    payload = _task("Done")["result"]
+    payload["artifacts"] = [
+        {"parts": [{"kind": "text", "text": VALID}]},
+        {"parts": [{"kind": "text", "text": VALID}]},
+    ]
+    reply = classify_reply(payload)
+    assert reply.text == f"{VALID}\n{VALID}"
+    assert ResponseContract(SCHEMA).check(reply.text).diagnostics == [
+        {"path": "$", "code": "trailing_content"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("payload", "completed"),
+    [
+        (
+            {
+                "kind": "message",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "PRIVATE-CALLER-PROMPT"}],
+            },
+            False,
+        ),
+        (
+            {
+                "kind": "task",
+                "id": "task-1",
+                "contextId": "ctx-1",
+                "status": {
+                    "state": "completed",
+                    "message": {
+                        "kind": "message",
+                        "role": "user",
+                        "parts": [{"kind": "text", "text": "PRIVATE-CALLER-PROMPT"}],
+                    },
+                },
+            },
+            False,
+        ),
+        (
+            {
+                "kind": "message",
+                "role": "agent",
+                "parts": [{"kind": "data", "text": "PRIVATE-DATA-PART"}],
+            },
+            True,
+        ),
+        ({"kind": "status-update", "status": {"state": "completed"}}, False),
+    ],
+)
+def test_classify_reply_ignores_non_agent_and_non_text_payload_content(
+    payload: dict[str, Any], completed: bool
+) -> None:
+    reply = classify_reply(payload)
+    assert reply.completed is completed
+    assert reply.text == ""
 
 
 # --- Configuration ----------------------------------------------------------
@@ -551,6 +655,24 @@ async def test_peer_rejecting_continuation_is_terminal() -> None:
     assert len(peer.calls) == 2
 
 
+async def test_runtime_failure_on_correction_is_terminal() -> None:
+    peer = Peer(_task("{}"), RuntimeError("connection closed unexpectedly"))
+    run = _node(_a2a_config(response_correction={"max_attempts": 3}))
+    with patch(SEND, new=peer), pytest.raises(A2AContractTerminalError) as exc:
+        await run(_state(), None)
+    assert exc.value.code == "correction_send_failed"
+    assert len(peer.calls) == 2
+
+
+async def test_transport_timeout_on_correction_is_terminal_without_original_retry() -> None:
+    peer = Peer(_task("{}"), TimeoutError("connection timed out"))
+    run = _node(_a2a_config(response_correction={"max_attempts": 3}))
+    with patch(SEND, new=peer), pytest.raises(A2AContractTerminalError) as exc:
+        await run(_state(), None)
+    assert exc.value.code == "correction_send_failed"
+    assert len(peer.calls) == 2
+
+
 async def test_peer_declining_correction_is_terminal_without_fabrication() -> None:
     peer = Peer(_task("{}"), _task("CONTRACT_CORRECTION_UNAVAILABLE"))
     run = _node(_a2a_config(response_correction={"max_attempts": 3}))
@@ -639,6 +761,63 @@ async def test_native_retry_never_redispatches_after_terminal_failure(retry_on: 
     assert sum(c["request"].startswith("Review draft") for c in peer.calls) == 1
 
 
+async def test_compiled_correction_deadline_is_terminal_before_original_retry() -> None:
+    class SlowCorrectionPeer(Peer):
+        async def __call__(self, agent_config: Any, request: str, **kwargs: Any):
+            self.calls.append({"agent_config": agent_config, "request": request, **kwargs})
+            if len(self.calls) == 1:
+                return _task("{}")
+            await asyncio.sleep(0.5)
+            return _task(VALID)
+
+    peer = SlowCorrectionPeer()
+    config = _a2a_config(
+        response_correction={"max_attempts": 2},
+        retry={"max_retries": 3, "initial_interval": 0, "jitter": False, "retry_on": "all"},
+        timeout=0.05,
+    )
+    runnable = compile_routine_graph(
+        _graph(config), model=CountingModel(), tool_registry=_registry()
+    )
+    with patch(SEND, new=peer), pytest.raises(A2AContractTerminalError) as exc:
+        await runnable.ainvoke(_graph_input())
+    assert exc.value.code == "deadline_exceeded"
+    assert len(peer.calls) == 2
+    assert sum(call["request"].startswith("Review draft") for call in peer.calls) == 1
+
+
+async def test_compiled_idle_timeout_during_correction_never_retries_original() -> None:
+    from langgraph.errors import NodeTimeoutError
+
+    from src.progena.settings.policies import PolicyValues
+
+    class SlowCorrectionPeer(Peer):
+        async def __call__(self, agent_config: Any, request: str, **kwargs: Any):
+            self.calls.append({"agent_config": agent_config, "request": request, **kwargs})
+            if len(self.calls) == 1:
+                return _task("{}")
+            await asyncio.sleep(0.5)
+            return _task(VALID)
+
+    peer = SlowCorrectionPeer()
+    config = _a2a_config(
+        response_correction={"max_attempts": 2},
+        retry={"max_retries": 3, "initial_interval": 0, "jitter": False, "retry_on": "all"},
+        timeout=1.0,
+    )
+    runnable = compile_routine_graph(
+        _graph(config),
+        model=CountingModel(),
+        tool_registry=_registry(),
+        execution_policy=PolicyValues(idle_timeout=0.01),
+    )
+    with patch(SEND, new=peer), pytest.raises(NodeTimeoutError) as exc:
+        await runnable.ainvoke(_graph_input())
+    assert exc.value.kind == "idle"
+    assert len(peer.calls) == 2
+    assert sum(call["request"].startswith("Review draft") for call in peer.calls) == 1
+
+
 async def test_ordinary_transport_retry_is_preserved_for_contract_nodes() -> None:
     peer = Peer({"success": False, "error": "connection reset"}, _task(VALID))
     config = _a2a_config(retry={"max_retries": 1, "initial_interval": 0, "retry_on": "all"})
@@ -651,6 +830,43 @@ async def test_ordinary_transport_retry_is_preserved_for_contract_nodes() -> Non
     # the original request. Side-effecting peers must keep max_retries=0.
     assert len(peer.calls) == 2
     assert result["data"]["review_json"]["score"] == 7
+
+
+async def test_error_recovery_keeps_terminal_contract_attempts_in_run_meta() -> None:
+    graph_document = _graph(
+        _a2a_config(
+            response_correction={"max_attempts": 1},
+            retry={"max_retries": 3, "initial_interval": 0, "jitter": False, "retry_on": "all"},
+        )
+    ).model_dump(mode="json", by_alias=True, exclude_none=True)
+    graph_document["nodes"].append(
+        {
+            "id": "recover",
+            "kind": "prompt",
+            "output_key": "fallback",
+            "config": {"prompt_template": "recover", "retry": {"max_retries": 0}},
+        }
+    )
+    graph_document["edges"].append({"from": "call", "to": "recover", "level": "error"})
+    peer = Peer(_task('{"verdict": "approve"}'), _task('{"score": 7}'))
+    model = CountingModel()
+    runnable = compile_routine_graph(
+        validate_routine_graph_payload(graph_document),
+        model=model,
+        tool_registry=_registry(),
+    )
+    with patch(SEND, new=peer):
+        result = await runnable.ainvoke(_graph_input())
+    assert result["data"]["fallback"] == "draft-1"
+    assert len(model.calls) == 1
+    assert len(peer.calls) == 2
+    assert sum(call["request"].startswith("Review draft") for call in peer.calls) == 1
+    record = result["run_meta"]["call"][0]["a2a_contract"]
+    assert record["outcome"] == "corrections_exhausted"
+    assert [attempt["reply"] for attempt in record["attempts"]] == [
+        '{"verdict": "approve"}',
+        '{"score": 7}',
+    ]
 
 
 async def test_contract_free_node_keeps_legacy_lenient_output() -> None:

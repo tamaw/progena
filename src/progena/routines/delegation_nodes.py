@@ -326,27 +326,47 @@ async def _run_contracted_a2a(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise terminal("deadline_exceeded", "node time budget exhausted before correction")
-        if is_correction:
-            assert context_id is not None
-            response = await client.send_message(
-                agent_config,
-                build_correction_request(contract, previous_diagnostics),
-                blocking=True,
-                timeout=remaining,
-                context={**metadata, "contract_correction": attempt},
-                # Never resume a completed task ID: continue the context only.
-                task_id=None,
-                context_id=context_id,
-            )
-        else:
-            response = await client.send_message(
-                agent_config, request, blocking=True, timeout=remaining, context=metadata
-            )
         entry: dict[str, Any] = {
             "attempt": attempt,
             "kind": "correction" if is_correction else "original",
         }
         record["attempts"].append(entry)
+        try:
+            if is_correction:
+                assert context_id is not None
+                # This guard enforces the shared exchange deadline even when a
+                # transport implementation fails to honor its timeout argument.
+                async with asyncio.timeout(remaining):
+                    response = await client.send_message(
+                        agent_config,
+                        build_correction_request(contract, previous_diagnostics),
+                        blocking=True,
+                        timeout=remaining,
+                        context={**metadata, "contract_correction": attempt},
+                        # Never resume a completed task ID: continue the context only.
+                        task_id=None,
+                        context_id=context_id,
+                    )
+            else:
+                response = await client.send_message(
+                    agent_config, request, blocking=True, timeout=remaining, context=metadata
+                )
+        except TimeoutError:
+            if is_correction:
+                entry["send_failed"] = True
+                if time.monotonic() >= deadline:
+                    raise terminal(
+                        "deadline_exceeded", "node time budget exhausted during correction"
+                    )
+                raise terminal("correction_send_failed", "peer did not accept the correction")
+            raise
+        except Exception:
+            if is_correction:
+                # An unexpected correction failure must not let the node retry
+                # dispatch the completed peer's original request.
+                entry["send_failed"] = True
+                raise terminal("correction_send_failed", "peer did not accept the correction")
+            raise
         if not response.get("success"):
             entry["send_failed"] = True
             if is_correction:
