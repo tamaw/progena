@@ -61,7 +61,8 @@ function alignSummaryMarkerAnchors(markers, canonicalMessages, renderedMessages)
 function sameSidebarView(left, right) {
   return left?.q === right.q && left?.sort === right.sort && left?.filter === right.filter;
 }
-
+// A row update this soon after the open chat was reloaded brings nothing new.
+const ROW_RELOAD_COALESCE_MS = 3000;
 
 function ConversationPage() {
   const dispatch = useDispatch();
@@ -323,6 +324,9 @@ function ConversationPage() {
     activeBackendChat?.thread_id === selectedBackendChatId ? activeBackendChatState.queue : undefined,
   );
   const lastOpenRowActivityRef = useRef(null);
+  // When the open chat was last reloaded. A turn's completion reloads it, and
+  // that turn's row update follows within moments; one reload covers both.
+  const lastReconciliationRef = useRef({ threadId: null, at: 0 });
   useEffect(() => {
     if (threadSession?.thread_id === selectedBackendChatId) {
       lastOpenRowActivityRef.current = threadSession.last_activity || null;
@@ -331,17 +335,21 @@ function ConversationPage() {
   useEffect(() => subscribeUiEvent((event) => {
     if (event?.type !== UI_EVENT.CHAT_LIST_ROW_UPSERTED) return;
     const row = event.payload?.row;
-    if (
-      row?.thread_id !== selectedBackendChatIdRef.current
-      || typeof row.last_activity !== 'string'
-      || activeStreamIdRef.current
-      || backgroundOriginChatIdRef.current === row.thread_id
-      || backgroundGeneratingChatIds.has(row.thread_id)
-    ) {
+    if (row?.thread_id !== selectedBackendChatIdRef.current || typeof row.last_activity !== 'string') {
       return;
     }
     const previous = lastOpenRowActivityRef.current;
     lastOpenRowActivityRef.current = row.last_activity;
+    const recent = lastReconciliationRef.current;
+    if (
+      activeStreamIdRef.current
+      || backgroundOriginChatIdRef.current === row.thread_id
+      || backgroundGeneratingChatIds.has(row.thread_id)
+      || (recent.threadId === row.thread_id && Date.now() - recent.at < ROW_RELOAD_COALESCE_MS)
+    ) {
+      return;
+    }
+    // A turn no browser saw (Telegram, schedules) finished on the open chat.
     if (previous && row.last_activity > previous) {
       requestForegroundReconciliation({
         threadId: row.thread_id,
@@ -668,6 +676,7 @@ function ConversationPage() {
       setForegroundReconciliationIntent(null);
       return;
     }
+    lastReconciliationRef.current = { threadId: foregroundReconciliationIntent.threadId, at: Date.now() };
     const request = dispatch(requestChatSessionReconciliation({
       chatsUrl: getApiUrl('chats'),
       threadId: foregroundReconciliationIntent.threadId,
@@ -1739,15 +1748,19 @@ function ConversationPage() {
           chatsUrl={getApiUrl('chats')}
           // Only a persisted chat that is the one on screen watches its tasks.
           // Opening it (the detail request) registers the interest, so wait for
-          // that answer, and a failed open (an unsent draft answers 404) watches
-          // nothing; a draft whose first message just created its session has no
-          // detail request and asks itself.
+          // that first answer, and a failed open (an unsent draft answers 404)
+          // watches nothing. Later reloads of an open chat must not toggle the
+          // watch: its release would race the interest the reload registers. A
+          // draft whose first message just created its session asks itself.
           subscribeTasks={Boolean(
             selectedBackendChatId
             && threadId === selectedBackendChatId
-            && !(
-              activeBackendChatState.threadId === selectedBackendChatId
-              && (activeBackendChatState.loading || activeBackendChatState.error)
+            && (
+              activeBackendChat?.thread_id === selectedBackendChatId
+              || !(
+                activeBackendChatState.threadId === selectedBackendChatId
+                && (activeBackendChatState.loading || activeBackendChatState.error)
+              )
             ),
           )}
           serverRegistered={activeBackendChat?.thread_id === threadId}

@@ -89,3 +89,30 @@ describe('background subscriptions after reconnect', () => {
     });
   }
 });
+
+describe('background task watch release', () => {
+  it('keeps the interest through a brief re-render gap and releases it once the view is gone', async () => {
+    vi.useFakeTimers();
+    try {
+      const { requestAcknowledged } = await import('@frontend/store/http');
+      requestAcknowledged.mockReset().mockResolvedValue({});
+      const { watchBackgroundTasks } = await import('@frontend/features/chat/backgroundTaskSubscription');
+      const url = '/api/ui/chats/open/background-tasks';
+      const bodies = () => requestAcknowledged.mock.calls.map(([, { body }]) => body.subscribed);
+
+      // Opening the chat registered the interest server-side.
+      const stop = watchBackgroundTasks(url, { serverRegistered: true });
+      stop();
+      // The open chat reloads: its view drops the watch and takes it back.
+      const stopAgain = watchBackgroundTasks(url, { serverRegistered: true });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(bodies()).toEqual([]);
+
+      stopAgain();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(bodies()).toEqual([false]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

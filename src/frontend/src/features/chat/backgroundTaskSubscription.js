@@ -5,6 +5,9 @@ import { subscribeUiEvent } from '../../realtime/realtimeEvents';
 
 const watches = new Map();
 let requests = Promise.resolve();
+// A view re-renders through brief gaps (an open chat reloading its detail);
+// releasing at once would race the interest that reload registers.
+const RELEASE_DELAY_MS = 1000;
 
 function submit(watch, subscribed) {
   const operation = requests.catch(() => {}).then(async () => {
@@ -40,10 +43,12 @@ subscribeUiEvent((event) => {
 export function watchBackgroundTasks(tasksUrl, { serverRegistered = false } = {}) {
   const existing = watches.get(tasksUrl);
   if (existing) {
+    clearTimeout(existing.releaseTimer);
+    existing.releaseTimer = null;
     existing.count += 1;
     return () => release(existing);
   }
-  const watch = { tasksUrl, count: 1, request: null };
+  const watch = { tasksUrl, count: 1, request: null, releaseTimer: null };
   watches.set(tasksUrl, watch);
   if (!serverRegistered) void subscribe(watch);
   return () => release(watch);
@@ -52,6 +57,9 @@ export function watchBackgroundTasks(tasksUrl, { serverRegistered = false } = {}
 function release(watch) {
   watch.count -= 1;
   if (watch.count > 0 || watches.get(watch.tasksUrl) !== watch) return;
-  watches.delete(watch.tasksUrl);
-  void submit(watch, false).catch(() => {});
+  watch.releaseTimer = setTimeout(() => {
+    if (watch.count > 0 || watches.get(watch.tasksUrl) !== watch) return;
+    watches.delete(watch.tasksUrl);
+    void submit(watch, false).catch(() => {});
+  }, RELEASE_DELAY_MS);
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { selectRealtimeStreamReady } from '../../../realtime/realtimeSlice';
@@ -108,10 +108,17 @@ function useActivities({
       .map((runId) => watchBackgroundRunTrace(`${runsUrl}/subscription`, 'workflow', runId));
     return () => releases.forEach((release) => release());
   }, [runIdsKey, runsUrl]);
+  // Whether the server already holds the interest only matters when the watch
+  // starts: a later detail reload flipping it must not release the watch, or
+  // the release would drop the interest that reload just registered.
+  const serverRegisteredRef = useRef(serverRegistered);
+  useEffect(() => {
+    serverRegisteredRef.current = serverRegistered;
+  }, [serverRegistered]);
   useEffect(() => {
     if (!subscribeTasks || !tasksUrl) return undefined;
-    return watchBackgroundTasks(tasksUrl, { serverRegistered });
-  }, [serverRegistered, subscribeTasks, tasksUrl]);
+    return watchBackgroundTasks(tasksUrl, { serverRegistered: serverRegisteredRef.current });
+  }, [subscribeTasks, tasksUrl]);
   const activities = useMemo(
     () => deriveBackgroundActivities({
       messages,
