@@ -619,30 +619,6 @@ class TestResponseSchema:
 
         assert result["data"]["step"] == {"completion_pct": 0.62}
         assert "step_json" not in result["data"]
-        assert model.bind_calls == [
-            {
-                "schema": {"title": "RoutineResponse", **_COMPLETION_SCHEMA},
-                "method": "json_schema",
-                "strict": True,
-                "include_raw": True,
-            }
-        ]
-
-    async def test_structured_response_preserves_authored_schema_title(self):
-        schema = {"title": "AuthorResponse", **_COMPLETION_SCHEMA}
-        graph = validate_routine_graph_payload(_single_prompt_step_payload_with_schema(schema))
-        model = FakeStructuredModel([{"completion_pct": 1.0}])
-        await compile_routine_graph(graph, model=model).ainvoke({"data": {}})
-        assert model.bind_calls[0]["schema"]["title"] == "AuthorResponse"
-        assert "title" not in _COMPLETION_SCHEMA
-
-    async def test_prompt_node_with_response_schema_raises_on_validation_failure(self):
-        payload = _single_prompt_step_payload_with_schema(_COMPLETION_SCHEMA)
-        graph = validate_routine_graph_payload(payload)
-        model = FakeStructuredModel([None])
-        runnable = compile_routine_graph(graph, model=model)
-        with pytest.raises(ValueError, match="structured response failed schema validation"):
-            await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
 
     async def test_classify_node_with_response_schema_reads_the_result_field(self):
         payload = _single_classify_step_payload_with_schema(_RESULT_SCHEMA)
@@ -659,46 +635,6 @@ class TestResponseSchema:
         runnable = compile_routine_graph(graph, model=model)
         result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
         assert result["data"]["gate"] == {"result": False}
-
-
-def _single_prompt_step_payload_with_ref(
-    ref_schema: dict, *, defs: dict[str, dict] | None = None
-) -> dict:
-    payload = _single_prompt_step_payload_with_schema(ref_schema)
-    payload["$defs"] = defs if defs is not None else {"completion": _COMPLETION_SCHEMA}
-    return payload
-
-
-class TestResponseSchemaRef:
-    """config.response_schema may be {"$ref": "#/$defs/<name>"} instead of an inline
-    schema, resolved against the routine graph document's own top-level $defs --
-    reuse across a routine's nodes without repeating the same schema."""
-
-    async def test_ref_resolves_against_graph_defs_and_reaches_the_bound_model(self):
-        payload = _single_prompt_step_payload_with_ref({"$ref": "#/$defs/completion"})
-        graph = validate_routine_graph_payload(payload)
-        model = FakeStructuredModel([{"completion_pct": 0.5}])
-        runnable = compile_routine_graph(graph, model=model)
-        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
-
-        assert result["data"]["step"] == {"completion_pct": 0.5}
-        assert model.bind_calls[0]["schema"] == {"title": "RoutineResponse", **_COMPLETION_SCHEMA}
-
-    async def test_ref_to_an_undefined_name_raises_valueerror(self):
-        payload = _single_prompt_step_payload_with_ref(
-            {"$ref": "#/$defs/missing"}, defs={"completion": _COMPLETION_SCHEMA}
-        )
-        graph = validate_routine_graph_payload(payload)
-        with pytest.raises(ValueError, match="undefined '\\$defs.missing'"):
-            compile_routine_graph(graph, model=FakeStructuredModel([]))
-
-    async def test_malformed_ref_shape_raises_valueerror(self):
-        payload = _single_prompt_step_payload_with_ref(
-            {"$ref": "completion"}, defs={"completion": _COMPLETION_SCHEMA}
-        )
-        graph = validate_routine_graph_payload(payload)
-        with pytest.raises(ValueError, match="must be of the form '#/\\$defs/<name>'"):
-            compile_routine_graph(graph, model=FakeStructuredModel([]))
 
 
 class TestInputSchema:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -24,6 +25,16 @@ from .approvals import approval_decision_id
 from .control_nodes import _foreach_items
 from .graph import RoutineNode
 from .messages import _message_with_usage, extract_json_object, normalize_message_content
+from .node_output import (
+    NodeOutputRetryError,
+    NodeOutputSchemaError,
+    NodeOutputValidationError,
+    OutputFeedback,
+    OutputSchema,
+    build_output_feedback,
+    get_output_feedback,
+    output_task_id,
+)
 from .state import (
     RoutineState,
     _emit,
@@ -36,6 +47,16 @@ from .state import (
 _routine_ancestry_var: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar(
     "_routine_ancestry", default=()
 )
+
+
+def _a2a_peer_fingerprint(agent_config: dict[str, Any]) -> str:
+    """Return a hashed continuity identity without persisting peer configuration."""
+    peer = {
+        "transport": str(agent_config.get("transport") or "").strip().lower(),
+        "url": str(agent_config.get("url") or "").strip(),
+    }
+    serialized = json.dumps(peer, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode()).hexdigest()
 
 
 def _build_object_agent_node(
@@ -151,12 +172,25 @@ def _build_object_agent_node(
     return run
 
 
-def _build_a2a_node(node: RoutineNode, *, tool_registry: Any, timeout: float | None = None) -> Any:
-    """One-shot delegation to a registered Agent2Agent-protocol peer, resolved
-    the same way the ``@agent_name request`` direct-call chat shortcut does
-    (see ``DirectA2AFastPathMiddleware``)."""
+def _build_a2a_node(
+    node: RoutineNode,
+    *,
+    tool_registry: Any,
+    timeout: float | None = None,
+    defs: dict[str, dict[str, Any]] | None = None,
+) -> Any:
+    """Build one native A2A dispatch per node invocation.
+
+    Schema failures become ordinary LangGraph model-response retries. The
+    retry callback scopes feedback to this exact runtime task, so a retry
+    continues the peer's A2A context instead of replaying the original action.
+    """
     from src.progena.a2a.client import A2AClient
-    from src.progena.a2a.payloads import extract_message_text, summarize_task_payload
+    from src.progena.a2a.payloads import (
+        classify_a2a_reply,
+        extract_message_text,
+        summarize_task_payload,
+    )
 
     config = _node_config(node)
     output_key = node.output_key or node.id
@@ -165,6 +199,13 @@ def _build_a2a_node(node: RoutineNode, *, tool_registry: Any, timeout: float | N
     template = config.get("prompt_template")
     if not template:
         raise ValueError(f"a2a node {node.id}: config needs 'prompt_template'")
+    schema: OutputSchema | None = None
+    declared_schema = config.get("response_schema")
+    if declared_schema is not None:
+        try:
+            schema = OutputSchema(declared_schema, defs)
+        except NodeOutputSchemaError as exc:
+            raise NodeOutputSchemaError(f"a2a node {node.id}: {exc}") from exc
 
     def _extract_reply_text(payload: Any) -> str:
         if isinstance(payload, dict):
@@ -177,6 +218,15 @@ def _build_a2a_node(node: RoutineNode, *, tool_registry: Any, timeout: float | N
             if text:
                 return text
         return f"{agent_name} completed the request."
+
+    def _native_attempt(runtime: Runtime | None, record: dict[str, Any]) -> int:
+        execution = getattr(runtime, "execution_info", None) if runtime is not None else None
+        attempt = getattr(execution, "node_attempt", None)
+        return attempt if isinstance(attempt, int) else len(record["attempts"]) + 1
+
+    def _record_error(error: Exception, record: dict[str, Any]) -> Exception:
+        error.node_output = record  # type: ignore[attr-defined]
+        return error
 
     async def run(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
         data = state.get("data", {})
@@ -199,27 +249,177 @@ def _build_a2a_node(node: RoutineNode, *, tool_registry: Any, timeout: float | N
                 f"a2a node {node.id}: '{agent_name}' is not a reachable HTTP A2A agent"
             )
 
+        peer_fingerprint = _a2a_peer_fingerprint(cfg)
+
         context = getattr(runtime, "context", None) if runtime is not None else None
-        thread_id = (context or {}).get("request_id")
+        metadata = {
+            "caller": "routine",
+            "routing_mode": "routine_node",
+            "thread_id": (context or {}).get("request_id"),
+        }
         effective_timeout = (
             timeout if timeout is not None and timeout > 0 else _A2A_NO_LIMIT_TIMEOUT
         )
-        response = await A2AClient().send_message(
-            cfg,
-            rendered,
-            blocking=True,
-            timeout=effective_timeout,
-            context={"caller": "routine", "routing_mode": "routine_node", "thread_id": thread_id},
-        )
-        if not response.get("success"):
-            raise ValueError(f"a2a node {node.id}: {response.get('error') or 'unknown error'}")
 
-        text = _extract_reply_text(response.get("result"))
-        output: dict[str, Any] = {output_key: text}
-        parsed = extract_json_object(text)
-        if parsed is not None:
-            output[f"{output_key}_json"] = parsed
-        return {"messages": [AIMessage(content=text)], "data": output}
+        # Contract-free A2A nodes keep their established lenient behavior.
+        if schema is None:
+            response = await A2AClient().send_message(
+                cfg,
+                rendered,
+                blocking=True,
+                timeout=effective_timeout,
+                context=metadata,
+            )
+            if not response.get("success"):
+                raise ValueError(f"a2a node {node.id}: {response.get('error') or 'unknown error'}")
+            text = _extract_reply_text(response.get("result"))
+            output: dict[str, Any] = {output_key: text}
+            parsed = extract_json_object(text)
+            if parsed is not None:
+                output[f"{output_key}_json"] = parsed
+            return {"messages": [AIMessage(content=text)], "data": output}
+
+        feedback = get_output_feedback(node.id, runtime)
+        record = (
+            feedback.record
+            if feedback is not None
+            else {
+                "node": node.id,
+                "kind": "a2a",
+                "peer": agent_name,
+                "peer_fingerprint": peer_fingerprint,
+                "attempts": [],
+                "outcome": "pending",
+            }
+        )
+        attempt: dict[str, Any] = {
+            "attempt": _native_attempt(runtime, record),
+            "kind": "feedback" if feedback is not None else "original",
+        }
+        record["attempts"].append(attempt)
+
+        if feedback is not None and record.get("peer_fingerprint") != peer_fingerprint:
+            attempt["peer_changed"] = True
+            record["outcome"] = "feedback_peer_changed"
+            raise NodeOutputRetryError(
+                f"a2a node {node.id}: peer changed before output feedback",
+                code="feedback_peer_changed",
+                record=record,
+            )
+
+        try:
+            if feedback is None:
+                response = await A2AClient().send_message(
+                    cfg,
+                    rendered,
+                    blocking=True,
+                    timeout=effective_timeout,
+                    context=metadata,
+                )
+            else:
+                if feedback.context_id is None:
+                    record["outcome"] = "no_protocol_context"
+                    raise NodeOutputRetryError(
+                        f"a2a node {node.id}: completed peer reply had no A2A context",
+                        code="no_protocol_context",
+                        record=record,
+                    )
+                response = await A2AClient().send_message(
+                    cfg,
+                    build_output_feedback(schema, feedback.diagnostics),
+                    blocking=True,
+                    timeout=effective_timeout,
+                    context=metadata,
+                    task_id=None,
+                    context_id=feedback.context_id,
+                )
+        except asyncio.CancelledError:
+            raise
+        except NodeOutputRetryError:
+            raise
+        except Exception as exc:
+            attempt["send_failed"] = True
+            record["outcome"] = "feedback_send_failed" if feedback is not None else "send_failed"
+            if feedback is not None:
+                raise NodeOutputRetryError(
+                    f"a2a node {node.id}: peer did not accept output feedback",
+                    code="feedback_send_failed",
+                    record=record,
+                ) from exc
+            raise _record_error(
+                ValueError(f"a2a node {node.id}: peer request failed"), record
+            ) from exc
+
+        if not response.get("success"):
+            attempt["send_failed"] = True
+            record["outcome"] = "feedback_send_failed" if feedback is not None else "send_failed"
+            if feedback is not None:
+                raise NodeOutputRetryError(
+                    f"a2a node {node.id}: peer did not accept output feedback",
+                    code="feedback_send_failed",
+                    record=record,
+                )
+            raise _record_error(ValueError(f"a2a node {node.id}: peer request failed"), record)
+
+        reply = classify_a2a_reply(response.get("result"))
+        attempt.update(
+            reply_kind=reply.kind,
+            task_state=reply.state,
+            task_id=reply.task_id,
+            context_id=reply.context_id,
+            reply_message_id=reply.message_id,
+            reply=reply.text,
+        )
+        if not reply.completed:
+            record["outcome"] = "not_completed"
+            if feedback is not None:
+                raise NodeOutputRetryError(
+                    f"a2a node {node.id}: output feedback did not complete",
+                    code="feedback_not_completed",
+                    record=record,
+                )
+            raise _record_error(
+                ValueError(f"a2a node {node.id}: peer reply not completed (state '{reply.state}')"),
+                record,
+            )
+        if feedback is not None and reply.context_id != feedback.context_id:
+            record["outcome"] = "context_mismatch"
+            raise NodeOutputRetryError(
+                f"a2a node {node.id}: output feedback left its A2A context",
+                code="context_mismatch",
+                record=record,
+            )
+
+        check = schema.check(reply.text)
+        attempt["valid"] = check.valid
+        if check.valid:
+            assert check.value is not None
+            record["outcome"] = "accepted"
+            return {
+                "messages": [AIMessage(content=reply.text)],
+                "data": {output_key: reply.text, f"{output_key}_json": check.value},
+                "_node_output": record,
+            }
+
+        attempt["diagnostics"] = check.diagnostics
+        record["outcome"] = "validation_failed"
+        if reply.context_id is None:
+            raise NodeOutputRetryError(
+                f"a2a node {node.id}: completed peer reply had no A2A context",
+                code="no_protocol_context",
+                record=record,
+            )
+        raise NodeOutputValidationError(
+            node.id,
+            feedback=OutputFeedback(
+                node_id=node.id,
+                task_id=output_task_id(runtime),
+                reply=reply.text,
+                diagnostics=check.diagnostics,
+                record=record,
+                context_id=feedback.context_id if feedback is not None else reply.context_id,
+            ),
+        )
 
     return run
 

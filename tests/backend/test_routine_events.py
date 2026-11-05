@@ -302,3 +302,36 @@ async def test_lifecycle_index_follows_events_without_rescanning_the_log(feed, m
 
     assert events[-1][1]["runs"][0]["status"] == "stopped"
     assert scans == []
+
+
+async def test_run_state_omits_raw_node_output_replies(monkeypatch):
+    """Rejected node output replies stay in checkpoints, not UI events."""
+    from types import SimpleNamespace
+
+    import src.backend.workflows.events as module
+
+    record = {
+        "node": "call",
+        "kind": "prompt",
+        "outcome": "retry_exhausted",
+        "attempts": [
+            {"attempt": 1, "kind": "original", "valid": False, "reply": "PRIVATE-REJECTED"},
+            {"attempt": 2, "kind": "feedback", "valid": False, "reply": "PRIVATE-2"},
+        ],
+    }
+    run_meta = {"call": [{"step": 1, "error": "node output failed", "node_output": record}]}
+    checkpoint = SimpleNamespace(
+        checkpoint={"channel_values": {"run_meta": run_meta, "data": {}}}, pending_writes=[]
+    )
+    monkeypatch.setattr(module, "read_latest_checkpoint", AsyncMock(return_value=checkpoint))
+
+    payload = await module.read_run_state("demo", "routine:demo:rev:one", InMemoryDocumentStore())
+
+    assert "PRIVATE" not in repr(payload)
+    attempts = payload["run_meta"]["call"][0]["node_output"]["attempts"]
+    assert [(a["kind"], a["reply_chars"]) for a in attempts] == [
+        ("original", 16),
+        ("feedback", 9),
+    ]
+    # The checkpoint values themselves are not mutated.
+    assert record["attempts"][0]["reply"] == "PRIVATE-REJECTED"

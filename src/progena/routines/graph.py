@@ -275,13 +275,18 @@ class AgentNodeConfig(BaseModel):
 
 
 class A2ANodeConfig(BaseModel):
-    """One-shot delegation to a registered Agent2Agent-protocol peer."""
+    """A2A delegation with optional schema validation and native feedback retries.
+
+    ``response_schema`` validates completed output. The ordinary node retry
+    policy bounds any same-context attempts to repair that output.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     agent_name: str = Field(min_length=1)
     prompt_template: str | None = None
     prompt_file: str | None = None
+    response_schema: dict[str, Any] | None = None
     retry: RetryPolicyConfig | None = None
     timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None

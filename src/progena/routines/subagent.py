@@ -447,7 +447,13 @@ def create_routine_executor(
             # into the same chat message as always; a failure persisting
             # this entry is logged and swallowed rather than replacing the
             # real failure message below.
-            node_meta = getattr(exc, "routine_run_meta", None)
+            failure: BaseException | None = exc
+            seen_failures: set[int] = set()
+            node_meta = None
+            while failure is not None and node_meta is None and id(failure) not in seen_failures:
+                seen_failures.add(id(failure))
+                node_meta = getattr(failure, "routine_run_meta", None)
+                failure = failure.__cause__ or failure.__context__
             timed_out = isinstance(exc, NodeTimeoutError) and checkpointer is not None
             if (
                 (node_meta is not None or timed_out)
@@ -476,6 +482,9 @@ def create_routine_executor(
                             "step": sum(len(records) for records in history.values()) + 1,
                             "error": str(exc),
                         }
+                    node_output = getattr(exc, "node_output", None)
+                    if node_output is not None:
+                        entry["node_output"] = node_output
                     await compiled.aupdate_state(
                         run_config, {"run_meta": {failed_node_id: [entry]}}
                     )
