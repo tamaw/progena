@@ -639,6 +639,32 @@ def test_refresh_acp_task_workflow_schemas_updates_stale_ports_without_running_w
     )
 
 
+def test_schema_refresh_does_not_recreate_a_concurrently_deleted_workflow(store, monkeypatch):
+    definition = save_workflow_definition(store, _workflow({"document_type": "acp_task"}, {}, []))
+    key = workflow_definition_key(definition.id)
+    stale = definition.model_dump(mode="json", by_alias=True)
+    for side in ("before", "after"):
+        stale["graph"]["nodes"]["event"]["output_schema"]["properties"][side]["properties"].pop(
+            "evidence"
+        )
+    store.save_document(PROGENA_STATE_PREFIX, key, stale)
+    mutate_document = store.mutate_document
+
+    def delete_before_mutation(prefix, candidate_key, mutator):
+        if candidate_key == key:
+            store.delete_document(prefix, candidate_key)
+        return mutate_document(prefix, candidate_key, mutator)
+
+    monkeypatch.setattr(store, "mutate_document", delete_before_mutation)
+
+    assert refresh_acp_task_workflow_schemas(store) == 0
+    assert store.get_document(PROGENA_STATE_PREFIX, key, None) is None
+    events = [
+        event for event in store.read_document_events(EVENT_LOG_START, 100) if event.key == key
+    ]
+    assert events[-1].op == "deleted"
+
+
 def test_workflow_document_write_cannot_replace_supervisor_evidence(store):
     from src.backend.workflows.service import _execute_document_write_node
 

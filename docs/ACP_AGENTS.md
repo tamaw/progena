@@ -96,11 +96,12 @@ exposed as writable workflow inputs.
 After registering document types at backend startup, saved workflows that use
 the `acp_task` document type have their authoritative port schemas re-derived,
 including dependent ports. Authored trigger filters, edges, prompts, UI and
-enabled/paused state are preserved. Invalid affected definitions are logged and
-left unchanged; unrelated workflows are not refreshed. The refresh is
-idempotent and does not replay missed completion events, resume ACP tasks or
-publish builds. A completion missed before the fix still needs a separately
-authorized recovery.
+enabled/paused state are preserved. Workflows deleted before the locked refresh
+are left absent, rather than recreated with a null payload. Invalid affected
+definitions are logged and left unchanged; unrelated workflows are not
+refreshed. The refresh is idempotent and does not replay missed completion
+events, resume ACP tasks or publish builds. A completion missed before the fix
+still needs a separately authorized recovery.
 
 
 ### Liveness is not a model-response test

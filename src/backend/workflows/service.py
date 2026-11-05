@@ -362,6 +362,10 @@ def _references_document_type(payload: Mapping[str, Any], document_type: str) ->
     )
 
 
+class _SkipWorkflowSchemaRefresh(Exception):
+    """Abort a stale candidate's store mutation without writing a document."""
+
+
 def refresh_acp_task_workflow_schemas(store: BackendDocumentStore) -> int:
     """Refresh derived ports in saved workflows that use the ACP task document type.
 
@@ -393,7 +397,7 @@ def refresh_acp_task_workflow_schemas(store: BackendDocumentStore) -> int:
             if not isinstance(current, Mapping) or not _references_document_type(
                 current, "acp_task"
             ):
-                return current
+                raise _SkipWorkflowSchemaRefresh
             normalized = _derive_workflow_definition_payload(store, current, existing=current)
             if normalized != current:
                 changed = True
@@ -402,6 +406,8 @@ def refresh_acp_task_workflow_schemas(store: BackendDocumentStore) -> int:
 
         try:
             store.mutate_document(PROGENA_STATE_PREFIX, key, refresh)
+        except _SkipWorkflowSchemaRefresh:
+            continue
         except Exception:
             logger.exception(
                 "Skipping invalid ACP task workflow definition %r during schema refresh", key
