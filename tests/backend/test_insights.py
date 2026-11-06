@@ -320,7 +320,7 @@ def test_usage_marks_missing_usage_and_missing_cache_detail_without_calling_them
     )
 
 
-def test_token_usage_route_acknowledges_and_correlates_snapshot(monkeypatch):
+def test_token_usage_route_acknowledges_and_correlates_snapshot(monkeypatch, ui_stream):
     from src.backend.insights import routes as insights_routes
 
     payload = {
@@ -345,18 +345,19 @@ def test_token_usage_route_acknowledges_and_correlates_snapshot(monkeypatch):
     )
     monkeypatch.setattr(events_stream, "_ui_event_replay", [])
     request_id = "insights-request"
-    event_start = len(events_stream._ui_event_replay)
+    event_start = ui_stream.qsize()
 
     response = TestClient(app).get(
-        "/api/ui/insights/token-usage?range=24h", headers={"X-Operation-Id": request_id}
+        "/api/ui/insights/token-usage?range=24h&client_id=tab-1",
+        headers={"X-Operation-Id": request_id},
     )
 
     assert response.status_code == 202
     assert response.json()["event_types"] == ["insights.token_usage.snapshot"]
     event = next(
-        event
-        for event in events_stream._ui_event_replay[event_start:]
-        if event.payload.get("request_id") == request_id
+        item["envelope"]
+        for _ in range(event_start, ui_stream.qsize())
+        if (item := ui_stream.get_nowait())["envelope"].payload.get("request_id") == request_id
     )
     assert event.type == "insights.token_usage.snapshot"
     assert event.payload["range"] == "24h"

@@ -55,6 +55,14 @@ describe('usePositionalListRange', () => {
     expect(offsets()).toEqual([0]);
   });
 
+  it('reloads a retained nonzero page when it is scrolled into after a fresh mount', async () => {
+    await render({ list: freshList({ loadedPages: { 0: true, 10: true } }), streamReady: true });
+    fetchPage.mockClear();
+
+    act(() => api(10, 20));
+    expect(offsets()).toEqual([10]);
+  });
+
   it('waits for the stream before requesting anything', async () => {
     await render({ list: freshList(), streamReady: false });
     expect(fetchPage).not.toHaveBeenCalled();
@@ -71,7 +79,7 @@ describe('usePositionalListRange', () => {
     fetchPage.mockClear();
 
     act(() => api(0, 45));
-    expect(offsets()).toEqual([30, 40]);
+    expect(offsets()).toEqual([10, 30, 40]);
   });
 
   it('ignores an in-flight request from an older range version', async () => {

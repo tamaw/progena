@@ -75,7 +75,7 @@ def _document_type_snapshot_item(document_type: DocumentType) -> dict[str, Any]:
 )
 async def get_document_types(
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Publish the document type registry (``document_type:<id>`` rows).
@@ -83,6 +83,7 @@ async def get_document_types(
     Backs the workflow editor's document type pickers; each item carries the
     exact port schemas the server derives for event/read/query nodes on save.
     """
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     types = events_documents.list_document_types(storage_documents.get_default_document_store())
     items = [

@@ -120,6 +120,18 @@ async (entryTimezone, preferenceTimezone, expectedZone) => {
   expect(host.textContent).toContain(expectedZone);
 });
 
+it('renders a schedule whose destination chat lookup is still pending', async () => {
+  const store = configureStore({
+    reducer: { realtime: realtimeReducer, uiData: uiDataReducer, editorDrafts: editorDraftsReducer },
+  });
+  store.dispatch(applyUiEvent({
+    type: 'schedules.snapshot',
+    payload: { items: [{ id: 'pending-chat', name: 'Pending chat', conversation_id: 'chat-1', cron: '0 * * * *' }] },
+  }));
+  await act(async () => renderSchedules(store));
+  expect(host.textContent).toContain('Loading chat…');
+});
+
 it('retains independent unsaved intent drafts for schedules A and B across selection changes', async () => {
   const store = configureStore({
     reducer: { realtime: realtimeReducer, uiData: uiDataReducer, editorDrafts: editorDraftsReducer },

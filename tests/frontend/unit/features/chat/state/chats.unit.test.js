@@ -138,6 +138,21 @@ describe('positional chat cache deltas', () => {
     expect(chats.total).toBe(3);
     expect(chats.tombstones.first).toBe(true);
   });
+
+  it('invalidates every window when a deleted row has no known position', () => {
+    const chats = cache();
+    chats.total = 100;
+    chats.loadedPages = { 0: true, 50: true };
+    chats.inFlightRequests = { page: { offset: 50, rangeVersion: 0 } };
+    chats.byId.unloaded = { thread_id: 'unloaded', title: 'Unloaded' };
+
+    deleteChatFromList(chats, 'unloaded');
+
+    expect(chats.loadedPages).toEqual({});
+    expect(chats.inFlightRequests).toEqual({});
+    expect(chats.rangeVersion).toBe(1);
+    expect(chats.tombstones.unloaded).toBe(true);
+  });
 });
 
 describe('reconciled chat pagination', () => {

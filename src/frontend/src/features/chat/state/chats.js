@@ -6,7 +6,7 @@
  * imperatively by the chat stream hook so route changes do not clear them.
  */
 import { createSelector } from '@reduxjs/toolkit';
-import { createAcknowledgedThunk, requestAcknowledged } from '../../../store/async';
+import { addStreamFailureLifecycle, createAcknowledgedThunk, requestAcknowledged } from '../../../store/async';
 import { withQuery } from '../../../store/http';
 import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realtimeClient';
 import { deriveChatStatus } from '../models/chatStatus';
@@ -141,9 +141,14 @@ function upsertCachedRow(chats, row) {
   return threadId;
 }
 
-const { indexOfRow, shiftRows, invalidatePagesFrom, removeRowAt, insertRowAt } = createPositionalListOps(
-  CHAT_LIST_PAGE_SIZE,
-);
+const {
+  indexOfRow,
+  shiftRows,
+  invalidatePagesFrom,
+  removeRowAt,
+  insertRowAt,
+  settleInFlightRequest,
+} = createPositionalListOps(CHAT_LIST_PAGE_SIZE);
 
 function groupKeyForRow(row, view) {
   if (!row || view.sort !== 'recent' || view.filter !== 'active') return null;
@@ -203,6 +208,13 @@ export function applyChatRowDelta(chats, row) {
     return;
   }
 
+  if (chats.view.q || chats.view.sort === 'name') {
+    // Search also includes server-only first-message text, so retain the row
+    // until the authoritative page replaces this ordered window.
+    invalidatePagesFrom(chats, 0);
+    return;
+  }
+
   if (oldGroup !== newGroup) {
     adjustGroupCount(chats, oldGroup, -1);
     adjustGroupCount(chats, newGroup, 1);
@@ -227,6 +239,10 @@ export function deleteChatFromList(chats, threadId) {
     removeRowAt(chats, index);
     chats.total = Math.max(0, chats.total - 1);
     adjustGroupCount(chats, groupKeyForRow(previous, chats.view), -1);
+  } else {
+    // An unloaded deletion shifts every retained later position; the next page
+    // response restores the authoritative total and order.
+    invalidatePagesFrom(chats, 0);
   }
   delete chats.byId[threadId];
   chats.tombstones[threadId] = true;
@@ -743,6 +759,9 @@ export function buildExtraReducers(builder) {
         state.chats.reconciliation.requestId = null;
       }
     });
+  addStreamFailureLifecycle(builder, (state, requestId) => {
+    settleInFlightRequest(state.chats, requestId);
+  });
 }
 
 export const selectChatSessions = createSelector(

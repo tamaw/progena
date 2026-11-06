@@ -216,6 +216,7 @@ async def get_canvases(
     client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     broadcast_canvases_snapshot(request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
@@ -234,6 +235,7 @@ async def get_canvas_files(
     client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
+    events_stream.require_ui_stream_client(client_id)
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     files = await asyncio.to_thread(_canvas_files, store, name)
@@ -258,8 +260,7 @@ async def delete_canvas(
     client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
-    if client_id not in events_stream._ui_stream_clients.values():
-        raise HTTPException(status_code=409, detail="An active UI stream is required")
+    events_stream.require_ui_stream_client(client_id)
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     files = await asyncio.to_thread(_canvas_files, store, name)
@@ -300,6 +301,7 @@ async def save_canvas_status(
     request: Request,
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
+    events_stream.require_ui_stream_client(body.client_id)
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     payload = {
@@ -333,6 +335,7 @@ async def get_canvas_documents(
     request: Request,
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
+    events_stream.require_ui_stream_client(body.client_id)
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     types = await asyncio.to_thread(list_document_types, store)
@@ -386,6 +389,7 @@ async def canvas_data(
     request: Request,
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
+    events_stream.require_ui_stream_client(body.client_id)
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     key = body.key
@@ -463,6 +467,7 @@ async def update_canvas_subscription(
     request: Request,
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
+    events_stream.require_ui_stream_client(body.client_id)
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     types = await asyncio.to_thread(list_document_types, store)
@@ -491,6 +496,7 @@ async def delete_canvas_subscription(
     client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
+    events_stream.require_ui_stream_client(client_id)
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     canvas_events.clear_interest(client_id, name)

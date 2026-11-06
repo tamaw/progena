@@ -7,12 +7,13 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Header, Query, Request
 from pydantic import BaseModel, Field
 
 from src.backend.events import contracts as events_contracts
 from src.backend.events import stream
 from src.backend.events.documents import TypedDocumentEvent
+from src.backend.events.stream import require_ui_stream_client as require_stream
 from src.backend.http import contracts as http_contracts
 from src.backend.http.requests import request_correlation_id
 from src.backend.storage.documents import (
@@ -121,11 +122,6 @@ def _tasks_by_thread(payload: Any) -> dict[str, list[dict[str, Any]]]:
 def _tasks_for_thread(store: BackendDocumentStore, thread_id: str) -> list[dict[str, Any]]:
     document = store.get_document(PROGENA_STATE_PREFIX, _ASYNC_TASKS_DOCUMENT, [])
     return _tasks_by_thread(document.payload if document is not None else []).get(thread_id, [])
-
-
-def require_stream(client_id: str) -> None:
-    if client_id not in stream._ui_stream_clients.values():
-        raise HTTPException(status_code=409, detail="An active UI stream is required")
 
 
 router = APIRouter(prefix="/chats", tags=["chat"])

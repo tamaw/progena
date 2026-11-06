@@ -216,6 +216,7 @@ async def lifespan(app: FastAPI):
                     scope="chat",
                     session_id=thread_id,
                     request_id=request_id,
+                    allow_global=True,
                 )
         # Reflect runtime-driven schedule changes on the canonical UI stream so
         # the Schedules page updates live (e.g. a one-off firing and removing

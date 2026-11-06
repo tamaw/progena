@@ -33,12 +33,14 @@ def _drain(queue: asyncio.Queue) -> list:
 def _clean_outcomes():
     events_stream._request_outcomes.clear()
     events_stream._request_outcome_bytes = 0
+    events_stream._ui_stream_topics.clear()
     queues: list[asyncio.Queue] = []
     yield queues
     for queue in queues:
         _disconnect(queue)
     events_stream._request_outcomes.clear()
     events_stream._request_outcome_bytes = 0
+    events_stream._ui_stream_topics.clear()
 
 
 @pytest.fixture
@@ -86,15 +88,48 @@ def test_one_tab_cannot_read_another_tabs_reply_and_unknown_ids_are_reported(tab
     assert _drain(other) == []
 
 
-def test_a_reply_with_no_single_audience_can_be_replayed_to_whoever_asks(tab):
+def test_topic_only_content_is_replayed_only_to_a_tab_that_currently_watches_it(tab):
     events_stream.broadcast_ui_event(
-        "agents.snapshot", {"agents": []}, request_id="r1", topic="agents"
+        "chat.response.delta",
+        {"content": "private reply"},
+        request_id="r1",
+        topic="chat:thread-1",
     )
     asking = tab("b")
 
-    replayed, _, _ = events_stream.replay_request_outcomes("b", ["r1"])
+    assert events_stream.replay_request_outcomes("b", ["r1"]) == ([], ["r1"], [])
+    assert _drain(asking) == []
 
-    assert replayed == ["r1"] and len(_drain(asking)) == 1
+    events_stream.subscribe_topic("b", "chat:thread-1")
+    assert events_stream.replay_request_outcomes("b", ["r1"])[0] == ["r1"]
+    assert _drain(asking)[0].payload["content"] == "private reply"
+
+
+def test_a_global_reply_is_replayed_to_any_asking_tab(tab):
+    events_stream.broadcast_ui_event(
+        "chat.response.completed", {"status": "completed"}, request_id="r1"
+    )
+    asking = tab("b")
+
+    assert events_stream.replay_request_outcomes("b", ["r1"]) == (["r1"], [], [])
+    assert [envelope.type for envelope in _drain(asking)] == ["chat.response.completed"]
+
+
+@pytest.mark.asyncio
+async def test_replacement_stream_starts_empty_and_old_cleanup_keeps_its_topics(monkeypatch):
+    monkeypatch.setattr(monitoring_status, "start_status_monitor", lambda: None)
+    first = events_routes._generate_ui_stream(client_id="a")
+    await anext(first)
+    events_stream.subscribe_topic("a", "old")
+
+    replacement = events_routes._generate_ui_stream(client_id="a")
+    await anext(replacement)
+    assert not events_stream.has_topic("a", "old")
+
+    events_stream.subscribe_topic("a", "new")
+    await first.aclose()
+    assert events_stream.has_topic("a", "new")
+    await replacement.aclose()
 
 
 def test_replaying_is_repeatable_until_the_record_expires(tab):
@@ -127,6 +162,28 @@ def test_a_reply_too_large_to_keep_is_reported_as_lost_not_unknown(tab, monkeypa
     assert (replayed, unknown, lost) == (["small"], [], ["big"])
     assert len(_drain(queue)) == 1
     assert events_stream._request_outcome_bytes == events_stream._request_outcomes["small"].size
+
+
+def test_a_reply_over_the_envelope_count_limit_is_reported_as_lost(tab, monkeypatch):
+    monkeypatch.setattr(events_stream, "_OUTCOMES_PER_REQUEST", 1)
+    events_stream.broadcast_ui_event("logs.export.started", {}, request_id="many", client_id="a")
+    events_stream.broadcast_ui_event("logs.export.chunk", {}, request_id="many", client_id="a")
+    queue = tab("a")
+
+    replayed, unknown, lost = events_stream.replay_request_outcomes("a", ["many"])
+
+    assert (replayed, unknown, lost) == ([], [], ["many"])
+    assert _drain(queue) == []
+
+
+def test_outcome_budget_counts_utf8_encoded_envelope_bytes(tab):
+    envelope = events_stream.broadcast_ui_event(
+        "agents.snapshot", {"name": "東京"}, request_id="utf8", client_id="a"
+    )
+
+    assert events_stream._request_outcomes["utf8"].size == len(
+        envelope.model_dump_json().encode("utf-8")
+    )
 
 
 def test_replies_older_than_the_record_are_forgotten(tab, monkeypatch):

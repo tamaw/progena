@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { buildVirtualPaneLayout, findVirtualPaneRange, shouldCompensateVirtualScroll } from './PaneListVirtualModel';
 import { createPortal } from 'react-dom';
 import { usePaneCollapse, NARROW_MQ } from '../../hooks/usePaneCollapse';
 import { useMenuDismiss } from '../../hooks/useMenuDismiss';
-import { buildVirtualPaneLayout, findVirtualPaneRange } from './PaneListVirtualModel';
 
 /** Provided by PaneSection; consumed by pane list rows to auto-collapse on selection. */
 const PaneAutoCollapseCtx = createContext(null);
@@ -280,6 +280,7 @@ export function PaneListRows({
 }) {
   const collapseIfNarrow = useContext(PaneAutoCollapseCtx);
   const scrollRef = useRef(null);
+  const appliedRowDeltaSequenceRef = useRef(null);
   const rangeTimerRef = useRef(null);
   const [viewport, setViewport] = useState({ top: 0, height: 0 });
   const rows = useMemo(() => {
@@ -377,7 +378,15 @@ export function PaneListRows({
 
   useEffect(() => {
     const element = scrollRef.current;
-    if (!element || !rowDelta || element.scrollTop === 0 || rowDelta.index >= virtualRange.start) return;
+    if (!rowDelta || rowDelta.sequence === appliedRowDeltaSequenceRef.current) return;
+    const shouldCompensate = shouldCompensateVirtualScroll({
+      rowDelta,
+      lastSequence: appliedRowDeltaSequenceRef.current,
+      scrollTop: element?.scrollTop ?? 0,
+      rangeStart: virtualRange.start,
+    });
+    appliedRowDeltaSequenceRef.current = rowDelta.sequence;
+    if (!element || !shouldCompensate) return;
     element.scrollTop = Math.max(0, element.scrollTop + (rowDelta.amount * virtualRowHeight));
   }, [rowDelta, virtualRange.start, virtualRowHeight]);
 

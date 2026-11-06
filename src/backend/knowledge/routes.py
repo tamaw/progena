@@ -18,6 +18,7 @@ import src.backend.events.contracts as events_contracts
 import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
 import src.backend.knowledge.service as knowledge_service
+from src.backend.events.stream import require_ui_stream_client as _require_stream
 from src.backend.http.requests import request_correlation_id as _request_correlation_id
 from src.backend.knowledge.pages import list_pages, orphaned_page_base_ids, read_page
 from src.backend.knowledge.service import load_bases, save_bases, snapshot_bases
@@ -30,13 +31,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ui/knowledge", tags=["knowledge"])
 
 KNOWLEDGE_TOPIC = "knowledge"
-
-
-def _require_stream(client_id: str) -> None:
-    if client_id not in events_stream._ui_stream_clients.values():
-        raise HTTPException(
-            status_code=409, detail="Knowledge requests require an active UI stream"
-        )
 
 
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)

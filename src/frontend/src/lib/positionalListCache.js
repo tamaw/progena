@@ -74,6 +74,14 @@ export function createPositionalListOps(pageSize) {
     noteRowDelta(cache, index, 1);
   }
 
+  /** Settle a failed acknowledged request so the page can be requested again. */
+  function settleInFlightRequest(cache, requestId) {
+    if (!cache.inFlightRequests[requestId]) return false;
+    delete cache.inFlightRequests[requestId];
+    cache.loading = Object.keys(cache.inFlightRequests).length > 0 && !cache.loaded;
+    return true;
+  }
+
   return {
     pageOffset,
     indexOfRow,
@@ -82,5 +90,6 @@ export function createPositionalListOps(pageSize) {
     noteRowDelta,
     removeRowAt,
     insertRowAt,
+    settleInFlightRequest,
   };
 }

@@ -13,6 +13,7 @@ from psycopg.errors import UniqueViolation
 
 import src.backend.http.contracts as http_contracts
 from src.backend.events import contracts as events_contracts
+from src.backend.events.stream import require_ui_stream_client
 from src.backend.http.requests import BroadcastUiEvent, request_correlation_id
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
 from src.progena.settings.chatgpt_oauth import ChatGPTOAuthError
@@ -72,8 +73,8 @@ async def broadcast_provider_snapshot(
     repository: ProviderRepository,
     broadcast: BroadcastUiEvent,
     *,
-    request_id: str | None = None,
-    client_id: str | None = None,
+    request_id: str,
+    client_id: str,
 ) -> None:
     payload = await _snapshot(repository)
     broadcast(
@@ -151,8 +152,9 @@ def create_provider_router(
     )
     async def list_providers(
         request: Request,
-        client_id: str | None = Query(default=None, min_length=1, max_length=64),
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
@@ -173,8 +175,9 @@ def create_provider_router(
     async def create_provider(
         body: dict[str, Any],
         request: Request,
-        client_id: str | None = Query(default=None, min_length=1, max_length=64),
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
@@ -197,8 +200,9 @@ def create_provider_router(
         provider_id: str,
         body: dict[str, Any],
         request: Request,
-        client_id: str | None = Query(default=None, min_length=1, max_length=64),
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
@@ -238,8 +242,9 @@ def create_provider_router(
     async def delete_provider(
         provider_id: str,
         request: Request,
-        client_id: str | None = Query(default=None, min_length=1, max_length=64),
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         if await asyncio.to_thread(_profile_references_provider, get_store(), provider_id):
@@ -269,8 +274,9 @@ def create_provider_router(
     async def test_provider(
         provider_id: str,
         request: Request,
-        client_id: str | None = Query(default=None, min_length=1, max_length=64),
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
@@ -305,8 +311,9 @@ def create_provider_router(
     async def disconnect_chatgpt_provider(
         provider_id: str,
         request: Request,
-        client_id: str | None = Query(default=None, min_length=1, max_length=64),
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:

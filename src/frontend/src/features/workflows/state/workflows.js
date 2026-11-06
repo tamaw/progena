@@ -177,6 +177,13 @@ export const triggerWorkflow = createAcknowledgedThunk('uiData/triggerWorkflow',
 export const fetchWorkflowRuns = createAcknowledgedThunk('uiData/fetchWorkflowRuns', async ({ workflowRunsUrl }, { requestId }) => (
   requestForWorkflow(workflowRunsUrl, {}, requestId)
 ));
+export const answerWorkflowRunApproval = createAcknowledgedThunk('uiData/answerWorkflowRunApproval', async ({ workflowsUrl, workflowId, runId, approved }, { requestId }) => (
+  requestForWorkflow(
+    `${workflowsUrl}/${encodeURIComponent(workflowId)}/runs/${encodeURIComponent(runId)}/approval`,
+    { method: 'POST', body: { approved } },
+    requestId,
+  )
+));
 
 export const eventHandlers = {
   [UI_EVENT.WORKFLOWS_SNAPSHOT]: (state, payload) => {

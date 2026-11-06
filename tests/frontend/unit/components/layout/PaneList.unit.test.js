@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildVirtualPaneLayout, findVirtualPaneRange } from '@frontend/components/layout/PaneListVirtualModel';
+import { buildVirtualPaneLayout, findVirtualPaneRange, shouldCompensateVirtualScroll } from '@frontend/components/layout/PaneListVirtualModel';
 
 describe('virtual pane layout', () => {
   it('accounts for headers in full-height grouped layout', () => {
@@ -31,5 +31,15 @@ describe('virtual pane layout', () => {
 
     expect(findVirtualPaneRange(layout, 14, 12)).toEqual({ start: 0, end: 3 });
     expect(findVirtualPaneRange(layout, 26, 8)).toEqual({ start: 2, end: 3 });
+  });
+
+  it('compensates a positional delta once per sequence', () => {
+    const delta = { sequence: 4, index: 2, amount: 1 };
+    expect(shouldCompensateVirtualScroll({
+      rowDelta: delta, lastSequence: 3, scrollTop: 200, rangeStart: 10,
+    })).toBe(true);
+    expect(shouldCompensateVirtualScroll({
+      rowDelta: delta, lastSequence: 4, scrollTop: 200, rangeStart: 10,
+    })).toBe(false);
   });
 });

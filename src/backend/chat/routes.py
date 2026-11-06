@@ -45,6 +45,7 @@ from src.backend.chat.service import (
     summary_markers_for_page,
 )
 from src.backend.events import contracts as events_contracts
+from src.backend.events.stream import require_ui_stream_client as _require_stream
 from src.backend.http.requests import BroadcastUiEvent
 from src.backend.http.requests import request_correlation_id as _strict_request_correlation_id
 from src.backend.integrations.runtime_history import RuntimeUnavailable
@@ -72,11 +73,6 @@ def request_correlation_id(request: Request, header_request_id: str | None) -> s
         return _strict_request_correlation_id(request, header_request_id)
     except RuntimeError:
         return str(uuid.uuid4())
-
-
-def _require_stream(client_id: str) -> None:
-    if client_id not in events_stream._ui_stream_clients.values():
-        raise HTTPException(status_code=409, detail="Chat mutations require an active UI stream")
 
 
 def create_chat_router(

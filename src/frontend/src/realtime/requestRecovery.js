@@ -18,15 +18,22 @@ export const RECOVERY_DEADLINE_MS = 60000;
 const RESOLVE_BATCH = 64;
 
 let lastBootId = null;
-let disconnectTimer = null;
-const recoveryTimers = new Set();
+const recoveryTimers = new Map();
 // Requests whose 202 had not arrived when the stream dropped: their reply may
 // already have been sent into the gap, so ask for it as soon as they acknowledge.
 const carried = new Set();
+const requestBootIds = new Map();
+const staleAcknowledgements = new Set();
 let resolveUrl = null;
 
 function pendingOps(listenerApi) {
   return Object.values(listenerApi.getState().realtime.pendingOps || {});
+}
+
+function clearDeadline(requestId) {
+  const timer = recoveryTimers.get(requestId);
+  if (timer !== undefined) clearTimeout(timer);
+  recoveryTimers.delete(requestId);
 }
 
 function failIds(listenerApi, requestIds, error) {
@@ -34,50 +41,55 @@ function failIds(listenerApi, requestIds, error) {
   for (const requestId of requestIds) {
     if (pending[requestId]) listenerApi.dispatch(failPendingOp({ requestId, error }));
     carried.delete(requestId);
+    requestBootIds.delete(requestId);
+    clearDeadline(requestId);
   }
 }
 
-function failAfterDeadline(listenerApi, requestIds, error) {
-  if (requestIds.length === 0) return;
+function ensureDeadline(listenerApi, requestId, error) {
+  if (recoveryTimers.has(requestId)) return;
   const timer = setTimeout(() => {
-    recoveryTimers.delete(timer);
-    failIds(listenerApi, requestIds, error);
+    recoveryTimers.delete(requestId);
+    failIds(listenerApi, [requestId], error);
   }, RECOVERY_DEADLINE_MS);
-  recoveryTimers.add(timer);
+  recoveryTimers.set(requestId, timer);
 }
 
 /** The stream dropped: keep pending requests, but not forever. */
 export function holdPendingForRecovery(listenerApi) {
-  if (disconnectTimer !== null || pendingOps(listenerApi).length === 0) return;
-  disconnectTimer = setTimeout(() => {
-    disconnectTimer = null;
-    failIds(
-      listenerApi,
-      pendingOps(listenerApi).map((operation) => operation.requestId),
-      'Connection lost before the server replied.',
-    );
-  }, RECOVERY_DEADLINE_MS);
+  for (const operation of pendingOps(listenerApi)) {
+    ensureDeadline(listenerApi, operation.requestId, 'Connection lost before the server replied.');
+  }
 }
 
 async function resolveOutcomes(listenerApi, requestIds) {
   if (!resolveUrl) return;
   for (let start = 0; start < requestIds.length; start += RESOLVE_BATCH) {
     const batch = requestIds.slice(start, start + RESOLVE_BATCH);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), RECOVERY_DEADLINE_MS);
     try {
       const response = await fetch(resolveUrl, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ client_id: realtimeClientId, request_ids: batch }),
+        signal: controller.signal,
       });
       if (!response.ok) throw new Error(`resolve returned ${response.status}`);
       const { unknown = [], lost = [] } = await response.json();
       failIds(listenerApi, lost, 'The result of this request was too large to recover; reload to see its effect.');
-      failAfterDeadline(listenerApi, unknown, 'The server did not report the result of this request.');
+      for (const requestId of unknown) {
+        ensureDeadline(listenerApi, requestId, 'The server did not report the result of this request.');
+      }
     } catch {
-      // The stream is probably down again; the next ready asks again, and the
-      // deadline still bounds the wait.
-      failAfterDeadline(listenerApi, batch, 'Connection lost before the server replied.');
+      // The next ready asks again. Individual deadlines remain in force while
+      // this request or its response is stalled.
+      for (const requestId of batch) {
+        ensureDeadline(listenerApi, requestId, 'Connection lost before the server replied.');
+      }
+    } finally {
+      clearTimeout(timeout);
     }
   }
 }
@@ -87,20 +99,30 @@ async function resolveOutcomes(listenerApi, requestIds) {
  * has nothing to recover.
  */
 export async function recoverOnReady(listenerApi, streamUrl, bootId) {
-  clearTimeout(disconnectTimer);
-  disconnectTimer = null;
   resolveUrl = `${streamUrl}/resolve`;
   const previousBootId = lastBootId;
   if (bootId) lastBootId = bootId;
   if (previousBootId === null) return;
 
   const operations = pendingOps(listenerApi);
+  for (const operation of operations) {
+    ensureDeadline(listenerApi, operation.requestId, 'Connection lost before the server replied.');
+  }
   const acknowledged = operations.filter((operation) => operation.status === 'pending');
   if (bootId && bootId !== previousBootId) {
-    carried.clear();
+    const failed = [];
+    for (const operation of operations) {
+      if (
+        operation.status === 'pending'
+        || requestBootIds.get(operation.requestId) === previousBootId
+      ) {
+        staleAcknowledgements.add(operation.requestId);
+        failed.push(operation.requestId);
+      }
+    }
     failIds(
       listenerApi,
-      acknowledged.map((operation) => operation.requestId),
+      failed,
       'The server restarted before this request finished. Check its result, then try again.',
     );
     return;
@@ -111,17 +133,33 @@ export async function recoverOnReady(listenerApi, streamUrl, bootId) {
   await resolveOutcomes(listenerApi, acknowledged.map((operation) => operation.requestId));
 }
 
+/** Record which server boot accepted an operation before its HTTP request starts. */
+export function noteRequestStarted(requestId) {
+  requestBootIds.set(requestId, lastBootId);
+}
+
 /** A carried request just got its 202: its reply may already be in the gap. */
 export function noteAcknowledged(listenerApi, requestId) {
   if (!carried.delete(requestId)) return;
   if (listenerApi.getState().realtime.pendingOps?.[requestId]) {
+    ensureDeadline(listenerApi, requestId, 'Connection lost before the server replied.');
     resolveOutcomes(listenerApi, [requestId]);
   }
+}
+
+/** True once for an acknowledgement sent by a server boot that has restarted. */
+export function consumeStaleAcknowledgement(requestId) {
+  if (!staleAcknowledgements.delete(requestId)) return false;
+  requestBootIds.delete(requestId);
+  clearDeadline(requestId);
+  return true;
 }
 
 /** The request failed on its own; nothing left to recover. */
 export function forgetRequest(requestId) {
   carried.delete(requestId);
+  requestBootIds.delete(requestId);
+  clearDeadline(requestId);
 }
 
 /** Test seam: forget the boot id and every carried request. */
@@ -133,9 +171,9 @@ export function resetRequestRecoveryForTest() {
 
 /** An explicit stop: drop every timer. The caller fails what is pending. */
 export function cancelRecovery() {
-  clearTimeout(disconnectTimer);
-  disconnectTimer = null;
-  for (const timer of recoveryTimers) clearTimeout(timer);
+  for (const timer of recoveryTimers.values()) clearTimeout(timer);
   recoveryTimers.clear();
   carried.clear();
+  requestBootIds.clear();
+  staleAcknowledgements.clear();
 }

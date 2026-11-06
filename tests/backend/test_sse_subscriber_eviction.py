@@ -60,7 +60,7 @@ class TestBroadcastEviction:
         isolated_subscribers[stalled_queue] = handler
         isolated_subscribers[healthy_queue] = None
 
-        envelope = events_stream.broadcast_ui_event("test.event", {})
+        envelope = events_stream.broadcast_ui_event("test.event", {}, allow_global=True)
 
         # The stalled subscriber is evicted; the healthy one survives.
         assert stalled_queue not in isolated_subscribers
@@ -81,7 +81,7 @@ class TestBroadcastEviction:
         stalled_queue = _full_queue()
         isolated_subscribers[stalled_queue] = None
 
-        events_stream.broadcast_ui_event("test.event", {})
+        events_stream.broadcast_ui_event("test.event", {}, allow_global=True)
 
         assert stalled_queue not in isolated_subscribers
 
@@ -91,7 +91,7 @@ class TestBroadcastEviction:
         stalled_queue = _full_queue()
         isolated_subscribers[stalled_queue] = finished
 
-        events_stream.broadcast_ui_event("test.event", {})
+        events_stream.broadcast_ui_event("test.event", {}, allow_global=True)
 
         assert stalled_queue not in isolated_subscribers
         assert not finished.cancelled()

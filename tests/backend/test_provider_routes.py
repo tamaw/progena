@@ -94,18 +94,18 @@ def test_provider_input_error_is_422_without_event():
     assert events == []
 
 
-def test_duplicate_provider_name_is_a_conflict_without_database_details():
+def test_duplicate_provider_name_is_a_conflict_without_database_details(ui_stream_client):
     repository = FakeProviderRepository()
     repository.create = repository.reject_duplicate
     app, events = _app(InMemoryDocumentStore(), repository)
     with TestClient(app) as client:
-        response = client.post("/providers", json={"name": "Foundry"})
+        response = client.post(f"/providers?client_id={ui_stream_client}", json={"name": "Foundry"})
     assert response.status_code == 409
     assert response.json()["detail"] == "A provider with that name already exists"
     assert events == []
 
 
-def test_delete_rejects_profile_connection_reference():
+def test_delete_rejects_profile_connection_reference(ui_stream_client):
     store = InMemoryDocumentStore()
     store.save_document(
         PROGENA_STATE_PREFIX,
@@ -115,7 +115,7 @@ def test_delete_rejects_profile_connection_reference():
     repository = FakeProviderRepository()
     app, events = _app(store, repository)
     with TestClient(app) as client:
-        response = client.delete("/providers/foundry-1")
+        response = client.delete(f"/providers/foundry-1?client_id={ui_stream_client}")
     assert response.status_code == 409
     assert repository.deleted == []
     assert events == []
@@ -132,10 +132,10 @@ def test_interactive_foundry_url_rejects_responses_endpoint_but_seed_normalizes_
         )
 
 
-def test_connection_test_reports_unconfigured_without_secret_detail():
+def test_connection_test_reports_unconfigured_without_secret_detail(ui_stream_client):
     app, events = _app(InMemoryDocumentStore(), FakeProviderRepository())
     with TestClient(app) as client:
-        response = client.post("/providers/foundry-1/test")
+        response = client.post(f"/providers/foundry-1/test?client_id={ui_stream_client}")
     assert response.status_code == 202
     assert_acknowledged(response, ["providers.tested"])
     assert events[-1][0] == "providers.tested"
@@ -146,7 +146,7 @@ def test_connection_test_reports_unconfigured_without_secret_detail():
     }
 
 
-def test_chatgpt_catalog_timeout_does_not_block_provider_snapshot(monkeypatch):
+def test_chatgpt_catalog_timeout_does_not_block_provider_snapshot(monkeypatch, ui_stream_client):
     repository = FakeProviderRepository()
     repository.providers = [
         {
@@ -166,7 +166,7 @@ def test_chatgpt_catalog_timeout_does_not_block_provider_snapshot(monkeypatch):
     monkeypatch.setattr(provider_routes, "get_chatgpt_models", models)
     app, events = _app(InMemoryDocumentStore(), repository)
     with TestClient(app) as client:
-        response = client.get("/providers")
+        response = client.get(f"/providers?client_id={ui_stream_client}")
 
     assert response.status_code == 202
     assert_acknowledged(response, ["providers.snapshot"])
@@ -176,7 +176,7 @@ def test_chatgpt_catalog_timeout_does_not_block_provider_snapshot(monkeypatch):
     }
 
 
-def test_chatgpt_oauth_failure_does_not_block_provider_snapshot(monkeypatch):
+def test_chatgpt_oauth_failure_does_not_block_provider_snapshot(monkeypatch, ui_stream_client):
     repository = FakeProviderRepository()
     repository.providers = [
         {
@@ -196,7 +196,7 @@ def test_chatgpt_oauth_failure_does_not_block_provider_snapshot(monkeypatch):
     monkeypatch.setattr(provider_routes, "get_chatgpt_models", models)
     app, events = _app(InMemoryDocumentStore(), repository)
     with TestClient(app) as client:
-        response = client.get("/providers")
+        response = client.get(f"/providers?client_id={ui_stream_client}")
 
     assert response.status_code == 202
     assert_acknowledged(response, ["providers.snapshot"])
@@ -205,7 +205,7 @@ def test_chatgpt_oauth_failure_does_not_block_provider_snapshot(monkeypatch):
     }
 
 
-def test_chatgpt_oauth_failure_reports_a_test_event(monkeypatch):
+def test_chatgpt_oauth_failure_reports_a_test_event(monkeypatch, ui_stream_client):
     repository = FakeProviderRepository()
     repository.providers = [
         {
@@ -222,7 +222,7 @@ def test_chatgpt_oauth_failure_reports_a_test_event(monkeypatch):
     monkeypatch.setattr(provider_routes, "test_chatgpt_connection", test_connection)
     app, events = _app(InMemoryDocumentStore(), repository)
     with TestClient(app) as client:
-        response = client.post("/providers/chatgpt-1/test")
+        response = client.post(f"/providers/chatgpt-1/test?client_id={ui_stream_client}")
 
     assert response.status_code == 202
     assert_acknowledged(response, ["providers.tested"])

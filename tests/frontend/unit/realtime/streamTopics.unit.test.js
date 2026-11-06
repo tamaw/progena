@@ -9,12 +9,11 @@ vi.mock('@frontend/store/async', () => ({
 vi.mock('@frontend/realtime/realtimeClient', () => ({
   isRealtimeClientReady: () => state.ready,
   realtimeClientId: 'tab',
+  setRealtimeClientReady: (ready) => { state.ready = ready; },
   waitForRealtimeClient: () => Promise.resolve(),
 }));
 
-import { holdTopic, resetStreamTopicsForTest } from '@frontend/realtime/streamTopics';
-import { notifyStreamReady } from '@frontend/realtime/streamLifecycle';
-
+import { holdTopic, registerHeldTopics, resetStreamTopicsForTest } from '@frontend/realtime/streamTopics';
 describe('stream topics', () => {
   let dispatch;
   const context = () => ({ dispatch, streamUrl: '/s' });
@@ -58,24 +57,23 @@ describe('stream topics', () => {
     expect(sent()).toEqual(['runs:true', 'runs:false']);
   });
 
-  it('only records a topic while the stream is not ready and registers it when it becomes ready', () => {
+  it('only records a topic while the stream is not ready and registers it when it becomes ready', async () => {
     state.ready = false;
     holdTopic('tasks', context());
     expect(dispatch).not.toHaveBeenCalled();
 
-    state.ready = true;
-    notifyStreamReady({ dispatch, streamUrl: '/s' });
+    await registerHeldTopics(context());
     expect(sent()).toEqual(['tasks:true']);
   });
 
-  it('registers every held topic again on a reconnect, but not ones already released', () => {
+  it('registers every held topic again on a reconnect, but not ones already released', async () => {
     holdTopic('chats', context());
     const gone = holdTopic('knowledge', context());
     gone();
     vi.advanceTimersByTime(1000);
     dispatch.mockClear();
 
-    notifyStreamReady({ dispatch, streamUrl: '/s' });
+    await registerHeldTopics(context());
     expect(sent()).toEqual(['chats:true']);
   });
 
@@ -87,5 +85,31 @@ describe('stream topics', () => {
     vi.advanceTimersByTime(1000);
     expect(sent()).toEqual(['mcp:true']);
     other();
+  });
+
+
+  it('keeps finite requests behind the registration barrier until the topic PUT resolves', async () => {
+    let finish;
+    dispatch.mockReturnValue({
+      unwrap: () => new Promise((resolve) => { finish = resolve; }),
+    });
+
+    holdTopic('tasks', context());
+    await Promise.resolve();
+    expect(state.ready).toBe(false);
+
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state.ready).toBe(true);
+  });
+  it('retries a failed registration while the topic is still held', async () => {
+    dispatch
+      .mockReturnValueOnce({ unwrap: () => Promise.reject(new Error('offline')) })
+      .mockReturnValueOnce({ unwrap: () => Promise.resolve() });
+
+    holdTopic('mcp', context());
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(sent()).toEqual(['mcp:true', 'mcp:true']);
   });
 });

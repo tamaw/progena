@@ -51,10 +51,11 @@ def _plugin_fetch_status(error: PluginFetchError, default: int) -> int:
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_marketplaces(
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Acknowledge a read and publish the marketplaces snapshot on the UI stream."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     snapshot = await asyncio.to_thread(load_marketplaces)
     broadcast_marketplaces_snapshot(snapshot, request_id=request_id, client_id=client_id)
@@ -67,10 +68,11 @@ async def get_marketplaces(
 async def replace_marketplaces(
     payload: dict[str, Any],
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Validate and persist the full marketplaces document."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     try:
         normalized = validate_marketplaces_payload(payload)
@@ -90,10 +92,11 @@ async def replace_marketplaces(
 async def browse_marketplace_plugins(
     name: str,
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Fetch the named marketplace's catalog and broadcast it."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
 
     # Resolve the registered source URL.
@@ -143,7 +146,6 @@ def broadcast_marketplaces_snapshot(
         payload,
         request_id=request_id,
         client_id=client_id,
-        topic=None if client_id else "plugins",
     )
 
 
@@ -151,8 +153,8 @@ def broadcast_plugin_catalog_snapshot(
     name: str,
     catalog: dict[str, Any],
     *,
-    request_id: str | None = None,
-    client_id: str | None = None,
+    request_id: str,
+    client_id: str,
 ) -> events_contracts.UiEventEnvelope:
     """Broadcast one marketplace's fetched catalog to /api/ui/stream subscribers.
 

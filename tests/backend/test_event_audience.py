@@ -25,7 +25,14 @@ def _untargeted_event_names() -> set[str]:
                 func = node.func
                 if getattr(func, "id", getattr(func, "attr", "")) not in _BROADCAST_NAMES:
                     continue
-                if any(keyword.arg in {"client_id", "topic"} for keyword in node.keywords):
+                has_audience = any(
+                    keyword.arg in {"client_id", "topic"}
+                    and not (
+                        isinstance(keyword.value, ast.Constant) and keyword.value.value is None
+                    )
+                    for keyword in node.keywords
+                )
+                if has_audience:
                     continue
                 first = node.args[0]
                 if (
@@ -92,7 +99,7 @@ def test_unsubscribe_and_clear_stop_delivery(tabs):
 def test_untargeted_event_reaches_every_tab_and_is_replayed(tabs):
     replayed = len(events_stream._ui_event_replay)
 
-    events_stream.broadcast_ui_event("status.updated", {})
+    events_stream.broadcast_ui_event(events_contracts.UiEvent.ALERT, {})
 
     assert _received(tabs) == {"a": 1, "b": 1, "c": 1}
     assert len(events_stream._ui_event_replay) == replayed + 1
@@ -101,6 +108,11 @@ def test_untargeted_event_reaches_every_tab_and_is_replayed(tabs):
 def test_one_audience_only(tabs):
     with pytest.raises(ValueError):
         events_stream.broadcast_ui_event("agent.deleted", {}, client_id="a", topic="t")
+
+
+def test_non_chrome_global_event_is_rejected(tabs):
+    with pytest.raises(ValueError, match="requires a client_id or topic audience"):
+        events_stream.broadcast_ui_event("agent.deleted", {})
 
 
 def test_topic_route_registers_acknowledges_to_requester_and_releases(tabs):

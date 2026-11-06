@@ -145,9 +145,12 @@ function ConversationPage() {
   const derivedChatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
   useStreamTopic('chats');
   useStreamTopic(threadId ? `chat:${threadId}` : null);
-  // The open thread's session document, once Postgres has created it. Its title
-  // is authoritative: anyone (the header, a workflow, Progena) may rename it.
-  const threadSession = threadId ? chatRowsById[threadId] || null : null;
+  // A deep-linked chat may be outside the loaded sidebar window. Its selected
+  // detail remains the authoritative metadata until that window loads.
+  const threadSession = threadId
+    ? chatRowsById[threadId]
+      || (activeBackendChat?.thread_id === threadId ? activeBackendChat : null)
+    : null;
   const chatTitle = threadSession?.title || derivedChatTitle;
   const [selectedBackendChatId, setSelectedBackendChatId] = useState(() => urlThreadId || null);
   // Thread-scoped header actions (AI Rename, Open in Quick Chat) target only the
@@ -1357,10 +1360,7 @@ function ConversationPage() {
     && (sidebarFilter !== 'error' || (item.erroredInBackground && !item.archived))
   )), [sessionItems, sidebarFilter]);
   const virtualSidebarList = useMemo(() => {
-    if (
-      localSidebarItems.length > 0
-      || !sameSidebarView(backendChatSessionsState.view, sidebarView)
-    ) {
+    if (!sameSidebarView(backendChatSessionsState.view, sidebarView)) {
       return null;
     }
     const groupTitles = {
@@ -1371,22 +1371,28 @@ function ConversationPage() {
       'last-week': 'Last Week',
       later: 'Later',
     };
-    const groups = sidebarFilter === 'archived'
+    const backendGroups = sidebarFilter === 'archived'
       ? [{ key: 'archived', title: 'Archived', count: backendChatSessionsState.total }]
       : sidebarView.sort === 'recent'
         ? backendChatSessionsState.groups.map((group) => ({
           ...group,
           title: groupTitles[group.key] ?? group.key,
         }))
-        : [];
+        : [{ key: 'backend', title: null, count: backendChatSessionsState.total }];
+    const localCount = localSidebarItems.length;
     return {
-      total: backendChatSessionsState.total,
+      total: localCount + backendChatSessionsState.total,
       rowHeight: 51,
       headerHeight: 27,
-      groups,
+      groups: [
+        ...(localCount ? [{ key: 'local', title: 'Local', count: localCount }] : []),
+        ...backendGroups,
+      ],
       rowAt: (index) => {
-        const threadId = backendChatSessionsState.rowsByIndex[index];
-        const row = threadId ? chatRowsById[threadId] : null;
+        if (index < localCount) return localSidebarItems[index];
+        const backendIndex = index - localCount;
+        const rowThreadId = backendChatSessionsState.rowsByIndex[backendIndex];
+        const row = rowThreadId ? chatRowsById[rowThreadId] : null;
         return row ? buildBackendSessionItem(
           row,
           selectedBackendChatId || threadSession?.thread_id || null,
@@ -1397,9 +1403,17 @@ function ConversationPage() {
           isGenerating,
         ) : undefined;
       },
-      onRangeNeeded: requestSidebarRange,
+      onRangeNeeded: (start, end, force) => {
+        if (end <= localCount) return;
+        requestSidebarRange(Math.max(0, start - localCount), end - localCount, force);
+      },
       refreshKey: streamReady,
-      rowDelta: backendChatSessionsState.rowDelta,
+      rowDelta: backendChatSessionsState.rowDelta
+        ? {
+          ...backendChatSessionsState.rowDelta,
+          index: backendChatSessionsState.rowDelta.index + localCount,
+        }
+        : null,
     };
   }, [
     backendChatSessionsState.groups,
@@ -1412,7 +1426,7 @@ function ConversationPage() {
     backgroundGeneratingChatIds,
     chatRowsById,
     isGenerating,
-    localSidebarItems.length,
+    localSidebarItems,
     requestSidebarRange,
     selectedBackendChatId,
     sidebarFilter,

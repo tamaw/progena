@@ -154,13 +154,17 @@ This is bounded best-effort replay, not durable catch-up:
   `connection.ready` changed, the server restarted and the accepted requests died with it, so
   they fail with "The server restarted before this request finished". A reply the server has no
   record of (`unknown`) is still being worked on and arrives live; a reply too large to keep
-  (`lost`) fails at once. Anything still pending 60 s after a disconnect, or 60 s after an
-  `unknown` answer, fails. An explicit stop (the idle pause) fails all pending requests.
-- **Resync on every `connection.ready`** (`realtime/streamLifecycle.js`): topics a page holds are
-  registered again (`realtime/streamTopics.js`, reference counted, released 200 ms after the last
-  holder leaves so a quick remount sends nothing), and pages re-request state they derived from
-  events they may have missed with `useStreamResync` (the open Inbox message, the open Chat, the
-  other loaded list pages). Mount-time loading stays in each page's own effect.
+  (`lost`) fails at once. Each carried operation retains its 60 s deadline while `/resolve` is
+  in flight (which is aborted at that deadline) and while awaiting its 202 acknowledgement. An
+  explicit stop (the idle pause) fails all pending requests.
+- **Resync on every `connection.ready`** (`realtime/streamLifecycle.js`): the frontend first
+  waits for `realtime/streamTopics.js` to register every held topic, then exposes stream
+  readiness and runs resync handlers. A newly held topic uses the same readiness gate, so its
+  mount-time snapshot request cannot race its topic PUT. Holds are reference counted and released
+  200 ms after the last holder leaves so a quick remount sends nothing; failed registration stays
+  unsatisfied and retries while held. Pages then re-request state they derived from missed events
+  with `useStreamResync` (the open Inbox message, the open Chat, and other loaded list pages).
+  Mount-time loading stays in each page's own effect.
 - **Idle pause:** after `idleTimeoutMinutes` (30 by default) without input the shell stops the
   stream and shows "Updates paused"; input does not dismiss it. Pressing Resume opens a fresh
   stream, and the next `connection.ready` runs the same resync as any reconnect: held topics are
@@ -175,12 +179,13 @@ no `GET /api/ui/events` stream and no `/api/ui/status` stream.
 
 `POST /api/ui/stream/resolve` takes `{ client_id, request_ids: [≤64 ids] }` and answers
 `{ boot_id, replayed, unknown, lost }` (`409` without an active stream for that `client_id`).
-The server keeps the envelopes of request-correlated events for 120 s, bounded to 8 MB in total
-and 512 KB per envelope (larger ones are noted as too large, not kept). For each id with a
-recorded reply addressed to that tab (or to no single tab), the envelopes are queued onto that
-tab's current stream with their original ids; the id is in `replayed`. Ids with no record are in
-`unknown`, ids whose reply was too large to keep in `lost`. Nothing is consumed, so a tab that
-drops again can ask again, and a reply recorded for another tab is never replayed.
+The server keeps the envelopes of request-correlated events for 120 s, bounded to 8 MB in total,
+512 KB per UTF-8 envelope, and eight envelopes per request. An oversized or over-count outcome is
+reported in `lost`; it is never replayed as a partial prefix. Each retained envelope keeps its
+original audience, so resolve queues it only for its target `client_id`, for a caller that
+currently watches its topic and is not excluded, or, for a global event, for any caller. Ids with
+no eligible record are in `unknown`.
+Nothing is consumed, so a tab that drops again can ask again.
 
 
 ## Dedicated chat response SSE
@@ -608,7 +613,6 @@ responses never are.
 | Generation | `POST /api/ui/responses`; `GET /api/ui/responses/{request_id}/stream`; `PUT /api/ui/responses/{generation_id}/cancel` | Canonical lifecycle envelopes: `chat.response.started`, transition-only `chat.response.activity`, `chat.response.completed`, `chat.response.failed`, `chat.response.cancelled`; dedicated response frames: `chat.response.delta`, `chat.response.event`; dedicated transport-only frames: `chat.response.heartbeat`, `chat.response.resync_required`; cancel acknowledgement declares `chat.response.cancel_requested` |
 | Agent profiles | `GET /api/ui/agent-profiles`; `GET /api/ui/agent-profiles/{agent_id}`; `PATCH /api/ui/agent-profiles/{agent_id}/graph` | Canonical `ui.event` envelopes: `agents.snapshot`, request-correlated `agent.selected` (the only event a detail read publishes; it also refreshes the roster entry), `agent.graph.updated` |
 | Inbox | `GET /api/ui/inbox?client_id=&q=&filter=all\|unread\|pending\|archived&sort=recent\|name&offset=&limit=`; `GET /api/ui/inbox/{message_id}?client_id=`; `GET /api/ui/inbox/counts?client_id=`; `PUT /api/ui/inbox/subscription`; mutations at `/api/ui/inbox/{message_id}` | A list request (limit 0–200, default 50; active `client_id` required) emits targeted `inbox.list.loaded` `{view,offset,rows,total}`. Rows are SQL-paged metadata plus a 200-character first-line preview; they never contain a body, while search matches title and body. `inbox.message.upserted` (slim) and `inbox.message.deleted` go only to tabs on the `inbox` topic (joined by any list or detail read, left with `PUT /inbox/subscription {client_id,message_id:null,watching:false}`, dropped when the stream closes); `inbox.counts.updated` is the global tiny unread count for the nav badge. Detail reads emit targeted `inbox.message.selected {message}` and replace that tab's selected-message interest. `inbox.message.updated {message}` is delivered only to selected interested tabs and never replayed. `PUT /inbox/subscription {client_id,message_id:null}` releases the selection; a non-null ID renews it and emits fresh targeted `inbox.message.selected` after reconnect. |
-| Knowledge | `GET/PUT /api/ui/knowledge`; `POST /api/ui/knowledge/{base_id}/sources/{source_id}/index`; `GET /api/ui/knowledge/{base_id}/search` | Canonical `ui.event` envelopes: `knowledge.snapshot`, request-scoped `knowledge.search.results` |
 | Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs`; `GET /api/ui/document-types`; `GET /api/ui/workflows/cron-preview?expression=&timezone=&count=` (synchronous: `{"next_runs": [...]}`, `400` with the validation message) | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow_runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed`, `document_types.snapshot` (registry with each type's document schema and derived event/read/query port schemas). Runs start from the durable `document_events` log (see `src/backend/events/documents.py`) or from `cron` trigger nodes fired by the backend clock (`src/backend/workflows/cron.py`, last handled due time per node in `backend.state` `workflow_cron:<workflow>:<node>`), never inline from routes. |
 | Runs | `GET /api/ui/runs?kind=&status=&q=&period=&sort=&cursor=`; `GET /api/ui/runs/{kind}/{run_id}/trace?client_id=`; `PUT /api/ui/runs/subscription` | Request-correlated `runs.snapshot` (`runs`, opaque `next_cursor`), client-targeted `run.trace.loaded` / `run.trace.updated`, and `run.updated` / `run.deleted` to tabs on the `runs` topic. `sort` is `newest`, `oldest`, `duration` (longest first), or `shortest`; each opaque cursor is bound to its complete query, including sort, and cannot be reused after a sort/filter change. `RunRow` has `kind`, `run_id`, `name`, `trigger`, `status`, times, nullable recorded `tokens`, and compact `overview` spans. |
 | Search | `GET /api/ui/search` | Request-scoped `search.results` (sections: Inbox, Tasks, Agents, Routines, Workflows, Prompts, Knowledge, Tools, Schedules) |
@@ -623,11 +627,17 @@ responses never are.
 | Logs | `GET /api/ui/logs?client_id=<stream client>` (requires that active canonical stream, else `409`; `limit` defaults to 500, `0` returns every match); `GET /api/ui/logs/sources`; `GET /api/ui/logs/export` | Canonical `ui.event` envelopes: `logs.page.loaded` (targeted to the requesting `client_id` only, never replayed), `logs.sources.loaded`, `logs.export.started`, `logs.export.chunk`, `logs.export.completed` |
 | Channels | `GET /api/ui/channels`; `PATCH /api/ui/channels/{channel_id}`; `POST /api/ui/channels/{channel_id}/test`; `POST /api/ui/channels/{channel_id}/reconnect` | Canonical `ui.event` envelopes: `channels.snapshot` (each `channel:<id>` document merged with live connection status, per-process message counts, the type's settings `fields` and credential descriptors; never secret values or ciphertext; also published unsolicited when a channel document or connection state changes), request-scoped `channel.tested` (`{channel_id, ok, error?}`). PATCH accepts only `enabled`, a partial `settings` object (unknown or invalid keys are `422`) and `credentials` (`{source:"environment", env_var}`, `{source:"database", value}` encrypted with `PROGENA_PROVIDER_ENCRYPTION_KEY`, or `null` to clear). Reconnect of a turned-off channel is `409`. |
 
+All finite routes in these families require a nonempty `client_id` for an active
+canonical stream and return `409` before work when it is absent or disconnected.
+Finite replies are targeted only to that client; separate live changes fan out on
+their documented topic. Chat list row changes reach tabs watching the `chats`
+topic, not every open tab.
+
 ### Runs subscriptions
 
-Runs list snapshots are global, replayable state; a late correlated snapshot
-must not overwrite a newer row update. `kind`, `status`, case-insensitive `q`,
-and optional `period=hour|day|week|month` filters apply before one global order
+Runs list snapshots are targeted to the requesting active-stream `client_id` and
+are never globally replayed; a late correlated snapshot must not overwrite a
+newer row update.
 across workflow, routine, and schedule runs. `sort=newest` is the default and
 orders by descending `(started_at, kind, run_id)`; `sort=oldest` reverses that
 order. `sort=duration` orders longest elapsed runs first with the newest

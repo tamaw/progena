@@ -406,6 +406,7 @@ export default function ChannelsPage() {
   const { getApiUrl } = useConfig();
   const channelsUrl = getApiUrl('channels');
   useStreamTopic('channels');
+  useStreamTopic('chats');
   const connected = useSelector(selectRealtimeStreamReady);
   const channels = useSelector(selectChannels);
   const channelState = useSelector(selectChannelsState);
@@ -435,11 +436,11 @@ export default function ChannelsPage() {
         chatsUrl: getApiUrl('chats'),
         view: { q: '', sort: 'recent', filter: 'all' },
         source,
-        limit: 200,
+        limit: 0,
         lookup: true,
       }));
     }
-  }, [connected, dispatch, getApiUrl, sessionSourcesKey]);
+  }, [connected, dispatch, getApiUrl, sessionSourcesKey, chatSourceTotals]);
 
   return (
     <PageShell>

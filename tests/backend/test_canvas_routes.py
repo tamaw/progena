@@ -34,10 +34,12 @@ def document_store():
 
 
 @pytest.fixture
-def client():
+def client(ui_stream_client):
+    from conftest import UiStreamTestClient
+
     from src.backend.main import app
 
-    return TestClient(app)
+    return UiStreamTestClient(TestClient(app), ui_stream_client)
 
 
 def _seed_types(store: InMemoryDocumentStore) -> None:

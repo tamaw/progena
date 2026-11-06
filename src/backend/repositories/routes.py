@@ -55,10 +55,11 @@ class RepoUpdateRequest(BaseModel):
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_repos(
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Acknowledge a read and publish the repositories snapshot on the UI stream."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     broadcast_repositories_snapshot(request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
@@ -70,10 +71,11 @@ async def get_repos(
 async def create_repo_entry(
     body: RepoCreateRequest,
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Declare a new repository."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     try:
         await asyncio.to_thread(
@@ -98,10 +100,11 @@ async def patch_repo_entry(
     repo_id: str,
     body: RepoUpdateRequest,
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Patch one declared repo entry's mutable fields."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     updates: dict[str, Any] = body.model_dump(exclude_unset=True)
     if "access" in updates and updates["access"] not in {"read", "write"}:
@@ -129,10 +132,11 @@ async def patch_repo_entry(
 async def delete_repo_entry(
     repo_id: str,
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Remove one declared repo entry."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     existed = await asyncio.to_thread(delete_repo, repo_id)
     if not existed:
@@ -149,10 +153,11 @@ async def delete_repo_entry(
 async def get_repo_detail(
     repo_id: str,
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Acknowledge a detail read and publish it on the UI stream."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     try:
         broadcast_repo_detail(repo_id, request_id=request_id, client_id=client_id)
@@ -169,7 +174,7 @@ async def get_repo_detail(
 async def fetch_repo_entry(
     repo_id: str,
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Run ``git fetch`` against one declared repo and broadcast the refreshed scan.
@@ -178,6 +183,7 @@ async def fetch_repo_entry(
     upstream without merging anything. Distinct from the heartbeat's
     periodic local-only scan (see ``repo_service.fetch_and_rescan_repo``).
     """
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     try:
         await fetch_and_rescan_repo(repo_id)

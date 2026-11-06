@@ -14,6 +14,7 @@ from pydantic import BaseModel
 import src.backend.events.contracts as events_contracts
 import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
+from src.backend.events.stream import require_ui_stream_client as _require_stream
 from src.backend.http.requests import request_correlation_id as _request_correlation_id
 from src.backend.instructions import service as instruction_service
 
@@ -23,13 +24,6 @@ _REQUEST_ID_HEADER = Header(default=None, alias="X-Operation-Id")
 _PATH_QUERY = Query(..., description="Instruction path, e.g. progena/genesis.md")
 
 INSTRUCTIONS_TOPIC = "instructions"
-
-
-def _require_stream(client_id: str) -> None:
-    if client_id not in events_stream._ui_stream_clients.values():
-        raise HTTPException(
-            status_code=409, detail="Instruction requests require an active UI stream"
-        )
 
 
 class InstructionUpdateRequest(BaseModel):

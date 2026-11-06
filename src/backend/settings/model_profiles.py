@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 import src.backend.http.contracts as http_contracts
 from src.backend.events import contracts as events_contracts
+from src.backend.events.stream import require_ui_stream_client
 from src.backend.http.requests import BroadcastUiEvent, request_correlation_id
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
 from src.progena.settings.model_profiles import (
@@ -191,8 +192,9 @@ def create_model_profile_router(
     )
     async def list_model_profiles(
         request: Request,
-        client_id: str | None = Query(default=None, min_length=1, max_length=64),
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         store = get_store()
         repository: ProviderRepository | None = None

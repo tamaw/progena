@@ -3,7 +3,8 @@ import { useDispatch } from 'react-redux';
 import { useConfig } from '../context/ConfigContext';
 import { subscribeUiEvent } from '../realtime/realtimeEvents';
 import { startRealtimeStream, stopRealtimeStream } from '../realtime/realtimeListener';
-import { createOperationRequestId, requestAcknowledged, subscribeSessionExpiry } from '../store/http';
+import { createOperationRequestId, requestAcknowledged, subscribeSessionExpiry, withQuery } from '../store/http';
+import { realtimeClientId } from '../realtime/realtimeClient';
 import useIdleTimeout from '../hooks/useIdleTimeout';
 import Modal from '../components/Modal';
 
@@ -37,7 +38,9 @@ export default function ConnectionRecoveryModal() {
   const retrySignIn = useCallback(async () => {
     setChecking(true);
     try {
-      await requestAcknowledged(preferencesUrl, { requestId: createOperationRequestId() });
+      await requestAcknowledged(withQuery(preferencesUrl, { client_id: realtimeClientId }), {
+        requestId: createOperationRequestId(),
+      });
       dispatch(startRealtimeStream({ streamUrl, force: true }));
     } catch {
       // Still rejected or offline; the dialog stays open and reports it.

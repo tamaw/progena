@@ -1,6 +1,6 @@
 import { createSelector } from '@reduxjs/toolkit';
 import { UI_EVENT } from '../../realtime/eventVocabulary';
-import { createAcknowledgedThunk, requestAcknowledged } from '../../store/async';
+import { addStreamFailureLifecycle, createAcknowledgedThunk, requestAcknowledged } from '../../store/async';
 import { withQuery } from '../../store/http';
 import { failureMessage } from '../../lib/failures';
 import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
@@ -8,7 +8,12 @@ import { createPositionalListOps } from '../../lib/positionalListCache';
 
 export const INBOX_LIST_PAGE_SIZE = 50;
 
-const { indexOfRow, invalidatePagesFrom, removeRowAt } = createPositionalListOps(INBOX_LIST_PAGE_SIZE);
+const {
+  indexOfRow,
+  invalidatePagesFrom,
+  removeRowAt,
+  settleInFlightRequest,
+} = createPositionalListOps(INBOX_LIST_PAGE_SIZE);
 
 const emptyActive = () => ({
   messageId: null,
@@ -34,7 +39,13 @@ export const initialState = {
     loading: false,
     error: null,
     active: emptyActive(),
-    counts: { unread: null, loading: false, error: null, requestId: null },
+    counts: {
+      unread: null,
+      pendingApprovals: null,
+      loading: false,
+      error: null,
+      requestId: null,
+    },
   },
 };
 
@@ -277,6 +288,10 @@ export const eventHandlers = {
   [UI_EVENT.INBOX_COUNTS_UPDATED]: (state, payload) => {
     if (!Number.isInteger(payload?.unread) || payload.unread < 0) return;
     state.inbox.counts.unread = payload.unread;
+    state.inbox.counts.pendingApprovals = Number.isInteger(payload?.pending_approvals)
+      && payload.pending_approvals >= 0
+      ? payload.pending_approvals
+      : null;
     state.inbox.counts.loading = false;
     state.inbox.counts.error = null;
     state.inbox.counts.requestId = null;
@@ -336,6 +351,9 @@ export function buildExtraReducers(builder) {
       state.inbox.counts.error = failureMessage(action.error?.message ? action.error : 'Failed to load inbox counts').message;
       state.inbox.counts.requestId = null;
     });
+  addStreamFailureLifecycle(builder, (state, requestId) => {
+    settleInFlightRequest(state.inbox, requestId);
+  });
 }
 
 export const selectInboxState = (state) => state.uiData.inbox;
@@ -347,3 +365,4 @@ export const selectInboxMessages = createSelector(
     .filter(Boolean),
 );
 export const selectInboxUnreadCount = (state) => state.uiData.inbox.counts.unread;
+export const selectInboxPendingApprovals = (state) => state.uiData.inbox.counts.pendingApprovals;

@@ -73,7 +73,6 @@ def _broadcast_mcp_server_detail(
         response.model_dump(mode="json"),
         request_id=request_id,
         client_id=client_id,
-        topic=None if client_id else "mcp",
     )
     return True
 
@@ -81,7 +80,7 @@ def _broadcast_mcp_server_detail(
 @router.get("/mcp", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_mcp_servers(
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Acknowledge MCP-list requests and publish the snapshot on the UI stream.
@@ -90,6 +89,7 @@ async def get_mcp_servers(
     feeds a dedicated store slice, so the Tools page renders from the realtime
     store instead of filtering the generic widget list.
     """
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     items = _mcp_widget_items()
     broadcast_mcp_snapshot(items, request_id=request_id, client_id=client_id)
@@ -102,7 +102,7 @@ async def get_mcp_servers(
 async def get_mcp_server_detail(
     id: str,
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Acknowledge a request for one MCP server's full detail and publish it.
@@ -111,6 +111,7 @@ async def get_mcp_server_detail(
     (``mcp.snapshot``) omits per-tool schemas; the selected server's full body
     (including tools) is fetched on demand here.
     """
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     if not _broadcast_mcp_server_detail(id, request_id=request_id, client_id=client_id):
         raise HTTPException(status_code=404, detail=f"MCP server '{id}' not found")
@@ -141,5 +142,4 @@ def broadcast_mcp_snapshot(
         {"items": payload},
         request_id=request_id,
         client_id=client_id,
-        topic=None if client_id else "mcp",
     )

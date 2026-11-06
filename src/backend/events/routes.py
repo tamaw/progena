@@ -85,6 +85,9 @@ async def _generate_ui_stream(
     current_task = asyncio.current_task()
     events_stream._ui_stream_subscribers[queue] = current_task
     client_id = client_id or uuid.uuid4().hex
+    # A replacement connection owns a fresh interest set. Its predecessor's
+    # cleanup sees this connection and therefore cannot remove these topics.
+    events_stream.clear_topics(client_id)
     events_stream._ui_stream_clients[queue] = client_id
     workflows_events.routine_events.connections.add(client_id)
     if current_task:

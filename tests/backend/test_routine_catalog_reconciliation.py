@@ -84,13 +84,12 @@ class Catalog:
 def test_deleted_event_is_accepted_by_canonical_transport(monkeypatch):
     queue = asyncio.Queue()
     monkeypatch.setattr(events_stream, "_ui_stream_subscribers", {queue: None})
-    monkeypatch.setattr(events_stream, "_ui_event_replay", [])
+    monkeypatch.setattr(events_stream, "_ui_stream_clients", {queue: "tab"})
     envelope = events_stream.broadcast_ui_event(
-        "agent.deleted", {"agent_id": "gone"}, request_id="delete-request"
+        "agent.deleted", {"agent_id": "gone"}, request_id="delete-request", client_id="tab"
     )
     assert envelope.type == "agent.deleted"
     assert envelope.payload == {"agent_id": "gone", "request_id": "delete-request"}
-    assert events_stream._ui_event_replay == [envelope]
     assert queue.get_nowait() == {"type": "ui.event", "envelope": envelope}
 
 

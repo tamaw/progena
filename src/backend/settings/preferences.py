@@ -29,10 +29,11 @@ router = APIRouter(prefix="/api/ui/preferences", tags=["preferences"])
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_preferences(
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Acknowledge a read; the snapshot goes to the asking tab, not every tab."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     # load_preferences() does blocking document-store I/O (see save_preferences
     # below, which is threaded for the same reason) - broadcast_preferences_snapshot

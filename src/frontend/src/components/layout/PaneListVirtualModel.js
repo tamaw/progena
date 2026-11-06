@@ -42,3 +42,13 @@ export function findVirtualPaneRange(layout, scrollTop, viewportHeight, overscan
   }
   return start == null ? { start: 0, end: 0 } : { start, end };
 }
+
+/** A positional change above the viewport preserves its visual anchor once. */
+export function shouldCompensateVirtualScroll({ rowDelta, lastSequence, scrollTop, rangeStart }) {
+  return Boolean(
+    rowDelta
+    && rowDelta.sequence !== lastSequence
+    && scrollTop > 0
+    && rowDelta.index < rangeStart
+  );
+}

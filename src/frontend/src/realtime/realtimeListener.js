@@ -14,11 +14,14 @@ import { applyUiEvent } from '../store/uiEvents';
 import { publishUiEvent } from './realtimeEvents';
 import { realtimeClientId, setRealtimeClientReady } from './realtimeClient';
 import { notifyStreamReady } from './streamLifecycle';
+import { registerHeldTopics } from './streamTopics';
 import {
   cancelRecovery,
+  consumeStaleAcknowledgement,
   forgetRequest,
   holdPendingForRecovery,
   noteAcknowledged,
+  noteRequestStarted,
   recoverOnReady,
 } from './requestRecovery';
 import { withQuery } from '../store/http';
@@ -39,9 +42,6 @@ let activeStreamUrl = null;
 const HEARTBEAT_STALE_MS = 45000;
 const WATCHDOG_POLL_MS = 15000;
 
-function isUiDataThunkLifecycle(action) {
-  return action.type.startsWith('uiData/');
-}
 
 function requestIdFor(action) {
   return action.meta?.requestId || action.meta?.arg?.requestId || null;
@@ -203,7 +203,7 @@ realtimeListenerMiddleware.startListening({
       }
     };
 
-    source.addEventListener(UI_SSE_EVENT, (messageEvent) => {
+    source.addEventListener(UI_SSE_EVENT, async (messageEvent) => {
       if (eventSource !== source) return;
       lastEventAt = Date.now();
       try {
@@ -217,16 +217,23 @@ realtimeListenerMiddleware.startListening({
         if (realtime.receivedIds.includes(event.id)) {
           return;
         }
-        // `connection.ready` is emitted from inside the stream generator, so
-        // by the time it lands the backend has our subscriber queue and a
-        // broadcast can no longer be published into the void.
+        // The server's new connection has no topic interests. Register every
+        // hold before stream readiness permits finite snapshots or resync.
         if (event.type === UI_EVENT.CONNECTION_READY) {
           connectedAt = Date.now();
+          setRealtimeClientReady(false);
+          const topicsReady = registerHeldTopics({ dispatch: listenerApi.dispatch, streamUrl });
+          if (topicsReady) await topicsReady;
+          if (eventSource !== source) return;
           setRealtimeClientReady(true);
           listenerApi.dispatch(realtimeStreamReady());
         }
         listenerApi.dispatch(applyUiEvent(event));
         listenerApi.dispatch(uiEventReceived(event));
+        const settledRequestId = event.payload?.request_id;
+        if (settledRequestId && !listenerApi.getState().realtime.pendingOps?.[settledRequestId]) {
+          forgetRequest(settledRequestId);
+        }
         publishUiEvent(event);
         if (event.type === UI_EVENT.CONNECTION_READY) {
           notifyStreamReady({ dispatch: listenerApi.dispatch, streamUrl });
@@ -261,12 +268,13 @@ realtimeListenerMiddleware.startListening({
 // Rejected operations fail immediately; fulfilled acknowledgements register the
 // event types that are allowed to resolve the pending request.
 realtimeListenerMiddleware.startListening({
-  matcher: (action) => isUiDataThunkLifecycle(action)
+  matcher: (action) => (action.type.startsWith('uiData/') || action.type.startsWith('realtime/'))
     && (isPending(action) || isRejected(action) || isFulfilled(action)),
   effect: (action, listenerApi) => {
     const requestId = requestIdFor(action);
     if (isPending(action)) {
       if (requestId) {
+        noteRequestStarted(requestId);
         listenerApi.dispatch(registerPendingOp({ requestId }));
       }
       return;
@@ -281,6 +289,13 @@ realtimeListenerMiddleware.startListening({
 
     const acknowledgement = acknowledgementFor(action);
     if (!acknowledgement) {
+      return;
+    }
+    if (consumeStaleAcknowledgement(acknowledgement.request_id)) {
+      listenerApi.dispatch(failPendingOp({
+        requestId: acknowledgement.request_id,
+        error: 'The server restarted before this request finished. Check its result, then try again.',
+      }));
       return;
     }
     if (requestId && requestId !== acknowledgement.request_id) {

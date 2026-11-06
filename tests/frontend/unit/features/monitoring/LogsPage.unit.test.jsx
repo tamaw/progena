@@ -58,6 +58,11 @@ async function renderLogs(url) {
   return api.getLogs.mock.calls.at(-1)[0];
 }
 
+it('sends the selected level to the backend query', async () => {
+  const query = await renderLogs('/logs?level=error');
+  expect(query.level).toBe('error');
+});
+
 it.each([[2026, 10, 4], [2026, 4, 5], [2028, 2, 29], [2026, 12, 31]])(
   'queries the whole browser-local day %i-%i-%i, including DST boundaries',
   async (year, month, day) => {

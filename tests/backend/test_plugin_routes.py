@@ -18,8 +18,10 @@ from src.backend.storage.documents import (
 
 
 @pytest.fixture
-def client():
-    return TestClient(app)
+def client(ui_stream_client):
+    from conftest import UiStreamTestClient
+
+    return UiStreamTestClient(TestClient(app), ui_stream_client)
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +37,16 @@ def document_store():
     set_default_document_store(store)
     yield store
     set_default_document_store(InMemoryDocumentStore())
+
+
+def test_plugin_mutation_requires_a_live_stream_before_persisting(document_store, client):
+    response = client._client.post(
+        "/api/ui/plugins?client_id=ghost",
+        json={"marketplace": "acme", "plugin": "formatter"},
+    )
+
+    assert response.status_code == 409
+    assert document_store.get_document(PROGENA_STATE_PREFIX, "plugins") is None
 
 
 class _StreamCapture:

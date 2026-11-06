@@ -6,6 +6,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 
 from src.backend.events import contracts as events_contracts
 from src.backend.events import stream
+from src.backend.events.stream import require_ui_stream_client as _require_stream
 from src.backend.http import contracts as http_contracts
 from src.backend.http.requests import request_correlation_id
 from src.backend.storage.documents import get_default_document_store
@@ -15,11 +16,6 @@ from .models import RunKind, RunPeriod, RunSort, RunsSubscription
 from .service import list_runs
 
 router = APIRouter(tags=["runs"])
-
-
-def _require_stream(client_id: str) -> None:
-    if client_id not in stream._ui_stream_clients.values():
-        raise HTTPException(status_code=409, detail="An active UI stream is required")
 
 
 @router.get("/runs", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)

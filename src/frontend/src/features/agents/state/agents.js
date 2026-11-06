@@ -116,6 +116,9 @@ export const deleteAgentProfile = createAcknowledgedThunk('uiData/deleteAgentPro
 export const updateObjectAgentProfile = createAcknowledgedThunk('uiData/updateObjectAgentProfile', ({ agentsUrl, agentId, manifest }, { requestId }) => targeted(
   `${agentsUrl}/object/${encodeURIComponent(agentId)}`, { method: 'PATCH', requestId, body: manifest },
 ));
+export const createObjectAgentProfile = createAcknowledgedThunk('uiData/createObjectAgentProfile', ({ agentsUrl, manifest }, { requestId }) => targeted(
+  `${agentsUrl}/object`, { method: 'POST', requestId, body: manifest },
+));
 export const fetchAgentSkillContent = createAcknowledgedThunk('uiData/fetchAgentSkillContent', ({ agentsUrl, skillPath }, { requestId }) => targeted(
   `${agentsUrl}/skills?path=${encodeURIComponent(skillPath)}`, { requestId },
 ));

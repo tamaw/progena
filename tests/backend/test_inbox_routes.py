@@ -98,6 +98,25 @@ class _StreamCapture:
         return events
 
 
+def test_publish_counts_includes_server_pending_approval_count(document_store):
+    document_store.save_document(
+        PROGENA_STATE_PREFIX,
+        "inbox_message:approval",
+        _message_payload(
+            "approval",
+            title="Approval",
+            created_at="2026-07-06T00:00:00+00:00",
+            approval=True,
+        ),
+    )
+    events: list[dict] = []
+    inbox_routes._publish_counts(
+        document_store,
+        lambda _event_type, payload, **_kwargs: events.append(payload),
+    )
+    assert events == [{"unread": 1, "pending_approvals": 1}]
+
+
 class TestInboxRoutes:
     def test_list_is_targeted_paged_and_never_includes_bodies(self, client, seeded_store):
         with _StreamCapture("tab-a", "tab-b") as capture:

@@ -17,6 +17,7 @@ from src.backend.channels.base import ChannelError
 from src.backend.channels.manager import ChannelManager
 from src.backend.channels.store import load_channels, update_channel
 from src.backend.events.contracts import UiEvent
+from src.backend.events.stream import require_ui_stream_client
 from src.backend.http.requests import BroadcastUiEvent, request_correlation_id
 from src.backend.storage.documents import BackendDocumentStore
 
@@ -48,8 +49,9 @@ def create_channels_router(
     )
     async def list_channels(
         request: Request,
-        client_id: str | None = Query(default=None, min_length=1, max_length=64),
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         await _publish_snapshot(request_id, client_id)
         return http_contracts.acknowledgement_response(request_id, [UiEvent.CHANNELS_SNAPSHOT])
@@ -63,8 +65,9 @@ def create_channels_router(
         channel_id: str,
         request: Request,
         body: Any = Body(...),
-        client_id: str | None = Query(default=None, min_length=1, max_length=64),
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         try:
             await asyncio.to_thread(update_channel, get_store(), channel_id, body)
@@ -88,8 +91,9 @@ def create_channels_router(
     async def test_channel(
         channel_id: str,
         request: Request,
-        client_id: str | None = Query(default=None, min_length=1, max_length=64),
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         document = await _stored_document(channel_id)
         payload: dict[str, Any] = {"channel_id": channel_id, "ok": True}
@@ -108,8 +112,9 @@ def create_channels_router(
     async def reconnect_channel(
         channel_id: str,
         request: Request,
-        client_id: str | None = Query(default=None, min_length=1, max_length=64),
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         document = await _stored_document(channel_id)
         if document is not None and not document["enabled"]:

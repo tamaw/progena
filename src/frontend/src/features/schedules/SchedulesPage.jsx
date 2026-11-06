@@ -281,7 +281,7 @@ function destinationLabel(schedule, chatsById, lookupResults) {
   return lookupResults[conversationId] === false ? 'Chat deleted' : 'Loading chat…';
 }
 
-function ScheduleRow({ schedule, selected, onSelect, timeZone, chatsById }) {
+function ScheduleRow({ schedule, selected, onSelect, timeZone, chatsById, chatLookupResults }) {
   const status = statusOf(schedule);
   const presentation = statusPresentation(schedule);
   return (
@@ -298,7 +298,7 @@ function ScheduleRow({ schedule, selected, onSelect, timeZone, chatsById }) {
         {status === 'completed' ? 'completed' : schedule.paused ? 'paused' : formatRelative(schedule.next_run, timeZone)}
       </span>
       <span className="sess-row__title">
-        {[cadenceFor(schedule, timeZone), destinationLabel(schedule, chatsById)].filter(Boolean).join(' · ') || '—'}
+        {[cadenceFor(schedule, timeZone), destinationLabel(schedule, chatsById, chatLookupResults)].filter(Boolean).join(' · ') || '—'}
       </span>
     </button>
   );
@@ -819,6 +819,7 @@ function SchedulesPage() {
                 selected={selectedSchedule?.id === schedule.id}
                 timeZone={effectiveScheduleTimezone(schedule, preferenceTimezone)}
                 chatsById={chatsById}
+                chatLookupResults={chatLookupResults}
                 onSelect={() => navigate(buildEntityPath('/schedules', schedule.id, schedule.name), { replace: true })}
               />
             )}

@@ -26,7 +26,7 @@ import { fetchSchedules, selectSchedules, selectSchedulesState } from '../schedu
  * session (after `streamReady`) using the existing acknowledged-request
  * framework. Deduplicates StrictMode double-mounts and reconnect refetches.
  */
-import { selectInboxMessages, selectInboxUnreadCount, selectInboxState } from '../inbox/state';
+import { selectInboxUnreadCount, selectInboxState } from '../inbox/state';
 
 /**
  * Shared data hook for the redesigned DashboardPage.
@@ -80,6 +80,8 @@ export function useDashboardData() {
   const { getApiUrl } = useConfig();
 
   useStreamTopic('dashboard');
+  useStreamTopic('schedules');
+  useStreamTopic('workflows');
   const connected = useSelector(selectRealtimeConnected);
   const streamReady = useSelector(selectRealtimeStreamReady);
   const status = useSelector(selectUiStatus) ?? null;
@@ -88,12 +90,11 @@ export function useDashboardData() {
   const schedules = useSelector(selectSchedules) ?? [];
   const workflows = useSelector(selectWorkflows) ?? [];
   const runs = useSelector(selectWorkflowRuns) ?? [];
-  const inboxMessages = useSelector(selectInboxMessages) ?? [];
   const inboxUnreadCount = useSelector(selectInboxUnreadCount) ?? 0;
-
   const workflowsState = useSelector(selectWorkflowsState);
   const schedulesState = useSelector(selectSchedulesState);
   const inboxState = useSelector(selectInboxState);
+  const inboxPendingApprovalCount = inboxState?.counts?.pendingApprovals ?? 0;
 
   const widgetsUrl = getApiUrl('widgets');
   const schedulesUrl = getApiUrl('schedules');
@@ -154,8 +155,8 @@ export function useDashboardData() {
     schedules,
     workflows,
     runs,
-    inboxMessages,
     inboxUnreadCount,
+    inboxPendingApprovalCount,
     connected,
     streamReady,
     retryRuns: () => dispatch(fetchWorkflowRuns({ workflowRunsUrl })),
@@ -177,7 +178,7 @@ export function useDashboardData() {
         error: schedulesState?.error ?? null,
       },
       inbox: {
-        loaded: inboxState.counts.unread !== null,
+        loaded: inboxState.counts.unread !== null && inboxState.counts.pendingApprovals !== null,
         loading: inboxState.counts.loading,
         error: inboxState.counts.error,
       },

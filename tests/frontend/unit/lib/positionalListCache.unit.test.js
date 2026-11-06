@@ -67,4 +67,16 @@ describe('positional list cache', () => {
     expect(list.rowsByIndex).toEqual({ 0: 'a', 1: 'new', 2: 'b' });
     expect(list.rowDelta).toMatchObject({ index: 1, amount: 1 });
   });
+
+  it('settles a failed page request so a retry can issue it again', () => {
+    const list = cache([], {
+      inFlightRequests: { request: { offset: 10, rangeVersion: 0 } },
+      loading: true,
+    });
+
+    expect(ops.settleInFlightRequest(list, 'request')).toBe(true);
+    expect(list.inFlightRequests).toEqual({});
+    expect(list.loading).toBe(false);
+    expect(ops.settleInFlightRequest(list, 'unknown')).toBe(false);
+  });
 });

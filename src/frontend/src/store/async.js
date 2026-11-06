@@ -3,6 +3,7 @@ import { createOperationRequestId, requestAcknowledged } from './http';
 import { failPendingOp } from '../realtime/realtimeSlice';
 import { failureMessage, isCancellation } from '../lib/failures';
 
+const streamFailureLifecycles = new WeakMap();
 const keyedRequestLifecycles = new WeakMap();
 
 /** Build a finite UI request with one generated ID and its 202 acknowledgement. */
@@ -94,6 +95,14 @@ export function addKeyedRequestLifecycle(builder, thunk, {
   return builder;
 }
 
+/** Register non-keyed pending request cleanup for the shared stream failure case. */
+export function addStreamFailureLifecycle(builder, settle) {
+  const lifecycles = streamFailureLifecycles.get(builder) || [];
+  lifecycles.push(settle);
+  streamFailureLifecycles.set(builder, lifecycles);
+  return builder;
+}
+
 /**
  * Settle keyed loads whose stream operation failed (disconnect or stale stream):
  * their data event will never arrive, so leave a retryable failure instead of
@@ -101,8 +110,12 @@ export function addKeyedRequestLifecycle(builder, thunk, {
  */
 export function addKeyedStreamFailureLifecycle(builder) {
   const lifecycles = keyedRequestLifecycles.get(builder) || [];
+  const positionalLifecycles = streamFailureLifecycles.get(builder) || [];
   return builder.addCase(failPendingOp, (state, action) => {
     const { requestId, error } = action.payload;
+    for (const settle of positionalLifecycles) {
+      settle(state, requestId);
+    }
     for (const { selectRequests, errorMessage } of lifecycles) {
       for (const requestState of Object.values(selectRequests(state))) {
         // A rejected thunk has already settled with its own failure.

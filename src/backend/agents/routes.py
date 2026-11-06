@@ -20,7 +20,6 @@ import yaml
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
 import src.backend.lifecycle.state as lifecycle_state
 from src.backend.agents.store import (
@@ -29,6 +28,7 @@ from src.backend.agents.store import (
     acp_profiles_from_registry,
 )
 from src.backend.events import contracts as events_contracts
+from src.backend.events.stream import require_ui_stream_client as _require_stream
 from src.backend.http.requests import BroadcastUiEvent
 from src.backend.http.requests import request_correlation_id as _request_correlation_id
 from src.backend.integrations.runtime import RuntimeControlError
@@ -60,11 +60,6 @@ from src.progena.threads import routine_session_from_thread
 from src.progena.utils import utcnow_isoformat
 
 AGENTS_TOPIC = "agents"
-
-
-def _require_stream(client_id: str) -> None:
-    if client_id not in events_stream._ui_stream_clients.values():
-        raise HTTPException(status_code=409, detail="Agent requests require an active UI stream")
 
 
 class AgentGraphModel(BaseModel):

@@ -157,9 +157,8 @@ describe('recovering requests the stream dropped before they were answered', () 
     const second = await dropAndReconnect({ before: () => { accept('slow'); accept('never'); } });
 
     expect(pendingOps().slow).toBeDefined();
-    // A healthy stream: heartbeats keep the stale-stream watchdog quiet.
-    for (let elapsed = 0; elapsed < RECOVERY_DEADLINE_MS - 1000; elapsed += 15000) {
-      await vi.advanceTimersByTimeAsync(Math.min(15000, RECOVERY_DEADLINE_MS - 1000 - elapsed));
+    for (let elapsed = 0; elapsed < RECOVERY_DEADLINE_MS - 4000; elapsed += 15000) {
+      await vi.advanceTimersByTimeAsync(Math.min(15000, RECOVERY_DEADLINE_MS - 4000 - elapsed));
       second.emit('ui.event', envelope('connection.heartbeat'));
     }
     reply(second, 'slow');
@@ -168,7 +167,7 @@ describe('recovering requests the stream dropped before they were answered', () 
 
     await vi.advanceTimersByTimeAsync(1000);
     expect(pendingOps().never).toBeUndefined();
-    expect(store.getState().realtime.error).toMatch(/did not report/i);
+    expect(store.getState().realtime.error).toMatch(/connection lost/i);
   });
 
   it('asks for a request as soon as it is accepted when it was still being sent as the stream dropped', async () => {
@@ -202,6 +201,40 @@ describe('recovering requests the stream dropped before they were answered', () 
     expect(pendingOps().r1).toBeDefined();
     await vi.advanceTimersByTimeAsync(RECOVERY_DEADLINE_MS);
     expect(pendingOps().r1).toBeUndefined();
+  });
+
+  it('keeps an individual deadline while resolve is stalled', async () => {
+    globalThis.fetch.mockImplementation(() => new Promise(() => {}));
+    await dropAndReconnect({ before: () => accept('stalled') });
+
+    expect(pendingOps().stalled).toBeDefined();
+    await vi.advanceTimersByTimeAsync(RECOVERY_DEADLINE_MS);
+    expect(pendingOps().stalled).toBeUndefined();
+  });
+
+  it('rejects a delayed acknowledgement from the server boot that restarted', async () => {
+    store.dispatch(startRealtimeStream({ streamUrl: STREAM_URL }));
+    await Promise.resolve();
+    ready(lastSource(), 'boot-1');
+    store.dispatch({
+      type: 'uiData/anything/pending',
+      meta: { requestId: 'late', requestStatus: 'pending', arg: {} },
+    });
+    await Promise.resolve();
+    lastSource().readyState = 2;
+    lastSource().onerror();
+    await vi.advanceTimersByTimeAsync(3000);
+    ready(lastSource(), 'boot-2');
+    await vi.advanceTimersByTimeAsync(0);
+
+    store.dispatch({
+      type: 'uiData/anything/fulfilled',
+      payload: { request_id: 'late', event_types: [REPLY_TYPE] },
+      meta: { requestId: 'late', requestStatus: 'fulfilled', arg: {} },
+    });
+
+    expect(pendingOps().late).toBeUndefined();
+    expect(store.getState().realtime.error).toMatch(/server restarted/i);
   });
 
   it('gives up on a request when the stream never comes back', async () => {

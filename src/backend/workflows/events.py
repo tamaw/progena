@@ -379,6 +379,7 @@ class RoutineEvents:
                 events_contracts.UiEvent.AGENT_ROUTINE_LIFECYCLE_SNAPSHOT,
                 {"runs": runs},
                 client_id=client_id,
+                topic="routines" if client_id is None else None,
             )
 
     async def reconcile(self) -> None:

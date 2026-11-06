@@ -14,6 +14,7 @@ import src.backend.events.stream as events_stream
 import src.backend.storage.documents as storage_documents
 from src.backend.events import contracts as events_contracts
 from src.backend.events.documents import TypedDocumentEvent
+from src.backend.events.stream import require_ui_stream_client as _require_stream
 from src.backend.http import contracts as http_contracts
 from src.backend.http.requests import BroadcastUiEvent
 from src.backend.http.requests import request_correlation_id as _request_correlation_id
@@ -151,22 +152,23 @@ def _route_request_id(origin: str | None) -> str | None:
     return origin.removeprefix(_INBOX_ROUTE_ORIGIN_PREFIX) or None
 
 
-def _require_stream(client_id: str) -> None:
-    if client_id not in events_stream._ui_stream_clients.values():
-        raise HTTPException(status_code=409, detail="Inbox requests require an active UI stream")
-
-
 def _publish_counts(
     store: BackendDocumentStore,
     broadcast_ui_event: BroadcastUiEvent,
     *,
     unread: int | None = None,
+    pending_approvals: int | None = None,
     request_id: str | None = None,
     client_id: str | None = None,
 ) -> None:
     broadcast_ui_event(
         events_contracts.UiEvent.INBOX_COUNTS_UPDATED,
-        {"unread": store.inbox_unread_count() if unread is None else unread},
+        {
+            "unread": store.inbox_unread_count() if unread is None else unread,
+            "pending_approvals": store.inbox_pending_approval_count()
+            if pending_approvals is None
+            else pending_approvals,
+        },
         request_id=request_id,
         client_id=client_id,
     )

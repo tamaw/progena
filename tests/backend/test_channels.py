@@ -160,7 +160,7 @@ class Harness:
 
 
 @pytest.fixture
-def harness() -> Harness:
+def harness(ui_stream_client) -> Harness:
     return Harness()
 
 
@@ -536,8 +536,7 @@ def test_patch_persists_then_publishes(harness: Harness):
 )
 def test_patch_failures_publish_nothing(harness: Harness, path, body, status):
     seed_channels(harness.store)
-
-    response = _client(harness).patch(path, json=body)
+    response = _client(harness).patch(f"{path}?client_id=tab-1", json=body)
 
     assert response.status_code == status
     assert harness.events == []
@@ -564,8 +563,8 @@ def test_reconnect_requires_enabled_channel(harness: Harness):
     seed_channels(harness.store)
     client = _client(harness)
 
-    assert client.post("/api/ui/channels/fake/reconnect").status_code == 409
-    assert client.post("/api/ui/channels/missing/reconnect").status_code == 404
+    assert client.post("/api/ui/channels/fake/reconnect?client_id=tab-1").status_code == 409
+    assert client.post("/api/ui/channels/missing/reconnect?client_id=tab-1").status_code == 404
 
     update_channel(harness.store, "fake", {"enabled": True})
     response = client.post(

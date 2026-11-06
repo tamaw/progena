@@ -271,12 +271,14 @@ class TestSSEEventDelivery:
 
         chat_queue = asyncio.Queue()
         events_stream._ui_stream_subscribers[chat_queue] = None
+        events_stream._ui_stream_clients[chat_queue] = "chat-tab"
 
         try:
             events_stream.broadcast_ui_event(
                 "agent_message",
                 {"content": "Hello from agent"},
                 scope="chat",
+                client_id="chat-tab",
                 request_id="agent-message-request",
             )
 
@@ -291,6 +293,7 @@ class TestSSEEventDelivery:
             assert envelope.payload["request_id"] == "agent-message-request"
         finally:
             events_stream._ui_stream_subscribers.pop(chat_queue, None)
+            events_stream._ui_stream_clients.pop(chat_queue, None)
 
     def test_broadcast_status_event_functionality(self):
         """Test broadcast_ui_event delivers status-typed events to stream subscribers."""
@@ -299,12 +302,14 @@ class TestSSEEventDelivery:
 
         queue = asyncio.Queue()
         events_stream._ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_clients[queue] = "status-tab"
 
         try:
             events_stream.broadcast_ui_event(
                 "status.updated",
                 {"uptime": 100},
                 request_id="status-update-request",
+                client_id="status-tab",
             )
 
             assert not queue.empty()
@@ -316,6 +321,7 @@ class TestSSEEventDelivery:
             assert envelope.payload["request_id"] == "status-update-request"
         finally:
             events_stream._ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_clients.pop(queue, None)
 
 
 class TestEventPayloadValidation:
@@ -407,14 +413,22 @@ class TestTypingIndicatorEvents:
 
         queue = asyncio.Queue()
         events_stream._ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_clients[queue] = "typing-tab"
 
         try:
             # Simulate typing indicator sequence
-            events_stream.broadcast_ui_event("typing_start", {"agent": "progena"}, scope="chat")
             events_stream.broadcast_ui_event(
-                "typing_update", {"agent": "progena", "text": "..."}, scope="chat"
+                "typing_start", {"agent": "progena"}, scope="chat", client_id="typing-tab"
             )
-            events_stream.broadcast_ui_event("typing_stop", {"agent": "progena"}, scope="chat")
+            events_stream.broadcast_ui_event(
+                "typing_update",
+                {"agent": "progena", "text": "..."},
+                scope="chat",
+                client_id="typing-tab",
+            )
+            events_stream.broadcast_ui_event(
+                "typing_stop", {"agent": "progena"}, scope="chat", client_id="typing-tab"
+            )
 
             events = []
             while not queue.empty():
@@ -426,6 +440,7 @@ class TestTypingIndicatorEvents:
             assert events[2]["envelope"].type == "typing_stop"
         finally:
             events_stream._ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_clients.pop(queue, None)
 
 
 class TestMessageContentTypes:

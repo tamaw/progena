@@ -29,6 +29,7 @@ import { formatStartedTime } from '../chat/models/conversationModel';
 import { selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
 import usePositionalListRange from '../../hooks/usePositionalListRange';
 import useStreamResync from '../../hooks/useStreamResync';
+import useStreamTopic from '../../hooks/useStreamTopic';
 import {
   archiveInboxMessage,
   decideInboxMessage,
@@ -100,6 +101,8 @@ export default function InboxPage() {
     filter,
     sort: sort === 'Name' ? 'name' : 'recent',
   }), [filter, query, sort]);
+  useStreamTopic('inbox');
+
 
   const fetchPage = useCallback(
     ({ view: pageView, offset, limit }) => dispatch(fetchInboxList({ inboxUrl, view: pageView, offset, limit })),

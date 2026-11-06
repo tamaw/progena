@@ -63,9 +63,6 @@ const domainReducers = domains.reduce(
 const navActivityInitialState = {
   navActivity: {
     activeRoute: null,
-    // A route's first-ever event this session is its baseline (e.g. the
-    // initial snapshot burst on connect, or a page's own first fetch) rather
-    // than "new" activity; only later events light the dot.
     seenBaselineRoutes: {},
     unseenRoutes: {},
   },
@@ -84,9 +81,7 @@ const uiDataSlice = createSlice({
       if (event?.type === UI_EVENT.NAV_ACTIVITY) {
         const route = event.payload?.route;
         if (route) {
-          if (!state.navActivity.seenBaselineRoutes[route]) {
-            state.navActivity.seenBaselineRoutes[route] = true;
-          } else if (state.navActivity.activeRoute !== route) {
+          if (state.navActivity.activeRoute !== route) {
             state.navActivity.unseenRoutes[route] = true;
           }
         }

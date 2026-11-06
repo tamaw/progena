@@ -8,6 +8,7 @@ import uuid
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 
 import src.backend.chat.threads as chat_threads
+import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
 import src.backend.http.requests as http_requests
 import src.backend.lifecycle.state as lifecycle_state
@@ -31,10 +32,11 @@ router = APIRouter()
 @router.get("/widgets", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_widgets(
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Return the unified widget list on the requesting tab's UI stream."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     state_reader = monitoring_state.get_state_reader()
     widgets = [
@@ -56,7 +58,7 @@ async def get_widgets(
 async def refresh_widget(
     widget_id: str,
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Refresh agent widget metadata from its live protocol surface.
@@ -65,6 +67,7 @@ async def refresh_widget(
     by the Progena runtime when it initialises its MCP context (and on
     ``mcp_refresh``), which is the single source of truth the UI reads from.
     """
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     state_reader = monitoring_state.get_state_reader()
     widget = schedules_service._find_widget_payload(state_reader, widget_id)
@@ -94,10 +97,11 @@ async def patch_widget(
     widget_id: str,
     body: schedules_models.WidgetPatchRequest,
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Patch a backend-owned widget where a matching state file exists."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     state_reader = monitoring_state.get_state_reader()
     if widget_id.startswith("schedule:"):
@@ -349,10 +353,11 @@ async def patch_widget(
 async def delete_widget(
     widget_id: str,
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Delete a backend-owned widget where a matching state file exists."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     state_reader = monitoring_state.get_state_reader()
 
@@ -422,6 +427,7 @@ async def get_schedules(
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Alias for schedule data using the requested plural path."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     schedules_service.broadcast_schedule_snapshot(request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
@@ -437,6 +443,7 @@ async def create_schedule(
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Create a new schedule entry in backend state."""
+    events_stream.require_ui_stream_client(client_id)
     name = body.name.strip()
     instruction = body.instruction.strip()
     if not name:
@@ -519,6 +526,7 @@ async def retrigger_schedule(
     tool-call prescription here. We then recompute ``next_run`` (in case the
     agent didn't) and rebroadcast a snapshot.
     """
+    events_stream.require_ui_stream_client(client_id)
 
     text = body.text.strip()
     if not text:
@@ -597,10 +605,11 @@ async def retrigger_schedule(
 async def create_event_widget(
     body: schedules_models.EventWidgetCreateRequest,
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Create a new persisted event widget trigger."""
+    events_stream.require_ui_stream_client(client_id)
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Event widget name is required")

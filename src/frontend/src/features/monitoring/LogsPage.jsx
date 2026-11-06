@@ -136,7 +136,7 @@ function logDateBoundary(value, endOfDay = false) {
   return new Date(date.getTime() - 1).toISOString().replace(/999Z$/, '999999Z');
 }
 
-function buildQueryParams({ group, filePath, search, startDate, endDate }, extra = {}) {
+function buildQueryParams({ group, filePath, search, level, startDate, endDate }, extra = {}) {
   const params = {};
   if (group) {
     params.folder = group;
@@ -146,6 +146,9 @@ function buildQueryParams({ group, filePath, search, startDate, endDate }, extra
   }
   if (search) {
     params.search = search;
+  }
+  if (level) {
+    params.level = level;
   }
   if (startDate) {
     params.start = logDateBoundary(startDate);
@@ -321,9 +324,10 @@ function LogsPage() {
     group: selectedGroup,
     filePath: selectedFile,
     search,
+    level,
     startDate,
     endDate,
-  }), [endDate, search, selectedFile, selectedGroup, startDate]);
+  }), [endDate, level, search, selectedFile, selectedGroup, startDate]);
 
   const availableFiles = useMemo(() => {
     if (!selectedGroup) {
@@ -412,12 +416,7 @@ function LogsPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [datePickerOpen]);
 
-  const filteredEntries = useMemo(() => {
-    if (!level) {
-      return entries;
-    }
-    return entries.filter((entry) => normalizeLevel(entry.level) === level);
-  }, [entries, level]);
+  const filteredEntries = entries;
 
   const rowLayout = useMemo(() => {
     const items = [];

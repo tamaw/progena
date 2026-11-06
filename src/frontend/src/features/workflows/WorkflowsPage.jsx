@@ -66,6 +66,8 @@ function WorkflowsInner() {
   const instructionsUrl = getApiUrl('instructions');
   const realtime = useSelector(selectRealtime);
   useStreamTopic('workflows');
+  useStreamTopic('agents');
+  useStreamTopic('instructions');
   const workflows = useSelector(selectWorkflows);
   const workflowsState = useSelector(selectWorkflowsState);
   const workflowRuns = useSelector(selectWorkflowRuns);

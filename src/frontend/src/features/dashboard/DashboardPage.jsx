@@ -116,7 +116,7 @@ export default function DashboardPage() {
     schedules,
     workflows,
     runs,
-    inboxMessages,
+    inboxPendingApprovalCount,
     inboxUnreadCount,
     connected,
     streamReady,
@@ -188,9 +188,7 @@ export default function DashboardPage() {
       ? 'Awaiting status'
       : 'Stopped';
 
-  const pendingApprovals = inboxMessages.filter(
-    (m) => m.requires_approval && !m.archived && m.decision == null,
-  );
+  const pendingApprovals = inboxPendingApprovalCount;
   const unavailableResources = runtimeWidgets.filter((w) => isUnhealthyResourceStatus(widgetStatus(w)));
   const unreadAlerts = alerts.filter((alert) => !alert.viewed);
   const attentionReady = status !== null && collectionState.runs.loaded && collectionState.inbox.loaded;
@@ -232,8 +230,8 @@ export default function DashboardPage() {
         <MetricCard
           label="Pending review"
           icon="M9 5H5v15h14V5h-4M9 3h6v4H9V3ZM8 13l3 3 5-6"
-          value={collectionState.runs.loaded && collectionState.inbox.loaded ? pendingReview.length + pendingApprovals.length : '—'}
-          detail={attentionReady ? `${pendingReview.length} workflow · ${pendingApprovals.length} inbox` : 'Waiting for review data…'}
+          value={collectionState.runs.loaded && collectionState.inbox.loaded ? pendingReview.length + pendingApprovals : '—'}
+          detail={attentionReady ? `${pendingReview.length} workflow · ${pendingApprovals} inbox` : 'Waiting for review data…'}
         />
         <MetricCard
           label="Enabled schedules"

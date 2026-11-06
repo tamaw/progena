@@ -52,19 +52,31 @@ def _routine_event(payload, *, seq=1):
 @pytest.mark.asyncio
 async def test_default_and_background_traces_deliver_independently_for_one_browser():
     store = InMemoryDocumentStore()
-    store.save_document(PROGENA_STATE_PREFIX, "workflow:smoke", {"title": "Read-only workflow", "graph": {"nodes": {}}})
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow:smoke",
+        {"title": "Read-only workflow", "graph": {"nodes": {}}},
+    )
     for run_id in ("selected", "background"):
-        store.save_document(PROGENA_STATE_PREFIX, f"workflow_run:{run_id}", {
-            "run_id": run_id, "workflow_id": "smoke", "status": "running",
-            "started_at": "2026-11-03T00:00:00Z",
-        })
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            f"workflow_run:{run_id}",
+            {
+                "run_id": run_id,
+                "workflow_id": "smoke",
+                "status": "running",
+                "started_at": "2026-11-03T00:00:00Z",
+            },
+        )
     manager = events.RunsEvents()
     manager.store = store
     queue = asyncio.Queue()
     stream._ui_stream_subscribers[queue] = None
     stream._ui_stream_clients[queue] = "viewer"
     try:
-        background = await manager.subscribe(store, "viewer", "workflow", "background", "background:workflow:background")
+        background = await manager.subscribe(
+            store, "viewer", "workflow", "background", "background:workflow:background"
+        )
         selected = await manager.subscribe(store, "viewer", "workflow", "selected")
         assert background is not None and selected is not None
         assert manager.has_interest("viewer", background[1])

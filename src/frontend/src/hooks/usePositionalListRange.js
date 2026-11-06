@@ -35,15 +35,17 @@ export default function usePositionalListRange({
   fetchPage,
 }) {
   const { view: listView, loadedPages, inFlightRequests, rangeVersion } = list;
-
+  const stalePagesRef = useRef(new Set());
   const requestRange = useCallback((start, end, force = false) => {
-    if (!streamReady) return;
+    if (!streamReady || end <= start) return;
     const sameListView = sameView(listView, view);
     const first = Math.floor(Math.max(0, start) / pageSize) * pageSize;
     const last = Math.floor(Math.max(first, end - 1) / pageSize) * pageSize;
     for (let offset = first; offset <= last; offset += pageSize) {
       const inFlight = hasInFlightPage(inFlightRequests, rangeVersion, offset);
-      if (sameListView && (inFlight || (!force && loadedPages[offset]))) continue;
+      const stale = stalePagesRef.current.has(offset);
+      if (sameListView && (inFlight || (!force && !stale && loadedPages[offset]))) continue;
+      stalePagesRef.current.delete(offset);
       fetchPage({ view, offset, limit: pageSize });
     }
   }, [
@@ -62,10 +64,14 @@ export default function usePositionalListRange({
   useEffect(() => {
     if (!streamReady) {
       hydratedRef.current = false;
+      stalePagesRef.current.clear();
       return undefined;
     }
     if (!hydratedRef.current) {
       hydratedRef.current = true;
+      stalePagesRef.current = new Set(
+        Object.keys(loadedPages).map(Number).filter((offset) => offset !== 0),
+      );
       requestRange(0, pageSize, true);
       return undefined;
     }

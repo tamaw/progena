@@ -1,7 +1,24 @@
+import { useState } from 'react';
+import { useDispatch } from 'react-redux';
+import { useConfig } from '../../../context/ConfigContext';
+import { answerWorkflowRunApproval } from '../state/workflows';
 import { PaneEmptyState } from '../../../components/layout/PaneList';
 import { formatRelativeTime } from './runModel';
 
 export function WorkflowRunsList({ runs, loading, workflowId }) {
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const [approvalError, setApprovalError] = useState('');
+  const answerApproval = async (runId, approved) => {
+    setApprovalError('');
+    try {
+      await dispatch(answerWorkflowRunApproval({
+        workflowsUrl: getApiUrl('workflows'), workflowId, runId, approved,
+      })).unwrap();
+    } catch (error) {
+      setApprovalError(error?.message || 'Update approval');
+    }
+  };
   if (loading) {
     return <PaneEmptyState>Loading workflow runs...</PaneEmptyState>;
   }
@@ -39,16 +56,9 @@ export function WorkflowRunsList({ runs, loading, workflowId }) {
             {run.pending_approval ? (
               <div className="workflow-run-card__approval">
                 <p>{run.pending_approval.message || 'Approval required.'}</p>
-                <button type="button" onClick={() => fetch(`/api/ui/workflows/${workflowId}/runs/${run.run_id}/approval`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ approved: true }),
-                })}>Approve</button>
-                <button type="button" onClick={() => fetch(`/api/ui/workflows/${workflowId}/runs/${run.run_id}/approval`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ approved: false }),
-                })}>Reject</button>
+                <button type="button" onClick={() => answerApproval(run.run_id, true)}>Approve</button>
+                <button type="button" onClick={() => answerApproval(run.run_id, false)}>Reject</button>
+                {approvalError ? <p className="workflow-run-card__error">{approvalError}</p> : null}
               </div>
             ) : null}
             {run.last_error ? <p className="workflow-run-card__error">{run.last_error}</p> : null}

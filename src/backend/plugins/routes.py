@@ -87,10 +87,11 @@ async def _resolve_catalog(marketplace_name: str) -> Any:
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_plugins(
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Acknowledge a read and publish the plugins snapshot on the UI stream."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     snapshot = await asyncio.to_thread(_load_plugins_document)
     broadcast_plugins_snapshot(snapshot, request_id=request_id, client_id=client_id)
@@ -103,13 +104,14 @@ async def get_plugins(
 async def install_plugin(
     body: dict[str, Any],
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Resolve a plugin from its marketplace catalog and add it to the
     installed-plugins document with ``status: pending``. The reconciler
     will materialize the skill documents asynchronously.
     """
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     marketplace_name = str(body.get("marketplace") or "").strip()
     plugin_name = str(body.get("plugin") or "").strip()
@@ -218,10 +220,11 @@ async def uninstall_plugin(
     marketplace: str,
     plugin: str,
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Remove a plugin from the installed-plugins document."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     current = _load_plugins_document()
     plugins = dict(current.get("plugins", {}))
@@ -253,7 +256,7 @@ async def get_plugin_skill_content(
     plugin: str,
     skill_name: str,
     request: Request,
-    client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Publish one installed plugin skill's ``SKILL.md`` body for preview.
@@ -263,6 +266,7 @@ async def get_plugin_skill_content(
     ``plugins/install.py``), so the preview always matches what the agent
     actually reads.
     """
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     segment = f"{marketplace}__{plugin}"
     key = content_document_key("skill", f"{segment}/{skill_name}/SKILL.md")
@@ -337,5 +341,4 @@ def broadcast_plugins_snapshot(
         plugins,
         request_id=request_id,
         client_id=client_id,
-        topic=None if client_id else "plugins",
     )

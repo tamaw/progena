@@ -19,8 +19,10 @@ from src.progena.plugins.sources import PluginFetchErrorCode, PluginFetchErrorKi
 
 
 @pytest.fixture
-def client():
-    return TestClient(app)
+def client(ui_stream_client):
+    from conftest import UiStreamTestClient
+
+    return UiStreamTestClient(TestClient(app), ui_stream_client)
 
 
 @pytest.fixture(autouse=True)

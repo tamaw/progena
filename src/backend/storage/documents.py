@@ -433,6 +433,10 @@ class BackendDocumentStore(Protocol):
         """Count unread, unarchived inbox-message documents."""
         ...
 
+    def inbox_pending_approval_count(self) -> int:
+        """Count pending, unarchived inbox approvals."""
+        ...
+
     def list_active_workflow_run_ids(self, parent_thread_id: str) -> list[str]:
         """Return compact active workflow identities owned by one chat thread."""
         ...
@@ -689,6 +693,18 @@ class InMemoryDocumentStore:
             and isinstance(document.payload, dict)
             and not bool(document.payload.get("archived"))
             and not bool(document.payload.get("read"))
+        )
+
+    def inbox_pending_approval_count(self) -> int:
+        return sum(
+            1
+            for (prefix, key), document in self._documents.items()
+            if prefix == PROGENA_STATE_PREFIX
+            and key.startswith(INBOX_MESSAGE_KEY_PREFIX)
+            and isinstance(document.payload, dict)
+            and not bool(document.payload.get("archived"))
+            and bool(document.payload.get("requires_approval"))
+            and document.payload.get("decision") is None
         )
 
     def search_documents(
@@ -2248,6 +2264,23 @@ class PostgresDocumentStore:
                   AND jsonb_typeof(value -> 'payload') = 'object'
                   AND NOT COALESCE((value #>> '{payload,archived}')::boolean, false)
                   AND NOT COALESCE((value #>> '{payload,read}')::boolean, false)
+                """,
+                (PROGENA_STATE_PREFIX, _escape_like(INBOX_MESSAGE_KEY_PREFIX) + "%"),
+            )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        return int((row or {}).get("n") or 0)
+
+    def inbox_pending_approval_count(self) -> int:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT count(*) AS n FROM store
+                WHERE prefix = %s
+                  AND key LIKE %s
+                  AND jsonb_typeof(value -> 'payload') = 'object'
+                  AND NOT COALESCE((value #>> '{payload,archived}')::boolean, false)
+                  AND COALESCE((value #>> '{payload,requires_approval}')::boolean, false)
+                  AND value #>> '{payload,decision}' IS NULL
                 """,
                 (PROGENA_STATE_PREFIX, _escape_like(INBOX_MESSAGE_KEY_PREFIX) + "%"),
             )

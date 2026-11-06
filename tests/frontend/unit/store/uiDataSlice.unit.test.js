@@ -14,6 +14,7 @@ import { setActiveNavRoute } from '@frontend/store/navigationActions';
 import { scheduleSnapshotReceived } from '@frontend/features/schedules/actions';
 import { fetchTokenUsage, selectInsightsQueryState } from '@frontend/features/insights/state';
 import { CHAT_STATUS } from '@frontend/features/chat/models/chatStatus';
+import { failPendingOp } from '@frontend/realtime/realtimeSlice';
 
 function seedChats(ids) {
   const view = { q: '', sort: 'recent', filter: 'active' };
@@ -31,6 +32,17 @@ function seedChats(ids) {
   }));
   return state;
 }
+
+  it('clears failed positional chat requests so reconnect can retry them', () => {
+    const view = { q: '', sort: 'recent', filter: 'active' };
+    let state = reducer(undefined, fetchChatSessions.pending('CHAT_PAGE', {
+      chatsUrl: '/x', view, offset: 50, limit: 50,
+    }));
+    state = reducer(state, failPendingOp({ requestId: 'CHAT_PAGE', error: 'Server restarted' }));
+
+    expect(state.chats.inFlightRequests).toEqual({});
+    expect(state.chats.loading).toBe(false);
+  });
 
 describe('applyUiEvent reducer', () => {
   it('loads a correlated list response and marks the sidebar ready', () => {
@@ -1019,6 +1031,17 @@ describe('inbox events', () => {
     expect(selectInboxMessages({ uiData: s }).map((message) => message.id)).toEqual(['msg_51', 'msg_52']);
   });
 
+  it('clears failed positional Inbox requests so reconnect can retry them', () => {
+    const view = { q: '', filter: 'all', sort: 'recent' };
+    let s = reducer(undefined, fetchInboxList.pending('INBOX_PAGE', {
+      inboxUrl: '/api/ui/inbox', view, offset: 50, limit: 50,
+    }));
+    s = reducer(s, failPendingOp({ requestId: 'INBOX_PAGE', error: 'Request lost' }));
+
+    expect(s.inbox.inFlightRequests).toEqual({});
+    expect(s.inbox.loading).toBe(false);
+  });
+
   it('does not inflate a known server total for an outside-window upsert', () => {
     const view = { q: '', filter: 'all', sort: 'recent' };
     let s = reducer(undefined, fetchInboxList.pending('REQ1', {
@@ -1183,14 +1206,13 @@ describe('inbox events', () => {
 describe('nav activity tracking (unseen-page dots)', () => {
   const navActivity = (route) => applyUiEvent({ type: 'nav.activity', payload: { route } });
 
-  it('a route\'s first-ever nav.activity is its baseline, not "new" activity', () => {
+  it('marks a route’s first off-route nav.activity as unseen', () => {
     const s = reducer(undefined, navActivity('/tasks'));
-    expect(selectUnseenNavRoutes({ uiData: s })).toEqual({});
+    expect(selectUnseenNavRoutes({ uiData: s })).toEqual({ '/tasks': true });
   });
 
-  it('a later nav.activity for a route not currently open marks it unseen', () => {
-    let s = reducer(undefined, navActivity('/tasks'));
-    s = reducer(s, navActivity('/tasks'));
+  it('does not require a second nav.activity to mark an inactive route unseen', () => {
+    const s = reducer(undefined, navActivity('/tasks'));
     expect(selectUnseenNavRoutes({ uiData: s })).toEqual({ '/tasks': true });
   });
 

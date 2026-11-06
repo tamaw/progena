@@ -95,9 +95,11 @@ def _list_chats(client, ui_stream, query: str = "", request_id: str = "list") ->
 
 
 @pytest.fixture
-def client():
-    """Create a test client."""
-    return TestClient(app)
+def client(ui_stream_client):
+    """Create a test client with an active canonical stream."""
+    from conftest import UiStreamTestClient
+
+    return UiStreamTestClient(TestClient(app), ui_stream_client)
 
 
 @pytest.fixture(autouse=True)
@@ -876,7 +878,7 @@ class TestUIRoutes:
                 async_client.get("/api/ui/chats/thread-slow?client_id=tab-1")
             )
             await asyncio.sleep(0.1)  # let the slow read start
-            fast = await async_client.get("/api/ui/preferences")
+            fast = await async_client.get("/api/ui/preferences?client_id=tab-1")
             fast_done_after = time.monotonic() - started
             await slow
         assert fast.status_code == 202

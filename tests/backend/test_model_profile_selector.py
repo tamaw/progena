@@ -54,7 +54,7 @@ def _make_app(
 
 
 class TestPublicLeakageGuard:
-    def test_canonical_fields_are_exposed(self):
+    def test_canonical_fields_are_exposed(self, ui_stream):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENA_STATE_PREFIX,
@@ -78,7 +78,7 @@ class TestPublicLeakageGuard:
         )
         app, events = _make_app(store)
         with TestClient(app) as client:
-            response = client.get("/model-profiles")
+            response = client.get("/model-profiles?client_id=tab-1")
         assert response.status_code == 202
         assert_acknowledged(response, ["profiles.snapshot"])
         assert events[-1][0] == "profiles.snapshot"
@@ -118,24 +118,24 @@ class TestGetAcknowledgement:
             },
         ],
     )
-    def test_get_reports_malformed_store_document(self, payload):
+    def test_get_reports_malformed_store_document(self, payload, ui_stream):
         store = InMemoryDocumentStore()
         store.save_document(PROGENA_STATE_PREFIX, "profile", payload)
         app, events = _make_app(store)
         with TestClient(app) as client:
-            response = client.get("/model-profiles")
+            response = client.get("/model-profiles?client_id=tab-1")
         assert response.status_code == 422
         assert events == []
         assert "must-not-leak" not in response.text
 
-    def test_get_allows_an_empty_profile_catalog(self):
+    def test_get_allows_an_empty_profile_catalog(self, ui_stream):
         app, events = _make_app(InMemoryDocumentStore())
         with TestClient(app) as client:
-            response = client.get("/model-profiles")
+            response = client.get("/model-profiles?client_id=tab-1")
         assert response.status_code == 202
         assert events[-1][1] == {"profiles": []}
 
-    def test_get_migrates_legacy_azure_profile_to_default_foundry(self):
+    def test_get_migrates_legacy_azure_profile_to_default_foundry(self, ui_stream):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENA_STATE_PREFIX,
@@ -147,14 +147,14 @@ class TestGetAcknowledgement:
         )
         app, events = _make_app(store, repository)
         with TestClient(app) as client:
-            response = client.get("/model-profiles")
+            response = client.get("/model-profiles?client_id=tab-1")
         assert response.status_code == 202
         assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == {
             "general": {"provider_id": "foundry-1", "deployment": "legacy"}
         }
         assert events[-1][1]["profiles"][0]["provider_id"] == "foundry-1"
 
-    def test_get_migration_removes_legacy_connection_fields(self):
+    def test_get_migration_removes_legacy_connection_fields(self, ui_stream):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENA_STATE_PREFIX,
@@ -175,7 +175,7 @@ class TestGetAcknowledgement:
         app, events = _make_app(store, repository)
 
         with TestClient(app) as client:
-            response = client.get("/model-profiles")
+            response = client.get("/model-profiles?client_id=tab-1")
 
         assert response.status_code == 202
         assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == {
