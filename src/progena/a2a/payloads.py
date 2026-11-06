@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from src.progena.a2a.models import A2ATaskRecord, A2ATaskStatus
@@ -18,6 +19,111 @@ def normalize_a2a_task_status(raw_state: Any) -> A2ATaskStatus:
         return A2ATaskStatus(value)
     except ValueError:
         return A2ATaskStatus.UNKNOWN
+
+
+@dataclass(frozen=True)
+class A2AReply:
+    """A classified successful A2A send result.
+
+    Reply text comes only from peer-authored TextParts. Task history is
+    intentionally excluded because it may contain the caller's request.
+    """
+
+    kind: str
+    state: str
+    text: str
+    task_id: str | None
+    context_id: str | None
+    message_id: str | None
+
+    @property
+    def completed(self) -> bool:
+        return self.state == "completed"
+
+
+_TASK_STATES = frozenset(
+    {
+        "submitted",
+        "working",
+        "input-required",
+        "auth-required",
+        "completed",
+        "failed",
+        "canceled",
+        "cancelled",
+        "rejected",
+        "unknown",
+    }
+)
+
+
+def _reply_parts_text(parts: Any) -> str:
+    """Return only canonical A2A TextParts without normalizing their content."""
+    if not isinstance(parts, list):
+        return ""
+    chunks: list[str] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        root = part.get("root")
+        payload = root if isinstance(root, dict) else part
+        if payload.get("kind") != "text":
+            continue
+        text = payload.get("text")
+        if isinstance(text, str):
+            chunks.append(text)
+    return "".join(chunks)
+
+
+def _optional_a2a_id(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def classify_a2a_reply(payload: Any) -> A2AReply:
+    """Classify an A2A result without reading caller-provided task history."""
+    if not isinstance(payload, dict):
+        return A2AReply("unknown", "unknown", "", None, None, None)
+    kind = str(payload.get("kind") or "").strip().lower()
+    if kind == "message":
+        role = str(payload.get("role") or "").strip().lower()
+        return A2AReply(
+            "message",
+            "completed" if role == "agent" else "unknown",
+            _reply_parts_text(payload.get("parts")) if role == "agent" else "",
+            _optional_a2a_id(payload.get("taskId")),
+            _optional_a2a_id(payload.get("contextId")),
+            _optional_a2a_id(payload.get("messageId")),
+        )
+    if kind != "task":
+        return A2AReply("unknown", "unknown", "", None, None, None)
+
+    status = payload.get("status")
+    raw_state = str(status.get("state") or "").strip().lower() if isinstance(status, dict) else ""
+    state = raw_state if raw_state in _TASK_STATES else "unknown"
+    status_text = ""
+    message_id = None
+    if isinstance(status, dict) and isinstance(status.get("message"), dict):
+        message = status["message"]
+        if str(message.get("role") or "").strip().lower() == "agent":
+            status_text = _reply_parts_text(message.get("parts"))
+            message_id = _optional_a2a_id(message.get("messageId"))
+
+    artifact_texts: list[str] = []
+    artifacts = payload.get("artifacts")
+    if isinstance(artifacts, list):
+        for artifact in artifacts:
+            if isinstance(artifact, dict):
+                text = _reply_parts_text(artifact.get("parts"))
+                if text.strip():
+                    artifact_texts.append(text)
+    return A2AReply(
+        "task",
+        state,
+        "\n".join(artifact_texts) if artifact_texts else status_text,
+        _optional_a2a_id(payload.get("id")),
+        _optional_a2a_id(payload.get("contextId")),
+        message_id,
+    )
 
 
 def _extract_text_from_parts(parts: Any) -> str | None:

@@ -51,6 +51,8 @@ dependencies = [
     "pytz>=2024.1",
     "python-dotenv>=1.2.4",
     "pyyaml>=6.0.0",
+    # Strict, offline A2A response contracts (Registry-based $ref resolution).
+    "jsonschema>=4.18.0",
     "fastapi>=0.135.0",  # EventSourceResponse added in 0.135.0
     "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.27.0",

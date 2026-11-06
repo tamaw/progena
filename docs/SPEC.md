@@ -209,6 +209,51 @@ Run on it adopts that run before offering the same choices. Scheduled runs stamp
 `runtime_instance` when they start running, and their recent runs show the
 same derived `interrupted` status.
 
+### Routine node output and native retries
+
+Prompt, classify and A2A nodes use their `response_schema` to validate their own
+response. The routine's `output_schema` instead describes its final result.
+Schema failures can feed the rejected response and sanitized validation errors
+into the same node's next **native LangGraph retry**, using its ordinary policy:
+
+```json
+{
+  "response_schema": {
+    "type": "object",
+    "properties": { "verdict": { "enum": ["approve", "revise"] } },
+    "required": ["verdict"]
+  },
+  "retry": { "max_retries": 2, "retry_on": "model_response" }
+}
+```
+
+`max_retries: 2` permits at most three native attempts total, including any
+retryable transport failures. `model_response` and `all` retry schema failures;
+`transient` does not. Existing backoff and per-attempt timeout settings apply.
+There is no separate correction loop or correction budget.
+
+Model retries include rejected output as assistant content followed by trusted
+schema feedback, never as a system instruction. Root schema aliases are resolved
+for provider generation guidance; the full authored schema, including reference
+siblings, remains authoritative for local validation. The provider's structured
+output subset and strictness still apply.
+
+A2A retries continue the peer's returned context without resuming a completed
+task or resending the original action prompt. A changed peer endpoint, missing or
+mismatched context, or a failed feedback send is terminal.
+Peer memory and output-only behavior still require independent verification;
+prompts do not sandbox a remote agent. Original transport retries can repeat an
+action, so side-effecting calls require separate idempotency/replay safeguards.
+
+Feedback is scoped to one native task and node, including concurrent and nested
+runs; it is not a durable continuation across Stop/Resume. The existing unfinished
+node replay rules still apply. Ordered response attempts are retained privately
+under checkpoint `run_meta.node_output`; browser projections expose diagnostics
+and reply lengths rather than rejected replies. Only accepted output enters
+normal node data/messages. Tool-executing object-agent nodes retain their
+existing continuation policy.
+
+
 ### Backend (`src/backend/`)
 
 - Exposes the browser's finite command/query routes and bridges work to the

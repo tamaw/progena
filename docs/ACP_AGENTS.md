@@ -77,6 +77,33 @@ and cancellation requests. A task cannot start beyond `PROGENA_ACP_MAX_TURNS`.
 
 ACP agents are reached only through `acp_*`; `a2a_*` tools handle remote A2A agents.
 
+### Transcript references and workflow schemas
+
+The read-only, nullable `evidence` field on a Progena ACP-task document is a
+transcript-source reference, not a standard ACP protocol field or proof that a
+task or its tests succeeded. Claude-native references identify a session and
+turn's line/byte range, with block hashes and optional final-message availability
+metadata. A truncated generic capture can instead record
+`output_truncated: true` and `final_output_available: false`; this is a partial
+result, not permission to infer missing output. Read content through
+`acp_get_result`, not by interpreting these references as arbitrary file paths.
+
+`data/schemas/acp_task.schema.v1.json` declares the supervisor-owned task fields,
+including transcript references and retained input/activity bookkeeping.
+Unknown task/reference properties remain invalid, and read-only fields are not
+exposed as writable workflow inputs.
+
+After registering document types at backend startup, saved workflows that use
+the `acp_task` document type have their authoritative port schemas re-derived,
+including dependent ports. Authored trigger filters, edges, prompts, UI and
+enabled/paused state are preserved. Workflows deleted before the locked refresh
+are left absent, rather than recreated with a null payload. Invalid affected
+definitions are logged and left unchanged; unrelated workflows are not
+refreshed. The refresh is idempotent and does not replay missed completion
+events, resume ACP tasks or publish builds. A completion missed before the fix
+still needs a separately authorized recovery.
+
+
 ### Liveness is not a model-response test
 
 Claude's container health check inspects the existing `socat` listener process;

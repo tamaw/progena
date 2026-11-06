@@ -291,8 +291,9 @@
         "agent_name": { "type": "string", "minLength": 1 },
         "prompt_template": { "type": "string", "minLength": 1 },
         "prompt_file": { "type": "string", "minLength": 1 },
+        "response_schema": { "$ref": "#/$defs/responseSchema", "description": "Validate the completed peer output as exactly one JSON object. A schema failure can feed sanitized validation errors into the same A2A context through the node's native retry policy; no separate correction budget. Without a schema the node keeps its lenient legacy behavior." },
         "retry": { "$ref": "#/$defs/retryPolicy" },
-        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before one native node attempt is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
       },
       "oneOf": [
         { "required": ["prompt_template"], "not": { "required": ["prompt_file"] } },

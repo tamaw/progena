@@ -23,6 +23,7 @@ from typing import Annotated, Any, TypedDict
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langgraph.cache.memory import InMemoryCache
+from langgraph.errors import NodeTimeoutError
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
@@ -73,6 +74,12 @@ from .messages import (
     normalize_message_content as normalize_message_content,
 )
 from .model_nodes import _build_classify_node, _build_prompt_node
+from .node_output import (
+    NodeOutputRetryError,
+    _output_feedback_for_node,
+    get_output_feedback,
+    publish_output_feedback,
+)
 from .state import (
     RoutineState as RoutineState,
 )
@@ -88,40 +95,59 @@ _SEED_NODE_ID = ROUTINE_SEED_NODE_ID
 
 
 def _retry_model_response(exc: Exception) -> bool:
+    if isinstance(exc, NodeOutputRetryError):
+        return False
     predicate = RetryPolicy().retry_on
     return isinstance(exc, ValueError) or bool(callable(predicate) and predicate(exc))
 
 
-def _retry_policy(config: dict[str, Any]) -> RetryPolicy | None:
-    """Build a RetryPolicy from a ``retry`` sub-dict.
+def _retry_all(exc: Exception) -> bool:
+    return not isinstance(exc, NodeOutputRetryError)
 
-    The compiler merges execution-policy defaults with explicit node values
-    before building the native LangGraph retry policy.
-    """
+
+def _retry_transient(exc: Exception) -> bool:
+    if isinstance(exc, NodeOutputRetryError):
+        return False
+    predicate = RetryPolicy().retry_on
+    return bool(callable(predicate) and predicate(exc))
+
+
+def _retry_policy(config: dict[str, Any], *, node_id: str | None = None) -> RetryPolicy | None:
+    """Build one native retry policy from a node's ``retry`` configuration."""
     retry = config.get("retry")
     if not retry:
         return None
     defaults = ROUTINE_NODE_RETRY_DEFAULTS
-    values: dict[str, Any] = {
-        "initial_interval": float(retry.get("initial_interval", defaults["initial_interval"])),
-        "backoff_factor": float(retry.get("backoff_factor", defaults["backoff_factor"])),
-        "max_interval": float(retry.get("max_interval", defaults["max_interval"])),
-        # The only place the two vocabularies meet: routines count retries so
-        # that 0 plainly means "never retry", LangGraph counts total attempts.
-        "max_attempts": int(retry.get("max_retries", defaults["max_retries"])) + 1,
-        "jitter": bool(retry.get("jitter", defaults["jitter"])),
-        # LangGraph's default declines to retry ValueError/TypeError/OSError and
-        # friends as unfixable bugs. A routine node raising those is usually a
-        # bad parse of a nondeterministic model response, which a retry does fix.
-        "retry_on": (
-            Exception
-            if retry.get("retry_on", "transient") == "all"
-            else _retry_model_response
-            if retry.get("retry_on") == "model_response"
-            else RetryPolicy().retry_on
-        ),
-    }
-    return RetryPolicy(**values)
+    predicate = (
+        _retry_all
+        if retry.get("retry_on", "transient") == "all"
+        else _retry_model_response
+        if retry.get("retry_on") == "model_response"
+        else _retry_transient
+    )
+    policy_owner = object()
+
+    def retry_on(exc: Exception) -> bool:
+        # A timeout is raised outside the cancelled node coroutine.  The retry
+        # callback still runs in this logical node's ContextVar context, so
+        # attach the prior output audit before LangGraph discards that child.
+        if isinstance(exc, NodeTimeoutError) and node_id is not None:
+            feedback = _output_feedback_for_node(node_id, owner=policy_owner)
+            if feedback is not None:
+                exc.node_output = feedback.record  # type: ignore[attr-defined]
+        should_retry = predicate(exc)
+        if should_retry:
+            publish_output_feedback(exc, owner=policy_owner)
+        return should_retry
+
+    return RetryPolicy(
+        initial_interval=float(retry.get("initial_interval", defaults["initial_interval"])),
+        backoff_factor=float(retry.get("backoff_factor", defaults["backoff_factor"])),
+        max_interval=float(retry.get("max_interval", defaults["max_interval"])),
+        max_attempts=int(retry.get("max_retries", defaults["max_retries"])) + 1,
+        jitter=bool(retry.get("jitter", defaults["jitter"])),
+        retry_on=retry_on,
+    )
 
 
 def _cache_policy(config: dict[str, Any], namespace: str = "") -> CachePolicy | None:
@@ -292,7 +318,7 @@ def _build_node_callable(
             call = _build_classify_node(
                 node, model=selected, clock_context=clock_context, defs=defs
             )
-            return await call(state)
+            return await call(state, runtime=runtime)
 
         return with_profile
     if node.kind == "prompt":
@@ -330,6 +356,7 @@ def _build_node_callable(
             node,
             tool_registry=tool_registry,
             timeout=_node_timeout(_node_config(node), policy_defaults or {}),
+            defs=defs,
         )
     if node.kind == "foreach":
         return _build_foreach_node(node, object_agent_registry=agent_registry)
@@ -435,7 +462,7 @@ def _instrument_node_callable(
         step = sum(len(v) for v in (state.get("run_meta") or {}).values()) + 1
         try:
             result = await (fn(state, runtime) if takes_runtime else fn(state))
-        except Exception as exc:
+        except BaseException as exc:
             duration_ms = (time.monotonic() - started) * 1000
             entry = {
                 "started_at": started_at,
@@ -446,6 +473,13 @@ def _instrument_node_callable(
             invocation = getattr(exc, "routine_invocation", None)
             if invocation:
                 entry["routine"] = dict(invocation)
+            node_output = getattr(exc, "node_output", None)
+            feedback = get_output_feedback(node_id, runtime)
+            if node_output is None and feedback is not None:
+                node_output = feedback.record
+                exc.node_output = node_output  # type: ignore[attr-defined]
+            if node_output:
+                entry["node_output"] = node_output
             exc.routine_run_meta = (node_id, entry)  # type: ignore[attr-defined]
             raise
         duration_ms = (time.monotonic() - started) * 1000
@@ -458,6 +492,9 @@ def _instrument_node_callable(
         invocation = update.pop("_routine_invocation", None)
         if invocation:
             entry["routine"] = invocation
+        node_output = update.pop("_node_output", None)
+        if node_output:
+            entry["node_output"] = node_output
         # This execution's own written fields (not the whole accumulated
         # `data` dict) -- `data` itself only ever holds the latest write per
         # key, so a node run multiple times (a loop body) would otherwise
@@ -668,15 +705,14 @@ def compile_routine_graph(
         config = _node_config(node)
         retry_config = {"retry": {**policy_defaults["retry"], **config.get("retry", {})}}
         recovery_target = error_routes.get(node.id)
+        watchdog_timeout = _node_timeout(config, policy_defaults)
         node_options: dict[str, Any] = {
-            "retry_policy": _retry_policy(retry_config),
+            "retry_policy": _retry_policy(retry_config, node_id=node.id),
             "cache_policy": _cache_policy(config, cache_namespace),
             "defer": node.id in fan_in_targets,
-            "timeout": TimeoutPolicy(
-                run_timeout=_node_timeout(config, policy_defaults), idle_timeout=policy.idle_timeout
-            )
+            "timeout": TimeoutPolicy(run_timeout=watchdog_timeout, idle_timeout=policy.idle_timeout)
             if policy.idle_timeout is not None
-            else _node_timeout(config, policy_defaults),
+            else watchdog_timeout,
         }
         if recovery_target is not None:
             node_options["error_handler"] = _build_retry_exhausted_handler(node.id, recovery_target)

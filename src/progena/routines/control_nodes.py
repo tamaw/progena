@@ -621,7 +621,18 @@ def _build_retry_exhausted_handler(
             "type": type(error.error).__name__,
             "message": str(error.error),
         }
-        return Command(update={"data": {"errors": errors}}, goto=route_to)
+        update: dict[str, Any] = {"data": {"errors": errors}}
+        node_meta = getattr(error.error, "routine_run_meta", None)
+        if node_meta is not None:
+            failed_node_id, entry = node_meta
+            update["run_meta"] = {failed_node_id: [entry]}
+        else:
+            node_output = getattr(error.error, "node_output", None)
+            if node_output is not None:
+                update["run_meta"] = {
+                    node_id: [{"error": str(error.error), "node_output": node_output}]
+                }
+        return Command(update=update, goto=route_to)
 
     return recover
 

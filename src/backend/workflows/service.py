@@ -328,21 +328,16 @@ def _stamp_cron_timezones(
     return stamped
 
 
-def save_workflow_definition(
+def _derive_workflow_definition_payload(
     store: BackendDocumentStore,
     payload: Mapping[str, Any],
+    *,
+    existing: Mapping[str, Any] | None,
     instruction_loader: Callable[[str], str] | None = None,
-) -> WorkflowDefinition:
-    """Derive document port schemas, validate, and persist one workflow definition."""
-
+) -> dict[str, Any]:
+    """Derive and validate the persisted form of one workflow definition."""
     if instruction_loader is None:
         instruction_loader = _instruction_loader_from_store(store)
-    existing_document = store.get_document(
-        PROGENA_STATE_PREFIX,
-        workflow_definition_key(str(payload.get("id") or "")),
-        None,
-    )
-    existing = existing_document.payload if existing_document is not None else None
     preferences_document = store.get_document(PROGENA_STATE_PREFIX, "preferences", {})
     preferences = preferences_document.payload if preferences_document is not None else {}
     preference_timezone = timezone_name(
@@ -354,7 +349,91 @@ def save_workflow_definition(
         instruction_loader=instruction_loader,
         routine_loader=_routine_loader_from_store(store),
     )
-    normalized = validate_workflow_definition_payload(typed)
+    return validate_workflow_definition_payload(typed)
+
+
+def _references_document_type(payload: Mapping[str, Any], document_type: str) -> bool:
+    """Return whether a workflow has a document node using ``document_type``."""
+    graph = payload.get("graph")
+    nodes = graph.get("nodes") if isinstance(graph, Mapping) else None
+    return isinstance(nodes, Mapping) and any(
+        isinstance(node, Mapping) and node.get("document_type") == document_type
+        for node in nodes.values()
+    )
+
+
+class _SkipWorkflowSchemaRefresh(Exception):
+    """Abort a stale candidate's store mutation without writing a document."""
+
+
+def refresh_acp_task_workflow_schemas(store: BackendDocumentStore) -> int:
+    """Refresh derived ports in saved workflows that use the ACP task document type.
+
+    This startup-only compatibility repair keeps old definitions strict while
+    adopting the currently registered ``acp_task`` schema.  Each candidate is
+    re-read under the store's per-document mutation lock, so a concurrent
+    workflow edit is derived from its current authored graph rather than
+    overwritten with a stale snapshot.
+    """
+    refreshed = 0
+    for key, document in store.list_documents(PROGENA_STATE_PREFIX, "workflow:"):
+        payload = _document_payload(document, {})
+        if not isinstance(payload, Mapping) or not _references_document_type(payload, "acp_task"):
+            continue
+        try:
+            expected = _derive_workflow_definition_payload(store, payload, existing=payload)
+        except Exception:
+            logger.exception(
+                "Skipping invalid ACP task workflow definition %r during schema refresh", key
+            )
+            continue
+        if expected == payload:
+            continue
+
+        changed = False
+
+        def refresh(current: Any) -> Any:
+            nonlocal changed
+            if not isinstance(current, Mapping) or not _references_document_type(
+                current, "acp_task"
+            ):
+                raise _SkipWorkflowSchemaRefresh
+            normalized = _derive_workflow_definition_payload(store, current, existing=current)
+            if normalized != current:
+                changed = True
+                return normalized
+            return current
+
+        try:
+            store.mutate_document(PROGENA_STATE_PREFIX, key, refresh)
+        except _SkipWorkflowSchemaRefresh:
+            continue
+        except Exception:
+            logger.exception(
+                "Skipping invalid ACP task workflow definition %r during schema refresh", key
+            )
+            continue
+        if changed:
+            refreshed += 1
+    return refreshed
+
+
+def save_workflow_definition(
+    store: BackendDocumentStore,
+    payload: Mapping[str, Any],
+    instruction_loader: Callable[[str], str] | None = None,
+) -> WorkflowDefinition:
+    """Derive document port schemas, validate, and persist one workflow definition."""
+
+    existing_document = store.get_document(
+        PROGENA_STATE_PREFIX,
+        workflow_definition_key(str(payload.get("id") or "")),
+        None,
+    )
+    existing = existing_document.payload if existing_document is not None else None
+    normalized = _derive_workflow_definition_payload(
+        store, payload, existing=existing, instruction_loader=instruction_loader
+    )
     definition = WorkflowDefinition.model_validate(normalized)
     store.save_document(
         PROGENA_STATE_PREFIX,
