@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -32,6 +33,9 @@ def harness(monkeypatch):
     )
     store.save_document(PROGENA_STATE_PREFIX, "knowledge:eng/log.md", {"content": "## log\n"})
     events: list[tuple[str, dict[str, Any]]] = []
+    queue: asyncio.Queue = asyncio.Queue()
+    events_stream._ui_stream_subscribers[queue] = None
+    events_stream._ui_stream_clients[queue] = "tab"
     monkeypatch.setattr(
         events_stream,
         "broadcast_ui_event",
@@ -46,6 +50,8 @@ def harness(monkeypatch):
     app = FastAPI()
     app.include_router(routes.router)
     yield TestClient(app, headers={"X-Operation-Id": "test-request"}), store, events
+    events_stream._ui_stream_subscribers.pop(queue, None)
+    events_stream._ui_stream_clients.pop(queue, None)
     set_default_document_store(InMemoryDocumentStore())
 
 
@@ -55,7 +61,9 @@ def _last(events, event_type):
 
 def test_pages_snapshot_lists_concepts_and_reserved_files(harness):
     client, _, events = harness
-    assert_acknowledged(client.get("/api/ui/knowledge/eng/pages"), ["knowledge.pages.snapshot"])
+    assert_acknowledged(
+        client.get("/api/ui/knowledge/eng/pages?client_id=tab"), ["knowledge.pages.snapshot"]
+    )
     payload = _last(events, "knowledge.pages.snapshot")
     assert payload["base_id"] == "eng"
     assert [(p["path"], p["kind"]) for p in payload["pages"]] == [
@@ -67,18 +75,25 @@ def test_pages_snapshot_lists_concepts_and_reserved_files(harness):
 
 def test_unknown_base_is_404(harness):
     client, _, _ = harness
-    assert client.get("/api/ui/knowledge/nope/pages").status_code == 404
-    assert client.get("/api/ui/knowledge/nope/page", params={"path": "a.md"}).status_code == 404
+    assert client.get("/api/ui/knowledge/nope/pages?client_id=tab").status_code == 404
+    assert (
+        client.get(
+            "/api/ui/knowledge/nope/page", params={"client_id": "tab", "path": "a.md"}
+        ).status_code
+        == 404
+    )
 
 
 def test_read_page_and_generated_index(harness):
     client, _, events = harness
     assert_acknowledged(
-        client.get("/api/ui/knowledge/eng/page", params={"path": "concepts/retry.md"}),
+        client.get(
+            "/api/ui/knowledge/eng/page", params={"client_id": "tab", "path": "concepts/retry.md"}
+        ),
         ["knowledge.page.loaded"],
     )
     assert _last(events, "knowledge.page.loaded")["content"] == PAGE_A
-    client.get("/api/ui/knowledge/eng/page", params={"path": "index.md"})
+    client.get("/api/ui/knowledge/eng/page", params={"client_id": "tab", "path": "index.md"})
     assert "- [concepts/](concepts/index.md)" in _last(events, "knowledge.page.loaded")["content"]
 
 
@@ -88,11 +103,13 @@ def test_deprecated_page_is_unlisted_but_readable(harness):
     store.save_document(
         PROGENA_STATE_PREFIX, "knowledge:eng/concepts/retry.md", {"content": deprecated}
     )
-    client.get("/api/ui/knowledge/eng/pages")
+    client.get("/api/ui/knowledge/eng/pages?client_id=tab")
     assert [p["path"] for p in _last(events, "knowledge.pages.snapshot")["pages"]] == ["log.md"]
-    client.get("/api/ui/knowledge/eng/page", params={"path": "index.md"})
+    client.get("/api/ui/knowledge/eng/page", params={"client_id": "tab", "path": "index.md"})
     assert "concepts/" not in _last(events, "knowledge.page.loaded")["content"]
-    client.get("/api/ui/knowledge/eng/page", params={"path": "concepts/retry.md"})
+    client.get(
+        "/api/ui/knowledge/eng/page", params={"client_id": "tab", "path": "concepts/retry.md"}
+    )
     assert _last(events, "knowledge.page.loaded")["content"] == deprecated
 
 
@@ -101,7 +118,7 @@ def test_revisions_list_and_read(harness):
     store.save_document(
         PROGENA_STATE_PREFIX, "knowledge:eng/concepts/retry.md", {"content": PAGE_A + "More.\n"}
     )
-    params = {"path": "concepts/retry.md"}
+    params = {"client_id": "tab", "path": "concepts/retry.md"}
     assert_acknowledged(
         client.get("/api/ui/knowledge/eng/page/revisions", params=params),
         ["knowledge.page.revisions.loaded"],
@@ -126,7 +143,7 @@ def test_new_base_id_avoids_orphaned_pages(harness, monkeypatch):
     client, store, _ = harness
     store.save_document(PROGENA_STATE_PREFIX, "knowledge:research/a.md", {"content": PAGE_A})
     response = client.put(
-        "/api/ui/knowledge",
+        "/api/ui/knowledge?client_id=tab",
         json={"bases": [{"id": "eng", "name": "Engineering"}, {"name": "Research"}]},
     )
     assert response.status_code == 202

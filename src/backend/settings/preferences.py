@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 
 import src.backend.events.contracts as events_contracts
 import src.backend.events.stream as events_stream
@@ -29,16 +29,17 @@ router = APIRouter(prefix="/api/ui/preferences", tags=["preferences"])
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_preferences(
     request: Request,
+    client_id: str | None = Query(default=None, min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
-    """Acknowledge a read and publish the snapshot on the UI stream."""
+    """Acknowledge a read; the snapshot goes to the asking tab, not every tab."""
     request_id = _request_correlation_id(request, x_request_id)
     # load_preferences() does blocking document-store I/O (see save_preferences
     # below, which is threaded for the same reason) - broadcast_preferences_snapshot
     # would otherwise call it straight from this async handler and block the
     # event loop for the Postgres round-trip.
     snapshot = await asyncio.to_thread(load_preferences)
-    broadcast_preferences_snapshot(snapshot, request_id=request_id)
+    broadcast_preferences_snapshot(snapshot, request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.PREFERENCES_SNAPSHOT]
     )
@@ -72,6 +73,7 @@ def broadcast_preferences_snapshot(
     preferences: dict[str, Any] | None = None,
     *,
     request_id: str | None = None,
+    client_id: str | None = None,
 ) -> events_contracts.UiEventEnvelope:
     """Broadcast the current user preferences to /api/ui/stream subscribers.
 
@@ -83,5 +85,8 @@ def broadcast_preferences_snapshot(
     """
     payload = settings_preferences_store.load_preferences() if preferences is None else preferences
     return events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.PREFERENCES_SNAPSHOT, payload, request_id=request_id
+        events_contracts.UiEvent.PREFERENCES_SNAPSHOT,
+        payload,
+        request_id=request_id,
+        client_id=client_id,
     )

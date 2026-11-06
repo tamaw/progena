@@ -495,12 +495,14 @@ def _client(harness: Harness) -> TestClient:
 def test_get_publishes_correlated_snapshot(harness: Harness):
     seed_channels(harness.store)
 
-    response = _client(harness).get("/api/ui/channels", headers={"X-Operation-Id": "op-1"})
+    response = _client(harness).get(
+        "/api/ui/channels?client_id=tab-1", headers={"X-Operation-Id": "op-1"}
+    )
 
     assert_acknowledged(response, ["channels.snapshot"], "op-1")
     [(kind, payload, kwargs)] = harness.events
     assert kind == "channels.snapshot"
-    assert kwargs == {"request_id": "op-1"}
+    assert kwargs == {"request_id": "op-1", "client_id": "tab-1", "topic": None}
     assert [channel["id"] for channel in payload["channels"]] == ["fake"]
     assert payload["channels"][0]["status"] == "disabled"
 
@@ -509,7 +511,7 @@ def test_patch_persists_then_publishes(harness: Harness):
     seed_channels(harness.store)
 
     response = _client(harness).patch(
-        "/api/ui/channels/fake",
+        "/api/ui/channels/fake?client_id=tab-1",
         json={"settings": {"target": "room"}},
         headers={"X-Operation-Id": "op-2"},
     )
@@ -517,7 +519,10 @@ def test_patch_persists_then_publishes(harness: Harness):
     assert_acknowledged(response, ["channels.snapshot"], "op-2")
     assert harness.document()["settings"]["target"] == "room"
     kind, payload, kwargs = harness.events[-1]
-    assert (kind, kwargs) == ("channels.snapshot", {"request_id": "op-2"})
+    assert (kind, kwargs) == (
+        "channels.snapshot",
+        {"request_id": "op-2", "client_id": "tab-1", "topic": None},
+    )
     assert payload["channels"][0]["settings"]["target"] == "room"
 
 
@@ -542,7 +547,7 @@ def test_test_route_reports_failure_as_event(harness: Harness):
     seed_channels(harness.store)
 
     response = _client(harness).post(
-        "/api/ui/channels/fake/test", headers={"X-Operation-Id": "op-3"}
+        "/api/ui/channels/fake/test?client_id=tab-1", headers={"X-Operation-Id": "op-3"}
     )
 
     assert_acknowledged(response, ["channel.tested"], "op-3")
@@ -550,7 +555,7 @@ def test_test_route_reports_failure_as_event(harness: Harness):
         (
             "channel.tested",
             {"channel_id": "fake", "ok": False, "error": "Channel is turned off"},
-            {"request_id": "op-3"},
+            {"request_id": "op-3", "client_id": "tab-1"},
         )
     ]
 
@@ -563,9 +568,15 @@ def test_reconnect_requires_enabled_channel(harness: Harness):
     assert client.post("/api/ui/channels/missing/reconnect").status_code == 404
 
     update_channel(harness.store, "fake", {"enabled": True})
-    response = client.post("/api/ui/channels/fake/reconnect", headers={"X-Operation-Id": "op-4"})
+    response = client.post(
+        "/api/ui/channels/fake/reconnect?client_id=tab-1",
+        headers={"X-Operation-Id": "op-4"},
+    )
 
     assert_acknowledged(response, ["channels.snapshot"], "op-4")
     kind, payload, kwargs = harness.events[-1]
-    assert (kind, kwargs) == ("channels.snapshot", {"request_id": "op-4"})
+    assert (kind, kwargs) == (
+        "channels.snapshot",
+        {"request_id": "op-4", "client_id": "tab-1", "topic": None},
+    )
     assert payload["channels"][0]["enabled"] is True

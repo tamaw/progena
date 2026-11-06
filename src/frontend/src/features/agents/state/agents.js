@@ -8,6 +8,7 @@ import { createSelector } from '@reduxjs/toolkit';
 import { ROUTINE_RUN_STATUS, routineRunStatusEvent } from '../../../realtime/eventVocabulary';
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from '../../../store/async';
 
+import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realtimeClient';
 export const initialState = {
   agents: {
     byId: {},
@@ -98,104 +99,52 @@ function upsertAgent(agents, agent) {
   }
 }
 
-export const fetchAgentProfiles = createAcknowledgedThunk('uiData/fetchAgentProfiles', ({ agentsUrl }, { requestId }) => requestAcknowledged(agentsUrl, { requestId }));
+async function targeted(url, options = {}) {
+  await waitForRealtimeClient();
+  const join = url.includes('?') ? '&' : '?';
+  return requestAcknowledged(`${url}${join}client_id=${encodeURIComponent(realtimeClientId)}`, options);
+}
 
-export const requestAgentDetail = createAcknowledgedThunk('uiData/requestAgentDetail', async ({ agentsUrl, agentId }, { requestId }) => {
-  return requestAcknowledged(
-    `${agentsUrl}/${encodeURIComponent(agentId)}`,
-    { requestId },
-  );
-});
-
-export const updateAgentGraph = createAcknowledgedThunk('uiData/updateAgentGraph', ({ agentsUrl, agentId, entry, nodes, edges, status, summary, policy_id, input_schema, output_schema, $defs }, { requestId }) => requestAcknowledged(
-  `${agentsUrl}/${encodeURIComponent(agentId)}/graph`,
-  {
-    method: 'PATCH',
-    body: { entry, nodes, edges, status, summary, policy_id, input_schema, output_schema, $defs },
-    requestId,
-  },
+export const fetchAgentProfiles = createAcknowledgedThunk('uiData/fetchAgentProfiles', ({ agentsUrl }, { requestId }) => targeted(agentsUrl, { requestId }));
+export const requestAgentDetail = createAcknowledgedThunk('uiData/requestAgentDetail', ({ agentsUrl, agentId }, { requestId }) => targeted(`${agentsUrl}/${encodeURIComponent(agentId)}`, { requestId }));
+export const updateAgentGraph = createAcknowledgedThunk('uiData/updateAgentGraph', ({ agentsUrl, agentId, entry, nodes, edges, status, summary, policy_id, input_schema, output_schema, $defs }, { requestId }) => targeted(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/graph`, { method: 'PATCH', requestId, body: { entry, nodes, edges, status, summary, policy_id, input_schema, output_schema, $defs } },
 ));
-
-export const deleteAgentProfile = createAcknowledgedThunk('uiData/deleteAgentProfile', ({ agentsUrl, agentId }, { requestId }) => requestAcknowledged(
-  `${agentsUrl}/${encodeURIComponent(agentId)}`,
-  { method: 'DELETE', requestId },
+export const deleteAgentProfile = createAcknowledgedThunk('uiData/deleteAgentProfile', ({ agentsUrl, agentId }, { requestId }) => targeted(
+  `${agentsUrl}/${encodeURIComponent(agentId)}`, { method: 'DELETE', requestId },
 ));
-
-export const updateObjectAgentProfile = createAcknowledgedThunk('uiData/updateObjectAgentProfile', ({ agentsUrl, agentId, manifest }, { requestId }) => requestAcknowledged(
-  `${agentsUrl}/object/${encodeURIComponent(agentId)}`,
-  {
-    method: 'PATCH',
-    body: manifest,
-    requestId,
-  },
+export const updateObjectAgentProfile = createAcknowledgedThunk('uiData/updateObjectAgentProfile', ({ agentsUrl, agentId, manifest }, { requestId }) => targeted(
+  `${agentsUrl}/object/${encodeURIComponent(agentId)}`, { method: 'PATCH', requestId, body: manifest },
 ));
-
-export const fetchAgentSkillContent = createAcknowledgedThunk('uiData/fetchAgentSkillContent', ({ agentsUrl, skillPath }, { requestId }) => requestAcknowledged(
-  `${agentsUrl}/skills?path=${encodeURIComponent(skillPath)}`,
-  { requestId },
+export const fetchAgentSkillContent = createAcknowledgedThunk('uiData/fetchAgentSkillContent', ({ agentsUrl, skillPath }, { requestId }) => targeted(
+  `${agentsUrl}/skills?path=${encodeURIComponent(skillPath)}`, { requestId },
 ));
-
-export const fetchRoutineRuns = createAcknowledgedThunk('uiData/fetchRoutineRuns', ({ agentsUrl, agentId, before }, { requestId }) => requestAcknowledged(
-  `${agentsUrl}/${encodeURIComponent(agentId)}/runs${before ? `?before=${encodeURIComponent(before)}` : ''}`,
-  { requestId },
+export const fetchRoutineRuns = createAcknowledgedThunk('uiData/fetchRoutineRuns', ({ agentsUrl, agentId, before }, { requestId }) => targeted(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/runs${before ? `?before=${encodeURIComponent(before)}` : ''}`, { requestId },
 ));
-
-export const startRoutineRun = createAcknowledgedThunk('uiData/startRoutineRun', ({ agentsUrl, agentId, sessionId, targetNode, parameters, resumeThreadId }, { requestId }) => requestAcknowledged(
-  `${agentsUrl}/${encodeURIComponent(agentId)}/run`, {
-    method: 'POST', requestId,
-    body: {
-      session_id: sessionId,
-      ...(targetNode ? { target_node: targetNode } : {}),
-      ...(resumeThreadId ? { resume_thread_id: resumeThreadId } : {}),
-      ...(parameters !== undefined ? { parameters } : {}),
-    },
-  },
+export const startRoutineRun = createAcknowledgedThunk('uiData/startRoutineRun', ({ agentsUrl, agentId, sessionId, targetNode, parameters, resumeThreadId }, { requestId }) => targeted(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/run`, { method: 'POST', requestId, body: { session_id: sessionId, ...(targetNode ? { target_node: targetNode } : {}), ...(resumeThreadId ? { resume_thread_id: resumeThreadId } : {}), ...(parameters !== undefined ? { parameters } : {}) } },
 ));
-
-export const controlRoutineRun = createAcknowledgedThunk('uiData/controlRoutineRun', ({ agentsUrl, agentId, threadId, targetRequestId, action }, { requestId }) => requestAcknowledged(
-  `${agentsUrl}/${encodeURIComponent(agentId)}/run-control`, {
-    method: 'POST',
-    requestId,
-    body: { thread_id: threadId, request_id: targetRequestId, action },
-  },
+export const controlRoutineRun = createAcknowledgedThunk('uiData/controlRoutineRun', ({ agentsUrl, agentId, threadId, targetRequestId, action }, { requestId }) => targeted(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/run-control`, { method: 'POST', requestId, body: { thread_id: threadId, request_id: targetRequestId, action } },
 ));
-
-export const continueInterruptedRoutineRun = createAcknowledgedThunk('uiData/continueInterruptedRoutineRun', ({ agentsUrl, agentId, threadId, targetRequestId }, { requestId }) => requestAcknowledged(
-  `${agentsUrl}/${encodeURIComponent(agentId)}/run-continue`, {
-    method: 'POST',
-    requestId,
-    body: { thread_id: threadId, request_id: targetRequestId },
-  },
+export const continueInterruptedRoutineRun = createAcknowledgedThunk('uiData/continueInterruptedRoutineRun', ({ agentsUrl, agentId, threadId, targetRequestId }, { requestId }) => targeted(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/run-continue`, { method: 'POST', requestId, body: { thread_id: threadId, request_id: targetRequestId } },
 ));
-
-export const answerRoutineApproval = createAcknowledgedThunk('uiData/answerRoutineApproval', ({ agentsUrl, agentId, threadId, interruptId, answer }, { requestId }) => requestAcknowledged(
-  `${agentsUrl}/${encodeURIComponent(agentId)}/approval`, {
-    method: 'POST', requestId, body: { thread_id: threadId, interrupt_id: interruptId, answer },
-  },
+export const answerRoutineApproval = createAcknowledgedThunk('uiData/answerRoutineApproval', ({ agentsUrl, agentId, threadId, interruptId, answer }, { requestId }) => targeted(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/approval`, { method: 'POST', requestId, body: { thread_id: threadId, interrupt_id: interruptId, answer } },
 ));
-
-export const fetchRoutineRevisions = createAcknowledgedThunk('uiData/fetchRoutineRevisions', ({ agentsUrl, agentId }, { requestId }) => requestAcknowledged(
-  `${agentsUrl}/${encodeURIComponent(agentId)}/revisions`,
-  { requestId },
+export const fetchRoutineRevisions = createAcknowledgedThunk('uiData/fetchRoutineRevisions', ({ agentsUrl, agentId }, { requestId }) => targeted(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/revisions`, { requestId },
 ));
-
-export const fetchRoutineRevision = createAcknowledgedThunk('uiData/fetchRoutineRevision', ({ agentsUrl, agentId, revisionId }, { requestId }) => requestAcknowledged(
-  `${agentsUrl}/${encodeURIComponent(agentId)}/revisions/${encodeURIComponent(revisionId)}`,
-  { requestId },
+export const fetchRoutineRevision = createAcknowledgedThunk('uiData/fetchRoutineRevision', ({ agentsUrl, agentId, revisionId }, { requestId }) => targeted(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/revisions/${encodeURIComponent(revisionId)}`, { requestId },
 ));
-
-export const fetchRunState = createAcknowledgedThunk('uiData/fetchRunState', ({ agentsUrl, agentId, threadId }, { requestId }) => requestAcknowledged(
-  `${agentsUrl}/${encodeURIComponent(agentId)}/run-state?thread_id=${encodeURIComponent(threadId)}`,
-  { requestId },
+export const fetchRunState = createAcknowledgedThunk('uiData/fetchRunState', ({ agentsUrl, agentId, threadId }, { requestId }) => targeted(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/run-state?thread_id=${encodeURIComponent(threadId)}`, { requestId },
 ));
-
-export const updateAgentSkillContent = createAcknowledgedThunk('uiData/updateAgentSkillContent', ({ agentsUrl, skillPath, content }, { requestId }) => requestAcknowledged(
-  `${agentsUrl}/skills?path=${encodeURIComponent(skillPath)}`,
-  {
-    method: 'PATCH',
-    body: { content },
-    requestId,
-  },
+export const updateAgentSkillContent = createAcknowledgedThunk('uiData/updateAgentSkillContent', ({ agentsUrl, skillPath, content }, { requestId }) => targeted(
+  `${agentsUrl}/skills?path=${encodeURIComponent(skillPath)}`, { method: 'PATCH', requestId, body: { content } },
 ));
 
 export function isRunLifecycleNewer(left, right) {

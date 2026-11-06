@@ -29,16 +29,27 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ui/knowledge", tags=["knowledge"])
 
+KNOWLEDGE_TOPIC = "knowledge"
+
+
+def _require_stream(client_id: str) -> None:
+    if client_id not in events_stream._ui_stream_clients.values():
+        raise HTTPException(
+            status_code=409, detail="Knowledge requests require an active UI stream"
+        )
+
 
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def list_knowledge_bases(
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
-    """Acknowledge a list request and publish the snapshot on the UI stream."""
+    """Acknowledge a list request with a snapshot targeted to the requesting tab."""
+    _require_stream(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     bases = await asyncio.to_thread(snapshot_bases)
-    broadcast_knowledge_snapshot(bases, request_id=request_id)
+    broadcast_knowledge_snapshot(bases, request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.KNOWLEDGE_SNAPSHOT]
     )
@@ -48,14 +59,15 @@ async def list_knowledge_bases(
 async def replace_knowledge_bases(
     payload: dict[str, Any],
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Validate and persist the full knowledge-base settings document.
 
-    The whole ``{"bases": [...]}`` payload is validated, saved, and the snapshot
-    is broadcast so every open Knowledge page updates live.  The backend indexer
-    cleans up orphaned chunks independently.
+    The request-correlated snapshot goes only to the caller; the separate
+    uncorrelated topic event updates other open Knowledge pages.
     """
+    _require_stream(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     try:
         reserved = await asyncio.to_thread(orphaned_page_base_ids)
@@ -65,7 +77,8 @@ async def replace_knowledge_bases(
     new_bases = normalized["bases"]
     await asyncio.to_thread(save_bases, new_bases)
     bases = await asyncio.to_thread(snapshot_bases)
-    broadcast_knowledge_snapshot(bases, request_id=request_id)
+    broadcast_knowledge_snapshot(bases, request_id=request_id, client_id=client_id)
+    broadcast_knowledge_snapshot(bases, exclude_client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.KNOWLEDGE_SNAPSHOT]
     )
@@ -80,12 +93,13 @@ async def _require_base(base_id: str) -> None:
         raise HTTPException(status_code=404, detail="Knowledge base not found.")
 
 
-async def _broadcast_pages(base_id: str, request_id: str) -> None:
+async def _broadcast_pages(base_id: str, request_id: str, client_id: str) -> None:
     pages = await asyncio.to_thread(list_pages, base_id)
     events_stream.broadcast_ui_event(
         events_contracts.UiEvent.KNOWLEDGE_PAGES_SNAPSHOT,
         {"base_id": base_id, "pages": pages},
         request_id=request_id,
+        client_id=client_id,
     )
 
 
@@ -93,12 +107,16 @@ async def _broadcast_pages(base_id: str, request_id: str) -> None:
     "/{base_id}/pages", status_code=202, response_model=http_contracts.UiRequestAcknowledgement
 )
 async def get_knowledge_pages(
-    base_id: str, request: Request, x_request_id: str | None = _REQUEST_ID_HEADER
+    base_id: str,
+    request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
+    x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
-    """Publish the live pages of one base."""
+    """Publish one base's pages to the requesting tab."""
+    _require_stream(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     await _require_base(base_id)
-    await _broadcast_pages(base_id, request_id)
+    await _broadcast_pages(base_id, request_id, client_id)
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.KNOWLEDGE_PAGES_SNAPSHOT]
     )
@@ -110,10 +128,12 @@ async def get_knowledge_pages(
 async def get_knowledge_page(
     base_id: str,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     path: str = _PATH_QUERY,
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
     """Publish one live page (``index.md`` paths are rendered)."""
+    _require_stream(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     await _require_base(base_id)
     page = await asyncio.to_thread(read_page, base_id, path)
@@ -123,6 +143,7 @@ async def get_knowledge_page(
         events_contracts.UiEvent.KNOWLEDGE_PAGE_LOADED,
         {"base_id": base_id, **page},
         request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.KNOWLEDGE_PAGE_LOADED]
@@ -137,10 +158,12 @@ async def get_knowledge_page(
 async def list_knowledge_page_revisions(
     base_id: str,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     path: str = _PATH_QUERY,
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
     """Publish a page's captured revisions, newest first."""
+    _require_stream(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     await _require_base(base_id)
     store = get_default_document_store()
@@ -155,6 +178,7 @@ async def list_knowledge_page_revisions(
             ],
         },
         request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.KNOWLEDGE_PAGE_REVISIONS_LOADED]
@@ -170,10 +194,12 @@ async def get_knowledge_page_revision(
     base_id: str,
     revision_id: str,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     path: str = _PATH_QUERY,
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
     """Publish one revision's content."""
+    _require_stream(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     await _require_base(base_id)
     store = get_default_document_store()
@@ -194,6 +220,7 @@ async def get_knowledge_page_revision(
             "front_matter": front_matter,
         },
         request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.KNOWLEDGE_PAGE_REVISION_LOADED]
@@ -204,24 +231,23 @@ def broadcast_knowledge_snapshot(
     bases: list[dict[str, Any]] | None = None,
     *,
     request_id: str | None = None,
+    client_id: str | None = None,
+    exclude_client_id: str | None = None,
 ) -> events_contracts.UiEventEnvelope:
-    """Broadcast the current knowledge-base list to /api/ui/stream subscribers.
-
-    Emitted after backend-side knowledge mutations and whenever the ``knowledge``
-    state document changes (UI ``PUT`` or an agent edit to ``/config/knowledge.json``
-    surfaced via the Postgres NOTIFY watcher), so the Knowledge page reflects
-    changes live without refetching. Callers that already built the list can pass
-    it in to avoid a second snapshot query and keep the event consistent with the
-    HTTP response.
-    """
+    """Publish the knowledge-base list to a requester or Knowledge-page tabs."""
     payload = knowledge_service.snapshot_bases() if bases is None else bases
     return events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.KNOWLEDGE_SNAPSHOT, {"bases": payload}, request_id=request_id
+        events_contracts.UiEvent.KNOWLEDGE_SNAPSHOT,
+        {"bases": payload},
+        request_id=request_id,
+        client_id=client_id,
+        topic=None if client_id else KNOWLEDGE_TOPIC,
+        exclude_client_id=exclude_client_id,
     )
 
 
 def broadcast_knowledge_pages_snapshot(
-    base_id: str, *, request_id: str | None = None
+    base_id: str, *, request_id: str | None = None, client_id: str | None = None
 ) -> events_contracts.UiEventEnvelope:
     from src.backend.knowledge.pages import list_pages
 
@@ -229,4 +255,6 @@ def broadcast_knowledge_pages_snapshot(
         events_contracts.UiEvent.KNOWLEDGE_PAGES_SNAPSHOT,
         {"base_id": base_id, "pages": list_pages(base_id)},
         request_id=request_id,
+        client_id=client_id,
+        topic=None if client_id else KNOWLEDGE_TOPIC,
     )

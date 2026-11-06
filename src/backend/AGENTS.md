@@ -62,7 +62,7 @@ ordering. Keep connection-scoped interests and response content out of global
 replay where the contract requires isolation.
 
 Chat list requests read `session:` documents only and emit `chat.list.loaded`
-or `chat.list.page` to the requesting `client_id`; row changes go to every tab as
+to the requesting `client_id`; row changes go to every tab as
 `chat.list.row.upserted`/`chat.list.row.deleted`. Detail requests emit one
 tab-targeted `chat.session.selected` with the matching request ID, so selection
 in one tab never changes another tab's selected chat. Frontend pages

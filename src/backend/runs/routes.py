@@ -31,8 +31,10 @@ async def get_runs(
     period: RunPeriod | None = Query(default=None),
     sort: RunSort = Query(default="newest"),
     cursor: str | None = Query(default=None, max_length=1024),
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
+    _require_stream(client_id)
     request_id = request_correlation_id(request, x_request_id)
     runs, next_cursor = await list_runs(
         get_default_document_store(),
@@ -47,6 +49,7 @@ async def get_runs(
         events_contracts.UiEvent.RUNS_SNAPSHOT,
         {"runs": [row.model_dump(mode="json") for row in runs], "next_cursor": next_cursor},
         request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.RUNS_SNAPSHOT]

@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 
 import src.backend.events.contracts as events_contracts
 import src.backend.events.stream as events_stream
@@ -87,12 +87,13 @@ async def _resolve_catalog(marketplace_name: str) -> Any:
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_plugins(
     request: Request,
+    client_id: str | None = Query(default=None, min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Acknowledge a read and publish the plugins snapshot on the UI stream."""
     request_id = _request_correlation_id(request, x_request_id)
     snapshot = await asyncio.to_thread(_load_plugins_document)
-    broadcast_plugins_snapshot(snapshot, request_id=request_id)
+    broadcast_plugins_snapshot(snapshot, request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.PLUGINS_SNAPSHOT]
     )
@@ -102,6 +103,7 @@ async def get_plugins(
 async def install_plugin(
     body: dict[str, Any],
     request: Request,
+    client_id: str | None = Query(default=None, min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Resolve a plugin from its marketplace catalog and add it to the
@@ -177,7 +179,7 @@ async def install_plugin(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    broadcast_plugins_snapshot(saved, request_id=request_id)
+    broadcast_plugins_snapshot(saved, request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.PLUGINS_SNAPSHOT]
     )
@@ -216,6 +218,7 @@ async def uninstall_plugin(
     marketplace: str,
     plugin: str,
     request: Request,
+    client_id: str | None = Query(default=None, min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Remove a plugin from the installed-plugins document."""
@@ -234,7 +237,7 @@ async def uninstall_plugin(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    broadcast_plugins_snapshot(saved, request_id=request_id)
+    broadcast_plugins_snapshot(saved, request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.PLUGINS_SNAPSHOT]
     )
@@ -250,6 +253,7 @@ async def get_plugin_skill_content(
     plugin: str,
     skill_name: str,
     request: Request,
+    client_id: str | None = Query(default=None, min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Publish one installed plugin skill's ``SKILL.md`` body for preview.
@@ -283,7 +287,10 @@ async def get_plugin_skill_content(
             "content": content,
         }
         events_stream.broadcast_ui_event(
-            events_contracts.UiEvent.PLUGIN_SKILL_CONTENT_UPDATED, payload, request_id=request_id
+            events_contracts.UiEvent.PLUGIN_SKILL_CONTENT_UPDATED,
+            payload,
+            request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.PLUGIN_SKILL_CONTENT_UPDATED]
@@ -296,7 +303,10 @@ async def get_plugin_skill_content(
         "content": document.payload["content"],
     }
     events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.PLUGIN_SKILL_CONTENT_UPDATED, payload, request_id=request_id
+        events_contracts.UiEvent.PLUGIN_SKILL_CONTENT_UPDATED,
+        payload,
+        request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.PLUGIN_SKILL_CONTENT_UPDATED]
@@ -307,6 +317,7 @@ def broadcast_plugins_snapshot(
     plugins: dict[str, Any] | None = None,
     *,
     request_id: str | None = None,
+    client_id: str | None = None,
 ) -> events_contracts.UiEventEnvelope:
     """Broadcast the current installed-plugins document to /api/ui/stream subscribers.
 
@@ -322,5 +333,9 @@ def broadcast_plugins_snapshot(
         raw = document.payload if document is not None else default
         plugins = raw if isinstance(raw, dict) else default
     return events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.PLUGINS_SNAPSHOT, plugins, request_id=request_id
+        events_contracts.UiEvent.PLUGINS_SNAPSHOT,
+        plugins,
+        request_id=request_id,
+        client_id=client_id,
+        topic=None if client_id else "plugins",
     )

@@ -7,13 +7,12 @@ the runtime reader.
 
 from __future__ import annotations
 
-import base64
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from src.backend.integrations.runtime_history import RuntimeUnavailable
 from src.backend.storage.documents import (
@@ -268,7 +267,7 @@ class ChatMessagesPageResponse(BaseModel):
 
 
 ChatListSort = Literal["recent", "name"]
-ChatListFilter = Literal["active", "archived", "all"]
+ChatListFilter = Literal["active", "archived", "all", "unread", "error"]
 CHAT_LIST_PAGE_SIZE = 50
 CHAT_LIST_MAX_PAGE_SIZE = 200
 
@@ -285,6 +284,34 @@ class ChatListRow(BaseModel):
     created_at: str | None = None
     last_activity: str | None = None
     preview: str = ""
+    unread: bool = False
+    errored: bool = False
+
+
+class ChatListGroupStarts(BaseModel):
+    """Where the sidebar's time groups begin, as the browser reckons its local days.
+
+    Instants, newest first. Rows older than ``last_week`` fall in ``later``.
+    """
+
+    today: datetime
+    yesterday: datetime
+    this_week: datetime
+    last_week: datetime
+
+    @model_validator(mode="after")
+    def _newest_first(self) -> ChatListGroupStarts:
+        if not self.today >= self.yesterday >= self.this_week >= self.last_week:
+            raise ValueError("chat list group starts must be newest first")
+        return self
+
+    def as_query(self) -> tuple[tuple[str, datetime], ...]:
+        return (
+            ("today", self.today),
+            ("yesterday", self.yesterday),
+            ("this-week", self.this_week),
+            ("last-week", self.last_week),
+        )
 
 
 class ChatListView(BaseModel):
@@ -293,24 +320,31 @@ class ChatListView(BaseModel):
     filter: ChatListFilter = "active"
     source: str | None = None
     thread_ids: list[str] = Field(default_factory=list)
+    # Counted only for the grouped view: recent order over active chats.
+    group_starts: ChatListGroupStarts | None = None
+
+
+class ChatListGroup(BaseModel):
+    key: str
+    count: int
 
 
 class ChatListPage(BaseModel):
     view: ChatListView
+    # Position of ``rows[0]`` in the whole view.
+    offset: int
     rows: list[ChatListRow]
-    # Every row the view matches, regardless of the cursor.
+    # Every row the view matches.
     total: int
-    next_cursor: str | None = None
-
-
-class InvalidChatListCursor(ValueError):
-    """The cursor is malformed or belongs to another sort order."""
+    # Whole-view counts per sidebar group in display order; empty when ungrouped.
+    groups: list[ChatListGroup] = Field(default_factory=list)
 
 
 class ChatPatchRequest(BaseModel):
     title: str | None = None
     pinned: bool | None = None
     archived: bool | None = None
+    unread: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -1046,64 +1080,38 @@ def chat_list_row(payload: dict[str, Any]) -> ChatListRow:
         created_at=_known_session_timestamp(payload.get("created_at")),
         last_activity=_known_session_timestamp(payload.get("last_activity")),
         preview=str(payload.get("preview") or ""),
+        unread=bool(payload.get("unread")),
+        errored=bool(payload.get("errored")),
     )
-
-
-def _encode_list_cursor(sort: ChatListSort, position: tuple[Any, ...]) -> str:
-    raw = json.dumps([sort, *position], separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
-
-
-def _decode_list_cursor(sort: ChatListSort, cursor: str) -> tuple[Any, ...]:
-    try:
-        decoded = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
-    except (ValueError, TypeError) as exc:
-        raise InvalidChatListCursor("Malformed chat list cursor") from exc
-    if not isinstance(decoded, list) or not decoded or decoded[0] != sort:
-        raise InvalidChatListCursor("Chat list cursor belongs to another sort")
-    position = tuple(decoded[1:])
-    valid = (
-        len(position) == 2 and all(isinstance(part, str) for part in position)
-        if sort == "name"
-        else len(position) == 3
-        and isinstance(position[0], bool)
-        and all(isinstance(part, str) for part in position[1:])
-    )
-    if not valid:
-        raise InvalidChatListCursor("Malformed chat list cursor")
-    return position
 
 
 def query_chat_list(
     store: BackendDocumentStore,
     view: ChatListView,
     *,
-    cursor: str | None = None,
+    offset: int = 0,
     limit: int = CHAT_LIST_PAGE_SIZE,
 ) -> ChatListPage:
-    """One page of the conversation list, read from session documents only."""
-    after = _decode_list_cursor(view.sort, cursor) if cursor else None
-    rows, total = store.query_session_rows(
+    """Rows ``offset`` onward of the conversation list, read from session documents only."""
+    grouped = view.group_starts is not None and view.sort == "recent" and view.filter == "active"
+    page = store.query_session_rows(
         SessionRowQuery(
             filter=view.filter,
             sort=view.sort,
             q=view.q.strip(),
             source=view.source,
             thread_ids=tuple(view.thread_ids),
+            group_starts=view.group_starts.as_query() if grouped and view.group_starts else (),
         ),
-        after=after,
-        limit=limit + 1,
+        offset=offset,
+        limit=limit,
     )
-    page = rows[:limit]
     return ChatListPage(
         view=view,
-        rows=[chat_list_row(row.payload) for row in page],
-        total=total,
-        next_cursor=(
-            _encode_list_cursor(view.sort, page[-1].position)
-            if len(rows) > limit and page
-            else None
-        ),
+        offset=offset,
+        rows=[chat_list_row(payload) for payload in page.rows],
+        total=page.total,
+        groups=[ChatListGroup(key=key, count=count) for key, count in page.groups],
     )
 
 
@@ -1183,6 +1191,8 @@ def patch_session_document(
         updates["pinned"] = request.pinned
     if request.archived is not None:
         updates["archived"] = request.archived
+    if request.unread is not None:
+        updates["unread"] = request.unread
     if not updates:
         return ChatSessionPatchResult(payload=payload, changed=False)
     if not store.merge_document_if_changed(

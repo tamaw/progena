@@ -6,6 +6,8 @@ import { UI_EVENT } from '../../../realtime/eventVocabulary';
  * correlated snapshot applies canonical state.
  */
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from '../../../store/async';
+import { withQuery } from '../../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realtimeClient';
 
 export const initialState = {
   modelProfiles: {
@@ -26,7 +28,10 @@ export const initialState = {
 
 export const fetchModelProfiles = createAcknowledgedThunk(
   'uiData/fetchModelProfiles',
-  ({ modelProfilesUrl }, { requestId }) => requestAcknowledged(modelProfilesUrl, { requestId }),
+  async ({ modelProfilesUrl }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(withQuery(modelProfilesUrl, { client_id: realtimeClientId }), { requestId });
+  },
 );
 
 export const patchModelProfile = createAcknowledgedThunk(

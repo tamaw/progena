@@ -43,12 +43,6 @@ export const initialState = {
 
 export const eventHandlers = {
   [UI_EVENT.CONNECTION_READY]: (state, payload) => {
-    const alerts = alertsFrom(payload.alerts) || alertsFrom(payload.status?.alerts);
-    if (alerts) {
-      state.alerts = alerts;
-    }
-  },
-  [UI_EVENT.STATUS_UPDATED]: (state, payload) => {
     const alerts = alertsFrom(payload.alerts);
     if (alerts) {
       state.alerts = alerts;

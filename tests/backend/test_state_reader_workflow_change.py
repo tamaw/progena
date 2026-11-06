@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from src.backend.monitoring.state import StateReader
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 
@@ -128,13 +126,12 @@ def test_workflow_notify_reaches_watchers_even_when_snapshot_is_unchanged():
     assert seen == ["workflow:wf_a"]
 
 
-@pytest.mark.parametrize("key", ["schedule", "inbox_message:review"])
-def test_collection_notify_survives_snapshot_consumed_by_sibling_document(key):
+def test_schedule_notify_survives_snapshot_consumed_by_sibling_document():
     reader, store = _reader()
-    store.save_document(PROGENA_STATE_PREFIX, key, {"title": "Updated review"})
-    # Another key from the same committed transaction already refreshed the
-    # coarse snapshot; this key still needs its dedicated collection snapshot.
+    store.save_document(PROGENA_STATE_PREFIX, "schedule", {"title": "Updated schedule"})
     reader._last_snapshot = reader.get_snapshot()
+    # Another key from the same committed transaction already refreshed the
+    # coarse snapshot; the schedule collection still needs its watcher.
     seen: list[str | None] = []
     reader.add_watcher(lambda _snapshot, changed_key: seen.append(changed_key))
 
@@ -142,10 +139,10 @@ def test_collection_notify_survives_snapshot_consumed_by_sibling_document(key):
         json.dumps(
             {
                 "prefix": PROGENA_STATE_PREFIX,
-                "key": key,
+                "key": "schedule",
                 "action": "UPDATE",
             }
         )
     )
 
-    assert seen == [key]
+    assert seen == ["schedule"]

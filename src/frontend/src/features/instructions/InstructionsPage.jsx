@@ -7,6 +7,8 @@ import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContrac
 import MarkdownContent from '../../components/MarkdownContent';
 import { renderSafeMarkdown } from '../../lib/safeMarkdown';
 import { selectRealtime } from '../../realtime/realtimeSlice';
+import { selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
+import useStreamTopic from '../../hooks/useStreamTopic';
 import { fetchInstruction, fetchInstructionRevision, fetchInstructionRevisions, fetchInstructions, restoreInstructionRevision, saveInstruction, selectInstruction, selectInstructionContentRequest, selectInstructionRevision, selectInstructionRevisionRequest, selectInstructionRevisions, selectInstructionRevisionsRequest, selectInstructions, selectInstructionsState } from './state';
 import PageShell from '../../components/layout/PageShell';
 import DetailPane from '../../components/layout/DetailPane';
@@ -67,6 +69,8 @@ export default function InstructionsPage() {
   const { getApiUrl } = useConfig();
   const instructionsUrl = getApiUrl('instructions');
   const realtime = useSelector(selectRealtime);
+  const streamReady = useSelector(selectRealtimeStreamReady);
+  useStreamTopic('instructions');
   const instructions = useSelector(selectInstructions);
   const { loaded, error: listError } = useSelector(selectInstructionsState);
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('tasks-list');
@@ -105,10 +109,10 @@ export default function InstructionsPage() {
   const dirty = editing && draft.content !== instruction?.content;
 
   useEffect(() => {
-    if (realtime.connected) {
+    if (realtime.connected && streamReady) {
       dispatch(fetchInstructions({ instructionsUrl })).unwrap().catch(() => {});
     }
-  }, [dispatch, instructionsUrl, realtime.connected]);
+  }, [dispatch, instructionsUrl, realtime.connected, streamReady]);
 
   // Open the first instruction when the URL names none, or one that no longer exists.
   useEffect(() => {

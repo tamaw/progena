@@ -21,6 +21,9 @@ class BroadcastUiEvent(Protocol):
         session_id: str | None = None,
         request_id: str | None = None,
         client_id: str | None = None,
+        interest: object | None = None,
+        topic: str | None = None,
+        exclude_client_id: str | None = None,
     ) -> events_contracts.UiEventEnvelope: ...
 
 

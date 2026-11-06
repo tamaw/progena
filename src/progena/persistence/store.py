@@ -177,13 +177,18 @@ class LangGraphRuntimeStore:
         key = name
         conn = getattr(self._store, "conn", None)
         if conn is None:
-            item = await self._store.aget(STATE_NAMESPACE, key)
-            if item is None:
-                return False
-            payload = _item_value(item).get("payload", {})
-            payload.update(fields)
-            await self._store.aput(STATE_NAMESPACE, key, {"payload": payload})
-            return True
+            lock = self._document_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._document_locks[key] = lock
+            async with lock:
+                item = await self._store.aget(STATE_NAMESPACE, key)
+                if item is None:
+                    return False
+                payload = _item_value(item).get("payload", {})
+                payload.update(fields)
+                await self._store.aput(STATE_NAMESPACE, key, {"payload": payload})
+                return True
         params = (json.dumps(fields), key)
         sql = """
             UPDATE store

@@ -29,6 +29,7 @@ def create_insights_router(
         request: Request,
         range: Literal["24h", "7d", "30d"] = Query(default="24h"),
         profile: str | None = Query(default=None),
+        client_id: str | None = Query(default=None, min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
         """Publish one request-correlated checkpoint-backed usage snapshot."""
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
@@ -42,7 +43,10 @@ def create_insights_router(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         broadcast(
-            events_contracts.UiEvent.INSIGHTS_TOKEN_USAGE_SNAPSHOT, snapshot, request_id=request_id
+            events_contracts.UiEvent.INSIGHTS_TOKEN_USAGE_SNAPSHOT,
+            snapshot,
+            request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.INSIGHTS_TOKEN_USAGE_SNAPSHOT]

@@ -33,14 +33,23 @@ operation.
 
 Relevant canonical types are:
 
-- tab-targeted `chat.list.loaded` (first page) and `chat.list.page` (next page
-  on scroll) for the conversation list, built from session documents only;
+- tab-targeted `chat.list.loaded` for any window of the conversation list
+  (by `offset`), built from session documents only, with the view's total and
+  per-group counts for sizing the sidebar's scrollbar;
 - `chat.list.row.upserted` and `chat.list.row.deleted` for one row, sent to
   every tab after a create, rename, pin, archive, delete or finished turn;
 - tab-targeted `chat.session.selected` for opening a chat, carrying its
   detail, queue and background tasks;
 - `chat.response.started`, `chat.response.completed`,
   `chat.response.failed`, and `chat.response.cancelled` for generation lifecycle.
+
+List rows also hydrate persistent `unread`/`errored` indicators. The selected
+conversation clears unread through a metadata PATCH, including when an external
+turn completes while it is open. Reading, starting a retry and cancellation do
+not clear error; only successful completion does. Unread/Error filters use
+server-side pagination and totals, not the subset of rows cached in the browser.
+`PaneListRows` refreshes the visible range on reconnect; the global bridge does
+not independently request page zero.
 
 The dedicated response stream carries only `chat.response.delta` and
 `chat.response.event`. `POST /api/ui/responses`, including a body with

@@ -18,6 +18,7 @@ import {
   PaneSection,
 } from '../../components/layout/PaneList';
 import { usePaneCollapse } from '../../hooks/usePaneCollapse';
+import useStreamTopic from '../../hooks/useStreamTopic';
 import InlineFailure from '../../components/InlineFailure';
 import useMissingEntityRoute from '../../hooks/useMissingEntityRoute';
 import { formatCompactRelativeAge } from '../../lib/displayTime';
@@ -67,9 +68,10 @@ export default function CanvasesPage() {
   const [filter, setFilter] = useState('All');
   const [query, setQuery] = useState('');
 
+  useStreamTopic('canvases');
   useEffect(() => {
-    if (realtime.connected) dispatch(fetchCanvases({ canvasesUrl }));
-  }, [dispatch, canvasesUrl, realtime.connected]);
+    if (realtime.streamReady) dispatch(fetchCanvases({ canvasesUrl }));
+  }, [dispatch, canvasesUrl, realtime.streamReady]);
 
   useMissingEntityRoute({
     hydrated: state.loaded, entityId: name, entities: canvases, getEntityId: (item) => item.name, fallbackPath: '/canvases',

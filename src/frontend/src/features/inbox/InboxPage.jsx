@@ -3,7 +3,6 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../../lib/routes';
 import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
-
 import PageShell from '../../components/layout/PageShell';
 import DetailPane from '../../components/layout/DetailPane';
 import DetailHeader, {
@@ -27,17 +26,30 @@ import {
 } from '../../components/layout/PaneList';
 import { useConfig } from '../../context/ConfigContext';
 import { formatStartedTime } from '../chat/models/conversationModel';
-import { archiveInboxMessage, decideInboxMessage, deleteInboxMessage, fetchInbox, markInboxMessageRead, selectInboxMessages, selectInboxState } from './state';
+import { selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
+import usePositionalListRange from '../../hooks/usePositionalListRange';
+import useStreamResync from '../../hooks/useStreamResync';
+import {
+  archiveInboxMessage,
+  decideInboxMessage,
+  deleteInboxMessage,
+  fetchInboxList,
+  INBOX_LIST_PAGE_SIZE,
+  markInboxMessageRead,
+  normalizeInboxView,
+  requestInboxMessageDetail,
+  sameInboxView,
+  selectInboxState,
+  setInboxMessageInterest,
+} from './state';
 import { formatCompactRelativeAge } from '../../lib/displayTime';
 import InlineFailure from '../../components/InlineFailure';
 import StructuredInboxBody from './StructuredInboxBody';
 import {
-  filterInboxMessages,
   getInboxMessageStatus,
   inboxMessageNeedsDecision,
   INBOX_FILTERS,
   INBOX_STATUS_META,
-  sortInboxMessages,
 } from './inboxPageModel';
 
 const INBOX_SORT_MODES = ['Recent', 'Name'];
@@ -66,163 +78,183 @@ function DecisionIcon({ decision }) {
   );
 }
 
-function previewText(body) {
-  const firstLine = String(body || '')
-    .split('\n')
-    .map((line) => line.trim())
-    .find((line) => line.length > 0) || '';
+function previewText(preview) {
+  const firstLine = String(preview || '').trim();
   return firstLine.length > 120 ? `${firstLine.slice(0, 120)}…` : firstLine;
 }
 
 export default function InboxPage() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  // `titleSlug` is display context only (e.g. /inbox/msg_42/weekly-digest) --
-  // selection is driven entirely by the id, never by the slug.
   const { messageId: urlMessageId } = useParams();
-  const routedMessageId = typeof urlMessageId === 'string' && urlMessageId.trim().length > 0
-    ? urlMessageId
-    : null;
+  const routedMessageId = typeof urlMessageId === 'string' && urlMessageId.trim() ? urlMessageId : null;
   const { getApiUrl } = useConfig();
   const inboxUrl = getApiUrl('inbox');
-  const messages = useSelector(selectInboxMessages);
+  const streamReady = useSelector(selectRealtimeStreamReady);
   const inboxState = useSelector(selectInboxState);
-  const [fallbackSelectedId, setFallbackSelectedId] = useState(null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
   const [sort, setSort] = useState('Recent');
+  const view = useMemo(() => normalizeInboxView({
+    q: query,
+    filter,
+    sort: sort === 'Name' ? 'name' : 'recent',
+  }), [filter, query, sort]);
 
-  // No fetch-on-mount here: RealtimeBridge seeds the inbox globally on
-  // connect (same convention ConversationPage follows for chat sessions),
-  // so the page only ever reads state instead of re-triggering its own GET.
-
-  const visibleMessages = useMemo(
-    () => sortInboxMessages(filterInboxMessages(messages, filter, query), sort),
-    [messages, query, filter, sort],
+  const fetchPage = useCallback(
+    ({ view: pageView, offset, limit }) => dispatch(fetchInboxList({ inboxUrl, view: pageView, offset, limit })),
+    [dispatch, inboxUrl],
   );
+  // PaneListRows requests scroll ranges once it exists; the hook also covers its
+  // empty initial layout, debounces server-side search, and reloads on (re)connect.
+  const requestListRange = usePositionalListRange({
+    list: inboxState,
+    view,
+    sameView: sameInboxView,
+    streamReady,
+    pageSize: INBOX_LIST_PAGE_SIZE,
+    fetchPage,
+  });
 
-  const selectedMessage = useMemo(
-    () => messages.find((message) => message.id === (routedMessageId || fallbackSelectedId)) || null,
-    [fallbackSelectedId, messages, routedMessageId],
-  );
+  const selectedMessageId = routedMessageId;
+  const selectedRow = selectedMessageId ? inboxState.byId[selectedMessageId] || null : null;
+  const selectedDetail = inboxState.active.messageId === selectedMessageId
+    ? inboxState.active.detail
+    : null;
+  const selectedMessage = selectedDetail || selectedRow;
 
-  // A routed message id that no longer exists is cleared back to /inbox above;
-  // otherwise the detail pane simply reflects the currently selected message.
+  // A deletion is an explicit absence signal; unlike an unloaded deep-link
+  // row, it may safely clear the selection route.
+  useEffect(() => {
+    if (!selectedMessageId || !inboxState.tombstones[selectedMessageId]) return;
+    navigate('/inbox', { replace: true });
+  }, [inboxState.tombstones, navigate, selectedMessageId]);
 
-  // Clicking a card owns the route: mounted navigation to another id must swap
-  // detail immediately instead of waiting for mount-only state to catch up.
+  // A deep link can target a row that is outside the list window. Its direct
+  // detail request is authoritative; an unloaded sidebar row never clears it.
+  const requestedDetailRef = useRef(null);
+  // A reconnect can have missed a selected-only update, and the server drops the
+  // selected-message interest with the stream. Ask for the open message again:
+  // GET selection both rehydrates the body and installs the renewed interest.
+  const openMessageIdRef = useRef(selectedMessageId);
+  useEffect(() => {
+    openMessageIdRef.current = selectedMessageId;
+  }, [selectedMessageId]);
+  useStreamResync(() => {
+    const messageId = openMessageIdRef.current;
+    if (!messageId) return;
+    requestedDetailRef.current = `${inboxUrl}:${messageId}`;
+    dispatch(requestInboxMessageDetail({ inboxUrl, messageId }));
+  });
+  useEffect(() => {
+    if (!streamReady || !selectedMessageId) return;
+    const detailKey = `${inboxUrl}:${selectedMessageId}`;
+    if (requestedDetailRef.current === detailKey) return;
+    requestedDetailRef.current = detailKey;
+    dispatch(requestInboxMessageDetail({ inboxUrl, messageId: selectedMessageId }));
+  }, [dispatch, inboxUrl, selectedMessageId, streamReady]);
+  useEffect(() => () => {
+    dispatch(setInboxMessageInterest({ inboxUrl, messageId: null, watching: false }));
+  }, [dispatch, inboxUrl]);
+  useEffect(() => {
+    if (selectedMessageId || !requestedDetailRef.current) return;
+    requestedDetailRef.current = null;
+    dispatch(setInboxMessageInterest({ inboxUrl, messageId: null }));
+  }, [dispatch, inboxUrl, selectedMessageId]);
+
+  const hasAutoSelectedRef = useRef(false);
+  useEffect(() => {
+    if (!inboxState.loaded || routedMessageId || hasAutoSelectedRef.current) return;
+    hasAutoSelectedRef.current = true;
+    const firstId = inboxState.rowsByIndex[0];
+    const firstMessage = firstId ? inboxState.byId[firstId] : null;
+    if (firstMessage) {
+      navigate(buildEntityPath('/inbox', firstMessage.id, firstMessage.title), { replace: true });
+    }
+  }, [inboxState.byId, inboxState.loaded, inboxState.rowsByIndex, navigate, routedMessageId]);
+
   const selectMessage = useCallback((message) => {
     navigate(buildEntityPath('/inbox', message.id, message.title), { replace: true });
   }, [navigate]);
 
-  // On mount, a bare /inbox route auto-selects the top visible card once so the
-  // page opens onto useful content. A routed message id stays authoritative on
-  // every change instead of being treated as mount-only state.
-  const hasAutoSelectedRef = useRef(false);
-  useEffect(() => {
-    if (!inboxState.loaded) {
-      return;
-    }
-    if (routedMessageId) {
-      hasAutoSelectedRef.current = true;
-      if (!messages.some((message) => message.id === routedMessageId)) {
-        navigate('/inbox', { replace: true });
-      }
-      return;
-    }
-    if (hasAutoSelectedRef.current) {
-      return;
-    }
-    hasAutoSelectedRef.current = true;
-    if (visibleMessages.length === 0) {
-      return;
-    }
-    Promise.resolve().then(() => setFallbackSelectedId(visibleMessages[0].id));
-  }, [inboxState.loaded, messages, navigate, routedMessageId, visibleMessages]);
-
-  // Selecting a message (whether by route, auto-select, or a click above) marks
-  const selectedMessageId = selectedMessage?.id;
-  const selectedMessageRead = selectedMessage?.read;
-  const selectedMessageTitle = selectedMessage?.title;
-  const selectedMessageStatus = getInboxMessageStatus(selectedMessage);
-
-  // Selecting a message (whether by route, auto-select, or a click above) marks
-  // it read optimistically; the snapshot that follows reconciles. Keyed by id
-  // (not read) so this only fires once per *selection*, not every time --
-  // otherwise a manual "mark unread" on the still-selected message would
-  // immediately be flipped back to read by this same effect.
+  // The full selected detail, not a sidebar cache row, controls the one-time
+  // read acknowledgement. A manual unread toggle therefore remains explicit.
   const autoMarkedReadIdRef = useRef(null);
   useEffect(() => {
-    if (!selectedMessageId || autoMarkedReadIdRef.current === selectedMessageId) {
-      return;
+    if (!selectedDetail?.id || autoMarkedReadIdRef.current === selectedDetail.id) return;
+    autoMarkedReadIdRef.current = selectedDetail.id;
+    if (!selectedDetail.read) {
+      dispatch(markInboxMessageRead({ inboxUrl, messageId: selectedDetail.id, read: true }));
     }
-    autoMarkedReadIdRef.current = selectedMessageId;
-    if (selectedMessageRead) {
-      return;
-    }
-    dispatch(markInboxMessageRead({ inboxUrl, messageId: selectedMessageId, read: true }));
-  }, [dispatch, inboxUrl, selectedMessageId, selectedMessageRead]);
+  }, [dispatch, inboxUrl, selectedDetail]);
 
-  // Keep the URL in sync with whichever message is selected. The title slug
-  // is cosmetic; only the id segment is ever read back.
-  useEntityUrlSync('/inbox', selectedMessage?.id, selectedMessage?.title);
+  useEntityUrlSync('/inbox', selectedMessageId, selectedMessage?.title);
 
   const toggleRead = useCallback(() => {
-    if (!selectedMessageId) return;
+    if (!selectedMessageId || !selectedMessage) return;
     dispatch(markInboxMessageRead({
       inboxUrl,
       messageId: selectedMessageId,
-      read: !selectedMessageRead,
+      read: !selectedMessage.read,
     }));
-  }, [dispatch, inboxUrl, selectedMessageId, selectedMessageRead]);
-
+  }, [dispatch, inboxUrl, selectedMessage, selectedMessageId]);
   const decide = useCallback((decision) => {
-    if (!selectedMessageId) return;
-    dispatch(decideInboxMessage({ inboxUrl, messageId: selectedMessageId, decision }));
+    if (selectedMessageId) dispatch(decideInboxMessage({ inboxUrl, messageId: selectedMessageId, decision }));
   }, [dispatch, inboxUrl, selectedMessageId]);
-
   const toggleArchive = useCallback(() => {
-    if (!selectedMessageId) return;
+    if (!selectedMessageId || !selectedMessage) return;
     dispatch(archiveInboxMessage({
       inboxUrl,
       messageId: selectedMessageId,
-      archived: !selectedMessage?.archived,
+      archived: !selectedMessage.archived,
     }));
-    // Archiving (or unarchiving) the selected message can push it out of the
-    // current filter's visible list, same as delete -- clear the selection
-    // instead of leaving the detail pane stuck on a now-hidden message.
-    setFallbackSelectedId(null);
     navigate('/inbox', { replace: true });
-  }, [dispatch, inboxUrl, navigate, selectedMessage?.archived, selectedMessageId]);
-
+  }, [dispatch, inboxUrl, navigate, selectedMessage, selectedMessageId]);
   const removeMessage = useCallback(() => {
     if (!selectedMessageId) return;
     dispatch(deleteInboxMessage({ inboxUrl, messageId: selectedMessageId }));
-    setFallbackSelectedId(null);
     navigate('/inbox', { replace: true });
   }, [dispatch, inboxUrl, navigate, selectedMessageId]);
-
-  // Composing/editing is delegated to the Progena agent via quick chat (same
-  // pattern as Tasks and Schedules): the agent writes /inbox/<id>.md and the
-  // new/changed message arrives here live via inbox.snapshot.
   const openCompose = useCallback(() => {
     dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.INBOX_COMPOSE });
   }, []);
-
   const openEditInChat = useCallback(() => {
-    if (!selectedMessageId) return;
-    dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.INBOX_EDIT, subtitle: selectedMessageTitle });
-  }, [selectedMessageId, selectedMessageTitle]);
+    if (selectedMessageId) {
+      dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.INBOX_EDIT, subtitle: selectedMessage?.title });
+    }
+  }, [selectedMessage?.title, selectedMessageId]);
 
   const listEmptyMessage = query.trim()
-      ? 'No messages match your search'
-      : filter === 'unread'
-        ? 'No unread messages'
-        : filter === 'pending'
-          ? 'No messages pending approval'
-          : filter === 'archived'
-            ? 'No archived messages'
-            : 'No messages yet';
+    ? 'No messages match your search'
+    : filter === 'unread'
+      ? 'No unread messages'
+      : filter === 'pending'
+        ? 'No messages pending approval'
+        : filter === 'archived'
+          ? 'No archived messages'
+          : 'No messages yet';
+  const selectedStatus = getInboxMessageStatus(selectedMessage);
+  const virtualList = useMemo(() => ({
+    total: inboxState.total,
+    rowHeight: 51,
+    headerHeight: 0,
+    groups: [],
+    rowAt: (index) => {
+      const messageId = inboxState.rowsByIndex[index];
+      return messageId ? inboxState.byId[messageId] : undefined;
+    },
+    onRangeNeeded: requestListRange,
+    refreshKey: inboxState.listRefreshVersion || streamReady,
+    rowDelta: inboxState.rowDelta,
+  }), [
+    inboxState.byId,
+    inboxState.listRefreshVersion,
+    inboxState.rowDelta,
+    inboxState.rowsByIndex,
+    inboxState.total,
+    requestListRange,
+    streamReady,
+  ]);
 
   return (
     <PageShell className="inbox-page" label="Inbox">
@@ -236,26 +268,21 @@ export default function InboxPage() {
         />
         <PaneListToolbar>
           <PaneListSearch value={query} placeholder="Search messages" onChange={setQuery} />
-          <PaneListSortButton
-            title="Sort messages"
-            options={INBOX_SORT_MODES}
-            value={sort}
-            onSelect={setSort}
-          />
+          <PaneListSortButton title="Sort messages" options={INBOX_SORT_MODES} value={sort} onSelect={setSort} />
         </PaneListToolbar>
-        <InlineFailure failure={inboxState.error} operation="Load messages" onRetry={() => dispatch(fetchInbox({ inboxUrl }))} />
-        {visibleMessages.length === 0 ? (
+        <InlineFailure failure={inboxState.error} operation="Load messages" onRetry={() => requestListRange(0, INBOX_LIST_PAGE_SIZE, true)} />
+        {inboxState.total === 0 ? (
           !inboxState.error && <PaneEmptyState>{listEmptyMessage}</PaneEmptyState>
         ) : (
           <PaneListRows
-            items={visibleMessages}
+            virtual={virtualList}
             getItemKey={(message) => message.id}
             renderItem={(message) => {
               const status = getInboxMessageStatus(message);
-              const isUnread = status === 'unread';
+              const preview = previewText(message.preview);
               return (
                 <article
-                  className={`chat-session-card${message.id === selectedMessageId ? ' is-selected' : ''}${isUnread ? ' is-unread' : ''}`}
+                  className={`chat-session-card${message.id === selectedMessageId ? ' is-selected' : ''}${status === 'unread' ? ' is-unread' : ''}`}
                   role="button"
                   tabIndex={0}
                   aria-current={message.id === selectedMessageId ? 'true' : undefined}
@@ -268,16 +295,11 @@ export default function InboxPage() {
                   }}
                 >
                   <div className="chat-session-card__top">
-                    <span
-                      className={`chat-session-card__dot ${INBOX_STATUS_META[status].dotClass}`}
-                      aria-hidden="true"
-                    />
+                    <span className={`chat-session-card__dot ${INBOX_STATUS_META[status].dotClass}`} aria-hidden="true" />
                     <span className="chat-session-card__title">{message.title || message.id}</span>
                     <span className="chat-session-card__age">{formatCompactRelativeAge(message.created_at)}</span>
                   </div>
-                  {previewText(message.body) ? (
-                    <div className="chat-session-card__preview">{previewText(message.body)}</div>
-                  ) : null}
+                  {preview ? <div className="chat-session-card__preview">{preview}</div> : null}
                 </article>
               );
             }}
@@ -289,13 +311,10 @@ export default function InboxPage() {
         <DetailHeader
           title={selectedMessage
             ? (selectedMessage.title || selectedMessage.id)
-            : (messages.length === 0 ? 'Inbox is empty' : 'No message selected')}
+            : (inboxState.total === 0 ? 'Inbox is empty' : 'No message selected')}
           meta={selectedMessage ? [
-            <DetailStatus
-              key="status"
-              tone={INBOX_STATUS_META[selectedMessageStatus].tone}
-            >
-              {INBOX_STATUS_META[selectedMessageStatus].label}
+            <DetailStatus key="status" tone={INBOX_STATUS_META[selectedStatus].tone}>
+              {INBOX_STATUS_META[selectedStatus].label}
             </DetailStatus>,
             selectedMessage.decision
               ? (
@@ -309,32 +328,19 @@ export default function InboxPage() {
               ? <span key="created" className="muted">Created {formatStartedTime(selectedMessage.created_at)}</span>
               : null,
             selectedMessage.read_at
-              ? <span key="read_at" className="muted">Read {formatStartedTime(selectedMessage.read_at)}</span>
+              ? <span key="read" className="muted">Read {formatStartedTime(selectedMessage.read_at)}</span>
               : null,
             <span key="id" className="taskid">#{selectedMessage.id}</span>,
           ] : []}
           actions={(
             <DetailHeaderActions>
               {inboxMessageNeedsDecision(selectedMessage) && (
-                <DetailHeaderAction
-                  icon={<ApproveActionIcon />}
-                  label="Approve"
-                  onClick={() => decide('approved')}
-                />
+                <DetailHeaderAction icon={<ApproveActionIcon />} label="Approve" onClick={() => decide('approved')} />
               )}
               {inboxMessageNeedsDecision(selectedMessage) && (
-                <DetailHeaderAction
-                  icon={<RejectActionIcon />}
-                  label="Reject"
-                  onClick={() => decide('rejected')}
-                />
+                <DetailHeaderAction icon={<RejectActionIcon />} label="Reject" onClick={() => decide('rejected')} />
               )}
-              <DetailHeaderAction
-                icon={<EditActionIcon />}
-                label="Edit in chat"
-                onClick={openEditInChat}
-                disabled={!selectedMessage}
-              />
+              <DetailHeaderAction icon={<EditActionIcon />} label="Edit in chat" onClick={openEditInChat} disabled={!selectedMessage} />
               <DetailHeaderAction
                 icon={<MarkUnreadActionIcon />}
                 label={selectedMessage?.read === false ? 'Mark read' : 'Mark unread'}
@@ -361,13 +367,21 @@ export default function InboxPage() {
           )}
         />
         <div className="detail-pane__body inbox-detail__body">
-          {selectedMessage ? (
-            <StructuredInboxBody key={selectedMessage.id} message={selectedMessage} inboxUrl={inboxUrl} />
+          {selectedDetail ? (
+            <StructuredInboxBody key={selectedDetail.id} message={selectedDetail} />
+          ) : selectedMessageId && inboxState.active.loading ? (
+            <div className="welcome-message"><h2>Loading message…</h2></div>
+          ) : inboxState.active.error ? (
+            <InlineFailure
+              failure={inboxState.active.error}
+              operation="Load message"
+              onRetry={() => dispatch(requestInboxMessageDetail({ inboxUrl, messageId: selectedMessageId }))}
+            />
           ) : (
             <div className="welcome-message">
-              <h2>{messages.length === 0 ? 'Your inbox is empty' : 'No message selected'}</h2>
+              <h2>{inboxState.total === 0 ? 'Your inbox is empty' : 'No message selected'}</h2>
               <p className="muted">
-                {messages.length === 0
+                {inboxState.total === 0
                   ? 'Messages the agent sends you will show up here.'
                   : 'Select a message from the list to read it.'}
               </p>

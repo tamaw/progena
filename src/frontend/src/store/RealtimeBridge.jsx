@@ -4,10 +4,9 @@ import { useConfig } from '../context/ConfigContext';
 import { startRealtimeStream, stopRealtimeStream } from '../realtime/realtimeListener';
 import { selectRealtimeConnected, selectRealtimeStreamReady } from '../realtime/realtimeSlice';
 import {
-  fetchChatSessions,
   requestChatSessionReconciliation,
 } from '../features/chat/state/chats';
-import { fetchInbox } from '../features/inbox/state';
+import { fetchInboxCounts } from '../features/inbox/state';
 import { fetchModelProfiles } from '../features/settings/state/modelProfiles';
 function selectReconnectChat(state) {
   const chats = state?.uiData?.chats;
@@ -17,9 +16,6 @@ function selectReconnectChat(state) {
   return Object.values(responseThreads).includes(threadId) ? null : threadId;
 }
 
-function selectChatView(state) {
-  return state?.uiData?.chats?.view || { q: '', sort: 'recent', filter: 'active' };
-}
 
 export default function RealtimeBridge() {
   const dispatch = useDispatch();
@@ -27,7 +23,6 @@ export default function RealtimeBridge() {
   const realtimeConnected = useSelector(selectRealtimeConnected);
   const streamReady = useSelector(selectRealtimeStreamReady);
   const reconnectChatThreadId = useSelector(selectReconnectChat);
-  const chatView = useSelector(selectChatView);
   const requestedInboxUrlRef = useRef(null);
   const requestedProfilesUrlRef = useRef(null);
   const hasConnectedRef = useRef(false);
@@ -56,29 +51,22 @@ export default function RealtimeBridge() {
     wasConnectedRef.current = true;
     if (!reconnected) return;
 
-    dispatch(fetchChatSessions({
-      chatsUrl,
-      view: chatView,
-      limit: 50,
-    }));
     if (reconnectChatThreadId) {
       dispatch(requestChatSessionReconciliation({ chatsUrl, threadId: reconnectChatThreadId }));
     }
-  }, [chatView, chatsUrl, dispatch, realtimeConnected, reconnectChatThreadId]);
+  }, [chatsUrl, dispatch, realtimeConnected, reconnectChatThreadId]);
 
-  // Seed the inbox globally so the nav unread badge is correct before the
-  // Inbox page is ever visited; SSE snapshots keep it fresh thereafter.
+  // The shell needs only the authoritative unread count before Inbox is
+  // visited. Sidebar pages request their own positional list ranges.
   useEffect(() => {
-    if (!realtimeConnected) {
+    if (!streamReady) {
       requestedInboxUrlRef.current = null;
       return;
     }
-    if (requestedInboxUrlRef.current === inboxUrl) {
-      return;
-    }
+    if (requestedInboxUrlRef.current === inboxUrl) return;
     requestedInboxUrlRef.current = inboxUrl;
-    dispatch(fetchInbox({ inboxUrl }));
-  }, [dispatch, inboxUrl, realtimeConnected]);
+    dispatch(fetchInboxCounts({ inboxUrl }));
+  }, [dispatch, inboxUrl, streamReady]);
 
   // Profiles serve both their management page and routine model selectors.
   useEffect(() => {

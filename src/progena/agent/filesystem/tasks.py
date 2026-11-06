@@ -40,7 +40,7 @@ class KanbanTaskDirectoryBackend(_AsyncOnlyFileBackendMixin):
     its own ``kanban_card:<id>`` document in the shared Postgres store, so the
     agent edits one task per file and a write touches a single row. Persistence
     flows through the StateManager, so the existing LISTEN/NOTIFY pipeline pushes
-    ``kanban.snapshot`` to the Tasks UI with no bespoke tool.
+    ``tasks.snapshot`` to the Tasks UI with no bespoke tool.
 
     Cards may optionally belong to a project, grouped by directory: an unscoped
     card lives at ``<id>.md``; a card in a project lives at

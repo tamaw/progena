@@ -61,12 +61,13 @@ def _next_sse_frame(lines: Iterator[str]) -> tuple[str, dict[str, object]]:
 
 def test_finite_ui_request_returns_client_id_and_matching_stream_event():
     """The finite acknowledgement and serialized canonical frame share the client ID."""
+    client_id = "finite-request-tab"
     request_id = "client-generated-operation-id"
 
     with (
         _live_backend() as base_url,
         httpx.Client(base_url=base_url, timeout=5) as client,
-        client.stream("GET", "/api/ui/stream") as stream,
+        client.stream("GET", f"/api/ui/stream?client_id={client_id}") as stream,
     ):
         assert stream.headers["content-type"].startswith("text/event-stream")
         lines = stream.iter_lines()
@@ -75,7 +76,7 @@ def test_finite_ui_request_returns_client_id_and_matching_stream_event():
         assert ready["type"] == "connection.ready"
 
         response = client.get(
-            "/api/ui/widgets",
+            f"/api/ui/widgets?client_id={client_id}",
             headers={"X-Operation-Id": request_id},
         )
         event_name, event = _next_sse_frame(lines)

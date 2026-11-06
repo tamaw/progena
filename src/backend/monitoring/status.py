@@ -8,11 +8,9 @@ import time
 
 import src.backend.agents.routes as agents_routes
 import src.backend.agents.store as agents_store
-import src.backend.alerts.routes as alerts_routes
 import src.backend.canvases.routes as canvases_routes
 import src.backend.chat.routes as chat_routes
 import src.backend.events.stream as events_stream
-import src.backend.inbox.routes as inbox_routes
 import src.backend.instructions.routes as instructions_routes
 import src.backend.integrations.runtime as integrations_runtime
 import src.backend.knowledge.routes as knowledge_routes
@@ -60,8 +58,16 @@ _active_model_profile_broadcast_tasks: set[asyncio.Task] = set()
 _active_chat_list_row_tasks: set[asyncio.Task] = set()
 
 
+# Tabs on the Dashboard watch this topic for runtime status.
+STATUS_TOPIC = "dashboard"
+
+
 async def _get_current_status() -> dict:
-    """Get current server status for SSE broadcast."""
+    """Runtime status for the Dashboard: process metrics, run state, loops and backlog.
+
+    Only the Dashboard reads this. Widgets, alerts, agents, tools and schedule have
+    their own events; they are not repeated here.
+    """
 
     state_reader = monitoring_state.get_state_reader()
     snapshot = state_reader.get_snapshot()
@@ -99,51 +105,11 @@ async def _get_current_status() -> dict:
             }
             for loop_item in snapshot.loops
         ],
-        # Agents
-        "agents": [
-            {
-                "name": a.name,
-                "kind": a.kind,
-                "version": a.version,
-                "description": a.description,
-                "enabled": a.enabled,
-                "status": "ready" if snapshot.health.is_running() else "offline",
-            }
-            for a in snapshot.agents
-        ],
-        "tools": [
-            {"name": tool.name, "description": tool.description, "enabled": tool.enabled}
-            for tool in snapshot.tools
-        ],
         # Backlog
         "backlog": [
             {"id": b.id, "type": b.item_type, "status": b.status, "description": b.description}
             for b in snapshot.backlog
         ],
-        # Schedule
-        "schedule": [
-            {"id": s.id, "name": s.name, "schedule": s.schedule, "enabled": s.enabled}
-            for s in snapshot.schedule
-        ],
-        # Build status
-        "build": {
-            "in_progress": snapshot.build.in_progress if snapshot.build else False,
-            "phase": snapshot.build.phase if snapshot.build else None,
-            "task_description": snapshot.build.task_description if snapshot.build else None,
-            "started_at": snapshot.build.started_at if snapshot.build else None,
-            "iteration": snapshot.build.iteration if snapshot.build else 0,
-            "score": snapshot.build.score if snapshot.build else 0.0,
-            "message_count": snapshot.build.message_count if snapshot.build else 0,
-        }
-        if snapshot.build
-        else None,
-        "widgets": state_reader.get_widgets(),
-        "sessions": {
-            "total": snapshot.sessions.total if snapshot.sessions else 0,
-            "latest_session_id": snapshot.sessions.latest_session_id if snapshot.sessions else None,
-            "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
-        },
-        "alerts": alerts_routes._alerts_payload(),
     }
 
     if shutdown_mgr and shutdown_mgr.is_shutting_down:
@@ -198,12 +164,16 @@ def _process_metrics() -> dict:
 
 
 async def _status_monitor():
-    """Push process-level metrics to SSE subscribers on a fixed cadence.
+    """Push process-level metrics to the tabs watching the Dashboard.
 
     Only metrics (uptime/memory) are sent here; DB-derived state is carried by
-    the LISTEN/NOTIFY watcher, so this loop never reads the database.
+    the LISTEN/NOTIFY watcher, so this loop never reads the database. Nothing is
+    computed or sent while no tab is on the Dashboard: connection liveness is the
+    stream's own `connection.heartbeat`, not this tick.
     """
-    update_interval = 3  # Refresh process metrics every 3 seconds
+    update_interval = (
+        5  # Refresh process metrics every 5 seconds, only while a tab is on the Dashboard
+    )
 
     logger.info("[StatusMonitor] Starting process-metrics loop")
 
@@ -211,11 +181,11 @@ async def _status_monitor():
         try:
             await asyncio.sleep(update_interval)
 
-            if not events_stream._ui_stream_subscribers:
-                continue  # No subscribers, skip
+            if not events_stream.has_topic_watchers(STATUS_TOPIC):
+                continue
 
             events_stream.broadcast_ui_event(
-                events_contracts.UiEvent.STATUS_UPDATED, _process_metrics()
+                events_contracts.UiEvent.STATUS_UPDATED, _process_metrics(), topic=STATUS_TOPIC
             )
 
         except asyncio.CancelledError:
@@ -229,8 +199,11 @@ async def _status_monitor():
 async def _broadcast_latest_status() -> None:
     global _state_watch_push_task
     try:
-        current = await _get_current_status()
-        events_stream.broadcast_ui_event(events_contracts.UiEvent.STATUS_UPDATED, current)
+        if events_stream.has_topic_watchers(STATUS_TOPIC):
+            current = await _get_current_status()
+            events_stream.broadcast_ui_event(
+                events_contracts.UiEvent.STATUS_UPDATED, current, topic=STATUS_TOPIC
+            )
     finally:
         _state_watch_push_task = None
 
@@ -276,8 +249,6 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             or changed_key.startswith(tasks_service._KANBAN_CARD_KEY_PREFIX)
         ):
             tasks_service.broadcast_kanban_snapshot()
-        if changed_key is None or changed_key.startswith(inbox_routes.INBOX_MESSAGE_KEY_PREFIX):
-            inbox_routes._broadcast_inbox_snapshot()
         if changed_key in (None, "mcp", "mcp_tools"):
             settings_mcp.broadcast_mcp_snapshot()
         if changed_key in (None, "schedule"):
@@ -388,11 +359,3 @@ def stop_status_monitor():
     if _status_monitor_task and not _status_monitor_task.done():
         _status_monitor_task.cancel()
         logger.info("Status monitor stopped")
-
-
-def broadcast_status_change(status: str, details: dict | None = None):
-    """Broadcast a status change to all subscribers."""
-    events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.STATUS_UPDATED,
-        {"status": status, "details": details or {}, "timestamp": time.time()},
-    )

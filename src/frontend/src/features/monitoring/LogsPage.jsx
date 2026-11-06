@@ -7,6 +7,7 @@ import { useLogsApi } from './useLogsApi';
 import { selectLogsExport, selectLogsPage, selectLogsState } from './logsState';
 import { requestAcknowledged, withQuery } from '../../store/http';
 import { selectRealtime } from '../../realtime/realtimeSlice';
+import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
 import { createUuid } from '../../lib/uuid';
 import Select from '../../components/Select';
 import InlineFailure from '../../components/InlineFailure';
@@ -581,10 +582,10 @@ function LogsPage() {
     }, 250);
   }, [loadLogs]);
 
-  const realtimeConnected = useSelector(selectRealtime).connected;
+  const streamReady = useSelector(selectRealtime).streamReady;
 
   useEffect(() => {
-    if (!realtimeConnected) {
+    if (!streamReady) {
       return;
     }
     if (newestCursorRef.current) {
@@ -592,7 +593,7 @@ function LogsPage() {
     } else {
       void loadLogs({ incremental: false });
     }
-  }, [realtimeConnected, loadLogs, queueIncrementalRefresh]);
+  }, [streamReady, loadLogs, queueIncrementalRefresh]);
   const handleScroll = useCallback((event) => {
     const nextScrollTop = event.currentTarget.scrollTop;
     setScrollTop(nextScrollTop);
@@ -634,8 +635,13 @@ function LogsPage() {
 
   const handleExport = useCallback(async () => {
     const requestId = createUuid();
-    const params = buildQueryParams(requestFilters, { format: 'csv', ...(level ? { level } : {}) });
+    const params = buildQueryParams(requestFilters, {
+      format: 'csv',
+      ...(level ? { level } : {}),
+      client_id: realtimeClientId,
+    });
     try {
+      await waitForRealtimeClient();
       const acknowledgement = await requestAcknowledged(
         withQuery(getApiUrl('/api/ui/logs/export'), params),
         { requestId },

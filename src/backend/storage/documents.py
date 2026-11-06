@@ -78,7 +78,7 @@ class StoredDocument:
 
 
 SessionRowSort = Literal["recent", "name"]
-SessionRowFilter = Literal["active", "archived", "all"]
+SessionRowFilter = Literal["active", "archived", "all", "unread", "error"]
 
 
 @dataclass(frozen=True)
@@ -87,6 +87,9 @@ class SessionRowQuery:
 
     ``recent`` is pinned first, then latest activity; ``name`` is the display
     title A→Z. ``q`` matches title, first message and preview, case-insensitively.
+    ``group_starts`` are the caller's time-group boundaries, newest first (e.g.
+    the browser's local "today" and "yesterday" as UTC instants); when given, the
+    page also counts the whole view per group.
     """
 
     filter: SessionRowFilter = "active"
@@ -94,19 +97,82 @@ class SessionRowQuery:
     q: str = ""
     source: str | None = None
     thread_ids: tuple[str, ...] = ()
+    group_starts: tuple[tuple[str, datetime], ...] = ()
+
+
+# Rows that are pinned, or older than every group start, land in these groups.
+SESSION_PINNED_GROUP = "pinned"
+SESSION_OLDEST_GROUP = "later"
 
 
 @dataclass(frozen=True)
-class SessionRow:
-    """One session document without its transcript, plus its keyset position.
+class SessionRowPage:
+    """One window of ``session:`` payloads (no ``content``) and counts for the whole view.
 
-    ``position`` is ``(pinned, activity ISO instant, key)`` for ``recent`` and
-    ``(lower-case name, key)`` for ``name``; pass the last row's back as ``after``.
+    ``groups`` is ``(key, count)`` in display order: pinned, each group start,
+    then the oldest group; empty unless the query gave ``group_starts``.
     """
 
-    key: str
-    payload: dict[str, Any]
-    position: tuple[Any, ...]
+    rows: list[dict[str, Any]]
+    total: int
+    groups: list[tuple[str, int]]
+
+
+InboxRowSort = Literal["recent", "name"]
+InboxRowFilter = Literal["all", "unread", "pending", "archived"]
+
+
+@dataclass(frozen=True)
+class InboxRowQuery:
+    """Which inbox-message rows a browser list page includes."""
+
+    filter: InboxRowFilter = "all"
+    sort: InboxRowSort = "recent"
+    q: str = ""
+
+
+@dataclass(frozen=True)
+class InboxRowPage:
+    """A slim inbox-message row page and the matching total."""
+
+    rows: list[dict[str, Any]]
+    total: int
+
+
+def _inbox_instant(value: Any) -> datetime:
+    return _session_instant(value) or _SESSION_EPOCH
+
+
+def _inbox_preview(value: Any) -> str:
+    """First nonblank body line, bounded for list transport."""
+
+    for line in str(value or "").splitlines():
+        preview = line.strip()
+        if preview:
+            return preview[:200]
+    return ""
+
+
+def _inbox_row_matches(key: str, payload: dict[str, Any], query: InboxRowQuery) -> bool:
+    del key
+    archived = bool(payload.get("archived"))
+    if query.filter == "archived":
+        if not archived:
+            return False
+    elif archived:
+        return False
+    if query.filter == "unread" and bool(payload.get("read")):
+        return False
+    if query.filter == "pending" and (
+        not bool(payload.get("requires_approval")) or payload.get("decision") is not None
+    ):
+        return False
+    needle = query.q.casefold()
+    return (
+        not needle
+        or needle in str(payload.get("title") or "").casefold()
+        or needle in str(payload.get("body") or "").casefold()
+    )
 
 
 _SESSION_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -130,6 +196,17 @@ def _session_activity(payload: dict[str, Any]) -> datetime:
     )
 
 
+def _session_group(payload: dict[str, Any], starts: tuple[tuple[str, datetime], ...]) -> str:
+    if payload.get("pinned"):
+        return SESSION_PINNED_GROUP
+    activity = _session_activity(payload)
+    return next((key for key, start in starts if activity >= start), SESSION_OLDEST_GROUP)
+
+
+def _session_group_keys(starts: tuple[tuple[str, datetime], ...]) -> list[str]:
+    return [SESSION_PINNED_GROUP, *(key for key, _start in starts), SESSION_OLDEST_GROUP]
+
+
 def _session_name(payload: dict[str, Any]) -> str:
     title = str(payload.get("title") or "").strip()
     if not title or title.lower() in PLACEHOLDER_TITLES:
@@ -139,7 +216,13 @@ def _session_name(payload: dict[str, Any]) -> str:
 
 def _session_row_matches(key: str, payload: dict[str, Any], query: SessionRowQuery) -> bool:
     archived = bool(payload.get("archived"))
-    if (query.filter == "active" and archived) or (query.filter == "archived" and not archived):
+    if (query.filter in {"active", "unread", "error"} and archived) or (
+        query.filter == "archived" and not archived
+    ):
+        return False
+    if query.filter in {"unread", "error"} and not payload.get(
+        "unread" if query.filter == "unread" else "errored"
+    ):
         return False
     if query.source is not None and payload.get("source") != query.source:
         return False
@@ -337,9 +420,17 @@ class BackendDocumentStore(Protocol):
     def list_documents(self, prefix: str, key_prefix: str) -> list[tuple[str, StoredDocument]]: ...
 
     def query_session_rows(
-        self, query: SessionRowQuery, *, after: tuple[Any, ...] | None, limit: int
-    ) -> tuple[list[SessionRow], int]:
-        """One keyset page of ``session:`` rows (no ``content``) and the view's total."""
+        self, query: SessionRowQuery, *, offset: int, limit: int
+    ) -> SessionRowPage:
+        """Rows ``offset`` to ``offset + limit`` of the view, without ``content``."""
+        ...
+
+    def query_inbox_rows(self, query: InboxRowQuery, *, offset: int, limit: int) -> InboxRowPage:
+        """Rows ``offset`` to ``offset + limit`` without inbox bodies."""
+        ...
+
+    def inbox_unread_count(self) -> int:
+        """Count unread, unarchived inbox-message documents."""
         ...
 
     def list_active_workflow_run_ids(self, parent_thread_id: str) -> list[str]:
@@ -518,8 +609,8 @@ class InMemoryDocumentStore:
         )
 
     def query_session_rows(
-        self, query: SessionRowQuery, *, after: tuple[Any, ...] | None, limit: int
-    ) -> tuple[list[SessionRow], int]:
+        self, query: SessionRowQuery, *, offset: int, limit: int
+    ) -> SessionRowPage:
         rows = [
             (key, document.payload)
             for (prefix, key), document in self._documents.items()
@@ -529,27 +620,76 @@ class InMemoryDocumentStore:
             and _session_row_matches(key, document.payload, query)
         ]
         if query.sort == "name":
-            positioned = sorted(((_session_name(p), key), key, p) for key, p in rows)
-            if after is not None:
-                positioned = [row for row in positioned if row[0] > (after[0], after[1])]
-            page = positioned[:limit]
+            rows.sort(key=lambda row: (_session_name(row[1]), row[0]))
         else:
-            ranked = sorted(
-                (((bool(p.get("pinned")), _session_activity(p), key), key, p) for key, p in rows),
-                key=lambda row: row[0],
+            rows.sort(
+                key=lambda row: (bool(row[1].get("pinned")), _session_activity(row[1]), row[0]),
                 reverse=True,
             )
-            if after is not None:
-                bound = (bool(after[0]), _session_instant(after[1]) or _SESSION_EPOCH, after[2])
-                ranked = [row for row in ranked if row[0] < bound]
-            page = [
-                ((pinned, activity.isoformat(), key), key, p)
-                for (pinned, activity, key), _key, p in ranked[:limit]
-            ]
-        return [
-            SessionRow(key, {k: copy.deepcopy(v) for k, v in p.items() if k != "content"}, position)
-            for position, key, p in page
-        ], len(rows)
+        groups: list[tuple[str, int]] = []
+        if query.group_starts:
+            counts = dict.fromkeys(_session_group_keys(query.group_starts), 0)
+            for _key, payload in rows:
+                counts[_session_group(payload, query.group_starts)] += 1
+            groups = list(counts.items())
+        return SessionRowPage(
+            rows=[
+                {k: copy.deepcopy(v) for k, v in payload.items() if k != "content"}
+                for _key, payload in rows[offset : offset + limit]
+            ],
+            total=len(rows),
+            groups=groups,
+        )
+
+    def query_inbox_rows(self, query: InboxRowQuery, *, offset: int, limit: int) -> InboxRowPage:
+        rows = [
+            (key, document.payload)
+            for (prefix, key), document in self._documents.items()
+            if prefix == PROGENA_STATE_PREFIX
+            and key.startswith(INBOX_MESSAGE_KEY_PREFIX)
+            and isinstance(document.payload, dict)
+            and _inbox_row_matches(key, document.payload, query)
+        ]
+        if query.sort == "name":
+            rows.sort(
+                key=lambda row: (
+                    str(row[1].get("title") or "").casefold(),
+                    row[0].removeprefix(INBOX_MESSAGE_KEY_PREFIX),
+                )
+            )
+        else:
+            rows.sort(
+                key=lambda row: (
+                    _inbox_instant(row[1].get("created_at")),
+                    row[0].removeprefix(INBOX_MESSAGE_KEY_PREFIX),
+                ),
+                reverse=True,
+            )
+        return InboxRowPage(
+            rows=[
+                {
+                    **{
+                        field: copy.deepcopy(value)
+                        for field, value in payload.items()
+                        if field != "body"
+                    },
+                    "preview": _inbox_preview(payload.get("body")),
+                }
+                for _key, payload in rows[offset : offset + limit]
+            ],
+            total=len(rows),
+        )
+
+    def inbox_unread_count(self) -> int:
+        return sum(
+            1
+            for (prefix, key), document in self._documents.items()
+            if prefix == PROGENA_STATE_PREFIX
+            and key.startswith(INBOX_MESSAGE_KEY_PREFIX)
+            and isinstance(document.payload, dict)
+            and not bool(document.payload.get("archived"))
+            and not bool(document.payload.get("read"))
+        )
 
     def search_documents(
         self,
@@ -1935,8 +2075,8 @@ class PostgresDocumentStore:
         return results
 
     def query_session_rows(
-        self, query: SessionRowQuery, *, after: tuple[Any, ...] | None, limit: int
-    ) -> tuple[list[SessionRow], int]:
+        self, query: SessionRowQuery, *, offset: int, limit: int
+    ) -> SessionRowPage:
         params: dict[str, Any] = {
             "prefix": PROGENA_STATE_PREFIX,
             "key_like": _escape_like(SESSION_KEY_PREFIX) + "%",
@@ -1948,6 +2088,9 @@ class PostgresDocumentStore:
             conditions.append(
                 "COALESCE((value #>> '{payload,archived}')::boolean, false) = %(archived)s"
             )
+        if query.filter in {"unread", "error"}:
+            field = "unread" if query.filter == "unread" else "errored"
+            conditions.append(f"COALESCE((value #>> '{{payload,{field}}}')::boolean, false)")
         if query.source is not None:
             params["source"] = query.source
             conditions.append("value #>> '{payload,source}' = %(source)s")
@@ -1962,30 +2105,12 @@ class PostgresDocumentStore:
                 " OR value #>> '{payload,preview}' ILIKE %(q)s)"
             )
         where = " AND ".join(conditions)
-        if query.sort == "name":
-            order = "name ASC, key ASC"
-            if after is not None:
-                params["after_name"], params["after_key"] = after[0], after[1]
-                boundary = (
-                    "WHERE name > %(after_name)s OR (name = %(after_name)s AND key > %(after_key)s)"
-                )
-            else:
-                boundary = ""
-        else:
-            order = "pinned DESC, activity DESC, key DESC"
-            if after is not None:
-                params["after_pinned"] = bool(after[0])
-                params["after_activity"] = _session_instant(after[1]) or _SESSION_EPOCH
-                params["after_key"] = after[2]
-                boundary = (
-                    "WHERE pinned < %(after_pinned)s OR (pinned = %(after_pinned)s AND ("
-                    "activity < %(after_activity)s OR (activity = %(after_activity)s"
-                    " AND key < %(after_key)s)))"
-                )
-            else:
-                boundary = ""
+        order = (
+            "name ASC, key ASC" if query.sort == "name" else "pinned DESC, activity DESC, key DESC"
+        )
+        params["offset"] = offset
         params["limit"] = limit
-        page_sql = f"""
+        matched = f"""
             WITH matched AS (
                 SELECT key COLLATE "C" AS key,
                        (value -> 'payload') - 'content' AS payload,
@@ -2004,28 +2129,130 @@ class PostgresDocumentStore:
                 FROM store
                 WHERE {where}
             )
-            SELECT key, payload, pinned, activity, name FROM matched
-            {boundary}
-            ORDER BY {order}
-            LIMIT %(limit)s
         """  # nosec B608 - fragments are constants; values are bound parameters
+        page_sql = f"""{matched}
+            SELECT payload FROM matched
+            ORDER BY {order}
+            OFFSET %(offset)s LIMIT %(limit)s
+        """  # nosec B608
+        if query.group_starts:
+            params["pinned_group"] = SESSION_PINNED_GROUP
+            params["oldest_group"] = SESSION_OLDEST_GROUP
+            whens = []
+            for index, (key, start) in enumerate(query.group_starts):
+                params[f"group_key_{index}"] = key
+                params[f"group_start_{index}"] = start
+                whens.append(f"WHEN activity >= %(group_start_{index})s THEN %(group_key_{index})s")
+            count_sql = f"""{matched}
+                SELECT CASE WHEN pinned THEN %(pinned_group)s {" ".join(whens)}
+                            ELSE %(oldest_group)s END AS grp,
+                       count(*) AS n
+                FROM matched GROUP BY grp
+            """  # nosec B608
+        else:
+            count_sql = f"SELECT count(*) AS n FROM store WHERE {where}"  # nosec B608
         with self._cursor() as cur:
-            count_sql = f"SELECT count(*) AS total FROM store WHERE {where}"  # nosec B608
             cur.execute(cast(LiteralString, count_sql), params)
-            total_row = cast(dict[str, Any], cur.fetchone())
+            count_rows = cast(list[dict[str, Any]], cur.fetchall())
             cur.execute(cast(LiteralString, page_sql), params)
             rows = cast(list[dict[str, Any]], cur.fetchall())
-        page: list[SessionRow] = []
-        for row in rows:
-            key = str(row["key"])
-            payload = row["payload"] if isinstance(row["payload"], dict) else {}
-            position: tuple[Any, ...] = (
-                (str(row["name"]), key)
-                if query.sort == "name"
-                else (bool(row["pinned"]), row["activity"].astimezone(UTC).isoformat(), key)
+        groups: list[tuple[str, int]] = []
+        if query.group_starts:
+            counts = {str(row["grp"]): int(row["n"]) for row in count_rows}
+            groups = [(key, counts.get(key, 0)) for key in _session_group_keys(query.group_starts)]
+        return SessionRowPage(
+            rows=[row["payload"] for row in rows if isinstance(row["payload"], dict)],
+            total=sum(int(row["n"]) for row in count_rows),
+            groups=groups,
+        )
+
+    def query_inbox_rows(self, query: InboxRowQuery, *, offset: int, limit: int) -> InboxRowPage:
+        params: dict[str, Any] = {
+            "prefix": PROGENA_STATE_PREFIX,
+            "key_like": _escape_like(INBOX_MESSAGE_KEY_PREFIX) + "%",
+            "offset": offset,
+            "limit": limit,
+        }
+        conditions = [
+            "prefix = %(prefix)s",
+            "key LIKE %(key_like)s",
+            "jsonb_typeof(value -> 'payload') = 'object'",
+        ]
+        if query.filter == "archived":
+            conditions.append("COALESCE((value #>> '{payload,archived}')::boolean, false)")
+        else:
+            conditions.append("NOT COALESCE((value #>> '{payload,archived}')::boolean, false)")
+        if query.filter == "unread":
+            conditions.append("NOT COALESCE((value #>> '{payload,read}')::boolean, false)")
+        elif query.filter == "pending":
+            conditions.extend(
+                (
+                    "COALESCE((value #>> '{payload,requires_approval}')::boolean, false)",
+                    "value #>> '{payload,decision}' IS NULL",
+                )
             )
-            page.append(SessionRow(key, payload, position))
-        return page, int(total_row["total"])
+        if query.q:
+            params["q"] = f"%{_escape_like(query.q)}%"
+            conditions.append(
+                "(value #>> '{payload,title}' ILIKE %(q)s"
+                " OR value #>> '{payload,body}' ILIKE %(q)s)"
+            )
+        where = " AND ".join(conditions)
+        order = (
+            "name ASC, message_id ASC"
+            if query.sort == "name"
+            else "created_at DESC, message_id DESC"
+        )
+        matched = f"""
+            WITH matched AS (
+                SELECT key COLLATE "C" AS message_id,
+                       jsonb_set(
+                           (value -> 'payload') - 'body',
+                           '{{preview}}',
+                           to_jsonb(left(COALESCE((
+                               regexp_match(
+                                   COALESCE(value #>> '{{payload,body}}', ''),
+                                   '(?m)^[\\t ]*(\\S(?:.*\\S)?)[\\t ]*$'
+                               )
+                           )[1], ''), 200))
+                       ) AS payload,
+                       COALESCE({_session_instant_sql("created_at")}, 'epoch'::timestamptz) AS created_at,
+                       lower(COALESCE(value #>> '{{payload,title}}', '')) COLLATE "C" AS name
+                FROM store
+                WHERE {where}
+            )
+        """  # nosec B608 - fragments are constants; values are bound parameters
+        page_sql = f"""{matched}
+            SELECT payload FROM matched
+            ORDER BY {order}
+            OFFSET %(offset)s LIMIT %(limit)s
+        """  # nosec B608
+        count_sql = f"""{matched} SELECT count(*) AS n FROM matched"""  # nosec B608
+        with self._cursor() as cur:
+            cur.execute(cast(LiteralString, count_sql), params)
+            count_row = cast(dict[str, Any] | None, cur.fetchone())
+            cur.execute(cast(LiteralString, page_sql), params)
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return InboxRowPage(
+            rows=[row["payload"] for row in rows if isinstance(row["payload"], dict)],
+            total=int((count_row or {}).get("n") or 0),
+        )
+
+    def inbox_unread_count(self) -> int:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT count(*) AS n FROM store
+                WHERE prefix = %s
+                  AND key LIKE %s
+                  AND jsonb_typeof(value -> 'payload') = 'object'
+                  AND NOT COALESCE((value #>> '{payload,archived}')::boolean, false)
+                  AND NOT COALESCE((value #>> '{payload,read}')::boolean, false)
+                """,
+                (PROGENA_STATE_PREFIX, _escape_like(INBOX_MESSAGE_KEY_PREFIX) + "%"),
+            )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        return int((row or {}).get("n") or 0)
 
     def list_active_workflow_run_ids(self, parent_thread_id: str) -> list[str]:
         with self._cursor() as cur:

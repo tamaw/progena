@@ -12,7 +12,7 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 import src.backend.http.contracts as http_contracts
 from src.backend.events import contracts as events_contracts
@@ -98,10 +98,19 @@ async def broadcast_model_profiles_snapshot(
     broadcast: BroadcastUiEvent,
     *,
     request_id: str | None = None,
+    client_id: str | None = None,
 ) -> None:
     payload = await asyncio.to_thread(_build_profiles_snapshot, store)
     # asyncio subscriber queues and replay bookkeeping belong to the event loop.
-    broadcast(events_contracts.UiEvent.PROFILES_SNAPSHOT, payload, request_id=request_id)
+    if client_id is None:
+        broadcast(events_contracts.UiEvent.PROFILES_SNAPSHOT, payload, request_id=request_id)
+    else:
+        broadcast(
+            events_contracts.UiEvent.PROFILES_SNAPSHOT,
+            payload,
+            request_id=request_id,
+            client_id=client_id,
+        )
 
 
 def _mutate_profile(
@@ -180,7 +189,10 @@ def create_model_profile_router(
     @router.get(
         "/model-profiles", status_code=202, response_model=http_contracts.UiRequestAcknowledgement
     )
-    async def list_model_profiles(request: Request) -> http_contracts.UiRequestAcknowledgement:
+    async def list_model_profiles(
+        request: Request,
+        client_id: str | None = Query(default=None, min_length=1, max_length=64),
+    ) -> http_contracts.UiRequestAcknowledgement:
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         store = get_store()
         repository: ProviderRepository | None = None
@@ -190,7 +202,9 @@ def create_model_profile_router(
             except RuntimeError:
                 repository = None
         await asyncio.to_thread(_migrate_legacy_profiles, store, repository)
-        await broadcast_model_profiles_snapshot(store, broadcast, request_id=request_id)
+        await broadcast_model_profiles_snapshot(
+            store, broadcast, request_id=request_id, client_id=client_id
+        )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.PROFILES_SNAPSHOT]
         )

@@ -216,25 +216,32 @@ def test_deleted_routine_history_routes_remain_available(harness, monkeypatch):
     documents, catalog, events, _roster, _reader = harness
     documents.delete_document(PROGENA_STATE_PREFIX, "routine:gone")
     catalog.delete_routine_catalog_entry("gone")
+    client_id = "deleted-routine-tab"
+    queue = asyncio.Queue()
+    monkeypatch.setitem(events_stream._ui_stream_subscribers, queue, None)
+    monkeypatch.setitem(events_stream._ui_stream_clients, queue, client_id)
     app = FastAPI()
     app.include_router(
         create_agent_profile_router(
             get_agent_store=lambda: catalog,
             get_document_store=lambda: documents,
-            broadcast_ui_event=lambda kind, payload, **kwargs: events.append((kind, payload)),
+            broadcast_ui_event=lambda kind, payload, **kwargs: events.append(
+                (kind, payload, kwargs)
+            ),
         ),
         prefix="/api/ui",
     )
     client = TestClient(app, headers={"X-Operation-Id": "deleted-routine-history"})
-    assert client.get("/api/ui/agent-profiles/gone").status_code == 404
+    assert client.get(f"/api/ui/agent-profiles/gone?client_id={client_id}").status_code == 404
     for path, event_type in (
         ("revisions", "agent.routine.revisions.loaded"),
         ("revisions/last", "agent.routine.revision.loaded"),
         ("runs", "agent.routine.runs.loaded"),
     ):
-        response = client.get(f"/api/ui/agent-profiles/gone/{path}")
+        response = client.get(f"/api/ui/agent-profiles/gone/{path}?client_id={client_id}")
         assert response.status_code == 202
         assert events[-1][0] == event_type
+        assert events[-1][2]["client_id"] == client_id
     assert events[0][1]["revisions"][0]["revision_id"] == "last"
     assert events[1][1]["graph"]["id"] == "gone"
     assert events[2][1]["runs"][0]["thread_id"] == "routine:gone:last:run"
@@ -260,7 +267,7 @@ def test_deleted_routine_history_routes_remain_available(harness, monkeypatch):
     monkeypatch.setattr(AsyncPostgresSaver, "from_conn_string", open_saver)
     response = client.get(
         "/api/ui/agent-profiles/gone/run-state",
-        params={"thread_id": "routine:gone:last:run"},
+        params={"thread_id": "routine:gone:last:run", "client_id": client_id},
     )
     assert response.status_code == 202
     assert events[-1][0] == "agent.routine.run_state.loaded"
@@ -285,26 +292,37 @@ def test_catalog_hides_deleted_document_before_notification_reconciles(harness, 
             else original_get_agent(agent_id)
         ),
     )
+    client_id = "pending-deletion-tab"
+    queue = asyncio.Queue()
+    monkeypatch.setitem(events_stream._ui_stream_subscribers, queue, None)
+    monkeypatch.setitem(events_stream._ui_stream_clients, queue, client_id)
     app = FastAPI()
     app.include_router(
         create_agent_profile_router(
             get_agent_store=lambda: catalog,
             get_document_store=lambda: documents,
-            broadcast_ui_event=lambda kind, payload, **kwargs: events.append((kind, payload)),
+            broadcast_ui_event=lambda kind, payload, **kwargs: events.append(
+                (kind, payload, kwargs)
+            ),
         ),
         prefix="/api/ui",
     )
     client = TestClient(app, headers={"X-Operation-Id": "pending-deletion"})
-    assert client.get("/api/ui/agent-profiles/gone").status_code == 404
+    assert client.get(f"/api/ui/agent-profiles/gone?client_id={client_id}").status_code == 404
     assert (
         client.patch(
-            "/api/ui/agent-profiles/gone/graph", json={"nodes": [], "edges": []}
+            f"/api/ui/agent-profiles/gone/graph?client_id={client_id}",
+            json={"nodes": [], "edges": []},
         ).status_code
         == 404
     )
-    assert client.post("/api/ui/agent-profiles/gone/run", json={}).status_code == 404
-    assert client.get("/api/ui/agent-profiles").status_code == 202
+    assert (
+        client.post(f"/api/ui/agent-profiles/gone/run?client_id={client_id}", json={}).status_code
+        == 404
+    )
+    assert client.get(f"/api/ui/agent-profiles?client_id={client_id}").status_code == 202
     assert events[-1][0] == "agents.snapshot"
+    assert events[-1][2]["client_id"] == client_id
     assert {agent["id"] for agent in events[-1][1]["agents"]} == {"other", "object"}
     assert "gone" in catalog.rows  # reads never mutate the catalog
     assert catalog.deleted == []

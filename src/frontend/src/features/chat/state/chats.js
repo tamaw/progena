@@ -13,6 +13,9 @@ import { deriveChatStatus } from '../models/chatStatus';
 import { failureMessage } from '../../../lib/failures';
 import { UI_EVENT } from '../../../realtime/eventVocabulary';
 import { forgetServerRegistration, noteServerRegistration } from '../backgroundTaskSubscription';
+import { getTimeBucket } from '../models/conversationModel';
+import { createPositionalListOps } from '../../../lib/positionalListCache';
+
 
 // Opening a chat installs this tab's background-task interest server-side.
 // Its stream event can arrive before the HTTP acknowledgement, so the
@@ -65,14 +68,16 @@ export const initialState = {
     byId: {},
     tombstones: {},
     view: { q: '', sort: 'recent', filter: 'active' },
-    order: [],
     total: 0,
-    nextCursor: null,
+    groups: [],
+    rowsByIndex: {},
+    loadedPages: {},
+    inFlightRequests: {},
+    rangeVersion: 0,
+    rowDelta: null,
     loaded: false,
     loading: false,
-    loadingMore: false,
     error: null,
-    requestId: null,
     lookupRequestIds: {},
     lookupResults: {},
     sourceTotals: {},
@@ -81,6 +86,8 @@ export const initialState = {
     reconciliation: emptyReconciliation(),
   },
 };
+
+export const CHAT_LIST_PAGE_SIZE = 50;
 
 function threadIdFor(session) {
   return typeof session?.thread_id === 'string' && session.thread_id
@@ -92,44 +99,39 @@ function normalizeView(view = {}) {
   return {
     q: typeof view.q === 'string' ? view.q : '',
     sort: view.sort === 'name' ? 'name' : 'recent',
-    filter: view.filter === 'archived' || view.filter === 'all' ? view.filter : 'active',
+    filter: ['archived', 'all', 'unread', 'error'].includes(view.filter) ? view.filter : 'active',
   };
 }
 
 function sameView(left, right) {
   return left.q === right.q && left.sort === right.sort && left.filter === right.filter;
 }
+
 function rowMatchesFilter(row, view) {
   return Boolean(
     row
-    && (view.filter !== 'active' || !row.archived)
-    && (view.filter !== 'archived' || row.archived),
+    && (!['active', 'unread', 'error'].includes(view.filter) || !row.archived)
+    && (view.filter !== 'archived' || row.archived)
+    && (view.filter !== 'unread' || row.unread)
+    && (view.filter !== 'error' || row.errored),
   );
 }
 
-
 function rowMatchesView(row, view) {
-  if (!rowMatchesFilter(row, view)) {
-    return false;
-  }
+  if (!rowMatchesFilter(row, view)) return false;
   const query = view.q.trim().toLocaleLowerCase();
-  if (!query) return true;
-  return `${row.title || ''} ${row.preview || ''}`.toLocaleLowerCase().includes(query);
+  return !query || `${row.title || ''} ${row.preview || ''}`.toLocaleLowerCase().includes(query);
 }
 
-function compareRows(left, right, sort) {
-  if (sort === 'name') {
-    const title = String(left?.title || '').localeCompare(String(right?.title || ''), undefined, { sensitivity: 'base' });
-    return title || String(left?.thread_id || '').localeCompare(String(right?.thread_id || ''));
+function syncStoredIndicators(state, row) {
+  const threadId = threadIdFor(row);
+  if (!threadId) return;
+  for (const [field, ids] of [['unread', 'unreadChatIds'], ['errored', 'erroredChatIds']]) {
+    if (typeof row[field] !== 'boolean') continue;
+    state.chatRuntime[ids] = row[field]
+      ? addChatRuntimeId(state.chatRuntime[ids], threadId)
+      : removeChatRuntimeId(state.chatRuntime[ids], threadId);
   }
-  const pinned = Number(Boolean(right?.pinned)) - Number(Boolean(left?.pinned));
-  if (pinned) return pinned;
-  const activity = String(right?.last_activity || '').localeCompare(String(left?.last_activity || ''));
-  return activity || String(left?.thread_id || '').localeCompare(String(right?.thread_id || ''));
-}
-
-function sortOrder(chats) {
-  chats.order.sort((leftId, rightId) => compareRows(chats.byId[leftId], chats.byId[rightId], chats.view.sort));
 }
 
 function upsertCachedRow(chats, row) {
@@ -139,46 +141,95 @@ function upsertCachedRow(chats, row) {
   return threadId;
 }
 
-function replaceChatList(chats, rows) {
-  const order = [];
-  for (const row of Array.isArray(rows) ? rows : []) {
-    const threadId = upsertCachedRow(chats, row);
-    if (threadId && !order.includes(threadId)) order.push(threadId);
-  }
-  chats.order = order;
+const { indexOfRow, shiftRows, invalidatePagesFrom, removeRowAt, insertRowAt } = createPositionalListOps(
+  CHAT_LIST_PAGE_SIZE,
+);
+
+function groupKeyForRow(row, view) {
+  if (!row || view.sort !== 'recent' || view.filter !== 'active') return null;
+  if (row.pinned) return 'pinned';
+  return getTimeBucket(row.last_activity ?? row.created_at);
 }
 
-function applyRowDelta(chats, row) {
+function adjustGroupCount(chats, key, amount) {
+  if (!key) return;
+  const group = chats.groups.find((entry) => entry.key === key);
+  if (group) group.count = Math.max(0, group.count + amount);
+}
+
+function insertionIndex(chats, row) {
+  return row.pinned
+    ? 0
+    : (chats.groups.find((group) => group.key === 'pinned')?.count ?? 0);
+}
+
+export function applyChatRowDelta(chats, row) {
   const threadId = threadIdFor(row);
   if (!threadId || chats.tombstones[threadId]) return;
-  const wasInView = chats.order.includes(threadId);
+  const indexValue = indexOfRow(chats, threadId);
+  const index = indexValue == null ? null : Number(indexValue);
   const previous = chats.byId[threadId];
-  const previouslyMatched = wasInView || rowMatchesView(previous, chats.view);
-  const matches = wasInView ? rowMatchesFilter(row, chats.view) : rowMatchesView(row, chats.view);
+  const wasListed = index != null;
+  const matches = wasListed
+    ? rowMatchesFilter(row, chats.view)
+    : rowMatchesView(row, chats.view);
+  const oldGroup = groupKeyForRow(previous, chats.view);
+  const newGroup = groupKeyForRow(row, chats.view);
   upsertCachedRow(chats, row);
 
-  if (wasInView && !matches) {
-    chats.order = chats.order.filter((id) => id !== threadId);
-  } else if (!wasInView && matches) {
-    chats.order.push(threadId);
-    sortOrder(chats);
-    if (chats.nextCursor && chats.order.indexOf(threadId) >= chats.order.length - 1) {
-      chats.order = chats.order.filter((id) => id !== threadId);
-    }
-  } else if (wasInView) {
-    sortOrder(chats);
+  // A row outside the loaded windows may already be included in the total.
+  // Recount from the server rather than treating an unknown row as a new chat.
+  if (!wasListed && Object.keys(chats.rowsByIndex).length < chats.total) {
+    invalidatePagesFrom(chats, 0);
+    return;
   }
-  if (!previouslyMatched && matches) chats.total += 1;
-  if (previouslyMatched && !matches) chats.total = Math.max(0, chats.total - 1);
+
+  if (wasListed && !matches) {
+    removeRowAt(chats, index);
+    chats.total = Math.max(0, chats.total - 1);
+    adjustGroupCount(chats, oldGroup, -1);
+    return;
+  }
+  if (!wasListed && !matches) return;
+
+  if (!wasListed) {
+    chats.total += 1;
+    adjustGroupCount(chats, newGroup, 1);
+    if (chats.view.sort === 'recent') {
+      insertRowAt(chats, insertionIndex(chats, row), threadId);
+    } else {
+      invalidatePagesFrom(chats, 0);
+    }
+    return;
+  }
+
+  if (oldGroup !== newGroup) {
+    adjustGroupCount(chats, oldGroup, -1);
+    adjustGroupCount(chats, newGroup, 1);
+  }
+  const moved = chats.view.sort === 'recent'
+    && (previous?.pinned !== row.pinned || previous?.last_activity !== row.last_activity);
+  if (!moved) return;
+  delete chats.rowsByIndex[index];
+  shiftRows(chats, index + 1, -1);
+  const target = insertionIndex(chats, row);
+  shiftRows(chats, target, 1);
+  chats.rowsByIndex[target] = threadId;
+  invalidatePagesFrom(chats, Math.min(index, target));
 }
 
-function deleteChatFromList(chats, threadId) {
+export function deleteChatFromList(chats, threadId) {
   if (!threadId) return;
-  const wasMatched = rowMatchesView(chats.byId[threadId], chats.view);
+  const indexValue = indexOfRow(chats, threadId);
+  const previous = chats.byId[threadId];
+  if (indexValue != null) {
+    const index = Number(indexValue);
+    removeRowAt(chats, index);
+    chats.total = Math.max(0, chats.total - 1);
+    adjustGroupCount(chats, groupKeyForRow(previous, chats.view), -1);
+  }
   delete chats.byId[threadId];
   chats.tombstones[threadId] = true;
-  chats.order = chats.order.filter((item) => item !== threadId);
-  if (wasMatched) chats.total = Math.max(0, chats.total - 1);
 }
 
 function mergeActiveDetail(active, session) {
@@ -296,15 +347,28 @@ function hydrateResponseTracking(runtime, session) {
   }
 }
 
-function chatListUrl(chatsUrl, { view, cursor, limit = 50, source, threadIds = [] }) {
+function chatListUrl(chatsUrl, {
+  view,
+  offset = 0,
+  limit = CHAT_LIST_PAGE_SIZE,
+  source,
+  threadIds = [],
+  groupStarts = null,
+}) {
   const params = new URLSearchParams({
     client_id: realtimeClientId,
     q: view.q,
     sort: view.sort,
     filter: view.filter,
+    offset: String(Math.max(0, offset)),
     limit: String(Math.max(0, Math.min(200, limit))),
   });
-  if (cursor) params.set('cursor', cursor);
+  if (groupStarts && view.sort === 'recent' && view.filter === 'active') {
+    params.set('today', groupStarts.today);
+    params.set('yesterday', groupStarts.yesterday);
+    params.set('this_week', groupStarts.thisWeek);
+    params.set('last_week', groupStarts.lastWeek);
+  }
   if (source) params.set('source', source);
   for (const threadId of threadIds) {
     if (typeof threadId === 'string' && threadId) params.append('thread_id', threadId);
@@ -314,16 +378,24 @@ function chatListUrl(chatsUrl, { view, cursor, limit = 50, source, threadIds = [
 
 export const fetchChatSessions = createAcknowledgedThunk(
   'uiData/fetchChatSessions',
-  async ({ chatsUrl, view, cursor = null, limit = 50, source = null, threadIds = [], lookup = false }, { requestId }) => {
+  async ({
+    chatsUrl,
+    view,
+    offset = 0,
+    limit = CHAT_LIST_PAGE_SIZE,
+    source = null,
+    threadIds = [],
+    groupStarts = null,
+  }, { requestId }) => {
     await waitForRealtimeClient();
     return requestAcknowledged(
       chatListUrl(chatsUrl, {
         view: normalizeView(view),
-        cursor,
+        offset,
         limit,
         source,
         threadIds,
-        lookup,
+        groupStarts,
       }),
       { requestId },
     );
@@ -334,8 +406,10 @@ export const requestChatSessionDetail = createAcknowledgedThunk(
   ({ chatsUrl, threadId }, { requestId }) => requestChatDetail(chatsUrl, threadId, requestId),
 );
 export const fetchChatMessages = createAcknowledgedThunk('uiData/fetchChatMessages', async ({ chatsUrl, threadId, beforeMessageId, limit }, { requestId }) => {
+  await waitForRealtimeClient();
   const acknowledgement = await requestAcknowledged(
     withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}/messages`, {
+      client_id: realtimeClientId,
       ...(beforeMessageId ? { before_message_id: beforeMessageId } : {}),
       ...(limit ? { limit: String(limit) } : {}),
     }),
@@ -352,15 +426,17 @@ export const requestChatSessionReconciliation = createAcknowledgedThunk(
   ({ chatsUrl, threadId }, { requestId }) => requestChatDetail(chatsUrl, threadId, requestId),
 );
 export const updateChatSessionMetadata = createAcknowledgedThunk('uiData/updateChatSessionMetadata', async ({ chatsUrl, threadId, patch }, { requestId }) => {
+  await waitForRealtimeClient();
   const acknowledgement = await requestAcknowledged(
-    `${chatsUrl}/${encodeURIComponent(threadId)}`,
+    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { client_id: realtimeClientId }),
     { method: 'PATCH', body: patch, requestId },
   );
   return { ...acknowledgement, threadId };
 });
 export const deleteChatSession = createAcknowledgedThunk('uiData/deleteChatSession', async ({ chatsUrl, threadId }, { requestId }) => {
+  await waitForRealtimeClient();
   const acknowledgement = await requestAcknowledged(
-    `${chatsUrl}/${encodeURIComponent(threadId)}`,
+    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { client_id: realtimeClientId }),
     { method: 'DELETE', requestId },
   );
   return { ...acknowledgement, threadId };
@@ -411,19 +487,14 @@ export const reducers = {
     }
     state.chats.active.hasMoreMessages = Boolean(reconciliation.detail.has_more_messages);
   },
-  // Optimistic bump so the sidebar re-sorts a chat to the top of "Recent" the
-  // instant a message is sent, instead of waiting for the stream to finish and
-  // a fresh chat list snapshot to arrive.
+  // Optimistically move a loaded recent row before the stream completes.
   touchChatSession(state, action) {
     const threadId = action.payload;
-    if (typeof threadId !== 'string' || !threadId || !state.chats.byId[threadId]) {
-      return;
-    }
-    state.chats.byId[threadId] = {
+    if (typeof threadId !== 'string' || !threadId || !state.chats.byId[threadId]) return;
+    applyChatRowDelta(state.chats, {
       ...state.chats.byId[threadId],
       last_activity: new Date().toISOString(),
-    };
-    if (state.chats.order.includes(threadId)) sortOrder(state.chats);
+    });
   },
 };
 export const eventHandlers = {
@@ -438,7 +509,6 @@ export const eventHandlers = {
 
     beginResponseTracking(state.chatRuntime, requestId, threadId);
     state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
-    state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
     // The restart interruption describes the conversation's latest turn. A new
     // turn supersedes it; the interrupted turn itself keeps its own row once
     // the canonical transcript reports it `interrupted`.
@@ -498,13 +568,10 @@ export const eventHandlers = {
       state.chatRuntime.generatingChatIds,
       threadId,
     );
-    if (isActiveThread) {
-      state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
-      state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
-    } else {
+    if (!isActiveThread) {
       state.chatRuntime.unreadChatIds = addChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
-      state.chatRuntime.erroredChatIds = addChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
     }
+    state.chatRuntime.erroredChatIds = addChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
   },
   [UI_EVENT.CHAT_RESPONSE_CANCELLED]: (state, payload) => {
     const response = terminalResponseFor(payload, state.chatRuntime);
@@ -521,9 +588,10 @@ export const eventHandlers = {
   [UI_EVENT.CHAT_LIST_LOADED]: (state, payload) => {
     const requestId = payload?.request_id;
     const isLookup = Boolean(requestId && state.chats.lookupRequestIds[requestId]);
-    if (!requestId || (!isLookup && requestId !== state.chats.requestId)) return;
+    if (!requestId) return;
     const rows = Array.isArray(payload?.rows) ? payload.rows : [];
     if (isLookup) {
+      for (const row of rows) syncStoredIndicators(state, row);
       for (const row of rows) upsertCachedRow(state.chats, row);
       const lookup = state.chats.lookupRequestIds[requestId];
       for (const threadId of lookup.threadIds) {
@@ -533,33 +601,40 @@ export const eventHandlers = {
       delete state.chats.lookupRequestIds[requestId];
       return;
     }
-    if (!sameView(normalizeView(payload.view), state.chats.view)) return;
-    replaceChatList(state.chats, rows);
-    state.chats.total = Number.isInteger(payload?.total) ? payload.total : 0;
-    state.chats.nextCursor = typeof payload?.next_cursor === 'string' ? payload.next_cursor : null;
+    const request = state.chats.inFlightRequests[requestId];
+    if (
+      !request
+      || request.rangeVersion !== state.chats.rangeVersion
+      || !sameView(normalizeView(payload.view), state.chats.view)
+    ) return;
+    for (const row of rows) syncStoredIndicators(state, row);
+    for (const [index, row] of rows.entries()) {
+      const threadId = upsertCachedRow(state.chats, row);
+      if (threadId) state.chats.rowsByIndex[request.offset + index] = threadId;
+    }
+    if (Number.isInteger(payload?.total)) {
+      state.chats.total = payload.total;
+      for (const index of Object.keys(state.chats.rowsByIndex)) {
+        if (Number(index) >= payload.total) delete state.chats.rowsByIndex[index];
+      }
+    }
+    if (Array.isArray(payload?.groups)) {
+      state.chats.groups = payload.groups.map((group) => ({
+        key: group.key,
+        count: Number.isInteger(group.count) ? group.count : 0,
+      }));
+    }
+    state.chats.loadedPages[request.offset] = true;
+    delete state.chats.inFlightRequests[requestId];
     state.chats.loaded = true;
-    state.chats.loading = false;
-    state.chats.loadingMore = false;
+    state.chats.loading = Object.keys(state.chats.inFlightRequests).length > 0;
     state.chats.error = null;
-    state.chats.requestId = null;
     state.chats.requestedAt = new Date().toISOString();
   },
-  [UI_EVENT.CHAT_LIST_PAGE]: (state, payload) => {
-    const requestId = payload?.request_id;
-    if (!requestId || requestId !== state.chats.requestId || !sameView(normalizeView(payload.view), state.chats.view)) return;
-    for (const row of Array.isArray(payload?.rows) ? payload.rows : []) {
-      const threadId = upsertCachedRow(state.chats, row);
-      if (threadId && !state.chats.order.includes(threadId)) state.chats.order.push(threadId);
-    }
-    state.chats.total = Number.isInteger(payload?.total) ? payload.total : state.chats.total;
-    state.chats.nextCursor = typeof payload?.next_cursor === 'string' ? payload.next_cursor : null;
-    state.chats.loadingMore = false;
-    state.chats.error = null;
-    state.chats.requestId = null;
-  },
   [UI_EVENT.CHAT_LIST_ROW_UPSERTED]: (state, payload) => {
-    applyRowDelta(state.chats, payload?.row);
+    applyChatRowDelta(state.chats, payload?.row);
     mergeActiveDetail(state.chats.active, payload?.row);
+    syncStoredIndicators(state, payload?.row);
   },
   [UI_EVENT.CHAT_LIST_ROW_DELETED]: (state, payload) => {
     const threadId = typeof payload?.thread_id === 'string' && payload.thread_id ? payload.thread_id : null;
@@ -604,35 +679,45 @@ export const eventHandlers = {
 export function buildExtraReducers(builder) {
   builder
     .addCase(fetchChatSessions.pending, (state, action) => {
-      const { cursor = null, lookup = false, threadIds = [], source = null, view } = action.meta.arg;
+      const {
+        offset = 0,
+        lookup = false,
+        threadIds = [],
+        source = null,
+        view,
+      } = action.meta.arg;
       if (lookup) {
         state.chats.lookupRequestIds[action.meta.requestId] = { threadIds, source };
         return;
       }
-      state.chats.requestId = action.meta.requestId;
-      state.chats.error = null;
-      if (cursor) {
-        state.chats.loadingMore = true;
-        return;
+      const nextView = normalizeView(view);
+      if (!sameView(nextView, state.chats.view)) {
+        state.chats.view = nextView;
+        state.chats.total = 0;
+        state.chats.groups = [];
+        state.chats.rowsByIndex = {};
+        state.chats.loadedPages = {};
+        state.chats.inFlightRequests = {};
+        state.chats.rangeVersion += 1;
+        state.chats.rowDelta = null;
+        state.chats.loaded = false;
       }
-      state.chats.view = normalizeView(view);
-      state.chats.order = [];
-      state.chats.total = 0;
-      state.chats.nextCursor = null;
-      state.chats.loaded = false;
-      state.chats.loading = true;
-      state.chats.loadingMore = false;
+      state.chats.inFlightRequests[action.meta.requestId] = {
+        offset: Math.max(0, offset),
+        rangeVersion: state.chats.rangeVersion,
+      };
+      state.chats.error = null;
+      state.chats.loading = !state.chats.loaded;
     })
     .addCase(fetchChatSessions.rejected, (state, action) => {
       if (state.chats.lookupRequestIds[action.meta.requestId]) {
         delete state.chats.lookupRequestIds[action.meta.requestId];
         return;
       }
-      if (state.chats.requestId !== action.meta.requestId) return;
-      state.chats.loading = false;
-      state.chats.loadingMore = false;
+      if (!state.chats.inFlightRequests[action.meta.requestId]) return;
+      delete state.chats.inFlightRequests[action.meta.requestId];
+      state.chats.loading = Object.keys(state.chats.inFlightRequests).length > 0 && !state.chats.loaded;
       state.chats.error = failureMessage(action.error?.message ? action.error : 'Failed to load chats').message;
-      state.chats.requestId = null;
     })
     .addCase(requestChatSessionDetail.pending, (state, action) => {
       state.chats.active.threadId = action.meta.arg.threadId;
@@ -661,8 +746,12 @@ export function buildExtraReducers(builder) {
 }
 
 export const selectChatSessions = createSelector(
-  [(state) => state.uiData.chats.order, (state) => state.uiData.chats.byId],
-  (order, byId) => order.map((threadId) => byId[threadId]).filter(Boolean),
+  [(state) => state.uiData.chats.rowsByIndex, (state) => state.uiData.chats.byId],
+  (rowsByIndex, byId) => Object.keys(rowsByIndex)
+    .map(Number)
+    .sort((left, right) => left - right)
+    .map((index) => byId[rowsByIndex[index]])
+    .filter(Boolean),
 );
 export const selectChatSessionsState = (state) => state.uiData.chats;
 export const selectChatRowsById = (state) => state.uiData.chats.byId;

@@ -3,7 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useConfig } from '../../context/ConfigContext';
 import { failureMessage } from '../../lib/failures';
-import { selectRealtimeConnected, selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
+import { selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
 import { fetchAgentProfiles, requestAgentDetail, selectActiveAgentProfile, selectActiveAgentProfileState, selectAgentProfiles, selectAgentProfilesState } from './state/agents';
 
 const CATALOGUE_KIND = {
@@ -21,14 +21,12 @@ export default function useAgentCatalogue({ kind, routeBase, detailSuffix = '' }
   const { agentId: routeAgentId } = useParams();
   const { getApiUrl } = useConfig();
   const agentsUrl = getApiUrl('agentProfiles');
-  const realtimeConnected = useSelector(selectRealtimeConnected);
   const streamReady = useSelector(selectRealtimeStreamReady);
   const fetchedAgents = useSelector(selectAgentProfiles);
   const agentsState = useSelector(selectAgentProfilesState);
   const activeAgent = useSelector(selectActiveAgentProfile);
   const activeAgentState = useSelector(selectActiveAgentProfileState);
   const requestedListRef = useRef(null);
-  const reconnectedRef = useRef(false);
 
   const agents = useMemo(() => fetchedAgents.filter(CATALOGUE_KIND[kind]), [fetchedAgents, kind]);
   const selectedAgentId = routeAgentId ?? null;
@@ -36,27 +34,22 @@ export default function useAgentCatalogue({ kind, routeBase, detailSuffix = '' }
   const makePath = useCallback((id) => `${routeBase}/${encodeURIComponent(id)}${detailSuffix}`, [detailSuffix, routeBase]);
 
   const loadRoster = useCallback((retry = false) => {
-    if (!realtimeConnected) return;
+    if (!streamReady) return;
     if (!retry && requestedListRef.current === agentsUrl) return;
     requestedListRef.current = agentsUrl;
     dispatch(fetchAgentProfiles({ agentsUrl }));
-  }, [agentsUrl, dispatch, realtimeConnected]);
+  }, [agentsUrl, dispatch, streamReady]);
 
   useEffect(() => {
-    if (!realtimeConnected) {
+    if (!streamReady) {
       requestedListRef.current = null;
-      reconnectedRef.current = true;
       return;
     }
-    // A loaded roster is kept current by snapshots and upserts, so mounting
-    // another catalogue page must not re-request it. Only a reconnect does.
-    if (agentsState.loaded && !reconnectedRef.current) {
-      requestedListRef.current = agentsUrl;
-      return;
-    }
-    reconnectedRef.current = false;
+    // Topic snapshots are tab-scoped and not replayed. Every catalogue mount
+    // therefore requests the current roster, while the URL ref deduplicates
+    // renders during this live-stream session.
     loadRoster();
-  }, [agentsState.loaded, agentsUrl, loadRoster, realtimeConnected]);
+  }, [agentsUrl, loadRoster, streamReady]);
 
   const selectAgent = useCallback((id, { replace = false } = {}) => {
     navigate(makePath(id), { replace });

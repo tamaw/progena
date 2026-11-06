@@ -8,6 +8,7 @@ import PopupModal from '../../components/PopupModal';
 import Modal from '../../components/Modal';
 import useEntityDraft from '../../hooks/useEntityDraft';
 import useAgentCatalogue from './useAgentCatalogue';
+import useStreamTopic from '../../hooks/useStreamTopic';
 import useConfirmAction from '../../hooks/useConfirmAction';
 import { createUuid } from '../../lib/uuid';
 import { requestAcknowledged } from '../../store/http';
@@ -226,6 +227,7 @@ export default function AgentsPage() {
         (event) => event.type === UI_EVENT.AGENTS_SNAPSHOT,
       )
   ));
+  useStreamTopic('agents');
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const deleteAction = useConfirmAction(effectiveAgentId);

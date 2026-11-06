@@ -12,7 +12,12 @@ import {
   requestAcknowledged,
   selectKeyedRequest,
 } from '../../store/async';
+import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
 
+async function requestForClient(url, options) {
+  await waitForRealtimeClient();
+  return requestAcknowledged(withQuery(url, { client_id: realtimeClientId }), options);
+}
 export const INSIGHT_RANGES = ['24h', '7d', '30d'];
 
 export function normalizeInsightsQuery({ range = '7d', profile = null } = {}) {
@@ -38,7 +43,7 @@ export const fetchTokenUsage = createAcknowledgedThunk(
   'uiData/fetchTokenUsage',
   ({ tokenUsageUrl, range, profile }, { requestId }) => {
     const query = normalizeInsightsQuery({ range, profile });
-    return requestAcknowledged(withQuery(tokenUsageUrl, {
+    return requestForClient(withQuery(tokenUsageUrl, {
       range: query.range,
       ...(query.profile ? { profile: query.profile } : {}),
     }), { requestId });

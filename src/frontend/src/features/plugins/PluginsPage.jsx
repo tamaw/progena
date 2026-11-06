@@ -8,6 +8,7 @@ import { useConfig } from '../../context/ConfigContext';
 import MarkdownContent from '../../components/MarkdownContent';
 import InlineFailure from '../../components/InlineFailure';
 import useUiAction from '../../hooks/useUiAction';
+import useStreamTopic from '../../hooks/useStreamTopic';
 import { formatCompactRelativeAge } from '../../lib/displayTime';
 import {
   PLUGIN_FILTERS,
@@ -74,6 +75,7 @@ export default function PluginsPage() {
   const { getApiUrl } = useConfig();
   const marketplacesUrl = getApiUrl('marketplaces');
   const pluginsUrl = getApiUrl('plugins');
+  useStreamTopic('plugins');
   const realtime = useSelector(selectRealtime);
   const marketplaces = useSelector(selectMarketplaces);
   const installedPlugins = useSelector(selectPlugins);
@@ -103,13 +105,14 @@ export default function PluginsPage() {
   const pluginAction = useUiAction(`plugin-action:${selectedMarketplace}/${selectedPlugin?.name || ''}`);
   const initialFailure = marketplacesState.error || pluginsState.error;
 
-  // Seed the two stream-backed documents when a live connection is available.
+  // The topic subscription is only live after `connection.ready`; wait for it
+  // before requesting the list snapshots that answer on that subscription.
   useEffect(() => {
-    if (!realtime.connected) return undefined;
+    if (!realtime.streamReady) return undefined;
     dispatch(fetchMarketplaces({ marketplacesUrl }));
     dispatch(fetchPlugins({ pluginsUrl }));
     return undefined;
-  }, [dispatch, realtime.connected, marketplacesUrl, pluginsUrl]);
+  }, [dispatch, marketplacesUrl, pluginsUrl, realtime.streamReady]);
 
   // Default to the marketplace named in the URL if it's actually registered,
   // otherwise fall back to the first registered marketplace.

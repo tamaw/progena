@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Header, Query, Request
 
 import src.backend.events.documents as events_documents
 import src.backend.events.stream as events_stream
@@ -75,6 +75,7 @@ def _document_type_snapshot_item(document_type: DocumentType) -> dict[str, Any]:
 )
 async def get_document_types(
     request: Request,
+    client_id: str | None = Query(default=None, min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Publish the document type registry (``document_type:<id>`` rows).
@@ -89,7 +90,10 @@ async def get_document_types(
         for item in sorted(types.values(), key=lambda item: item.label.lower())
     ]
     events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.DOCUMENT_TYPES_SNAPSHOT, {"items": items}, request_id=request_id
+        events_contracts.UiEvent.DOCUMENT_TYPES_SNAPSHOT,
+        {"items": items},
+        request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.DOCUMENT_TYPES_SNAPSHOT]

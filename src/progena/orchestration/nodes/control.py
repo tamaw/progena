@@ -10,6 +10,7 @@ from langgraph.runtime import Runtime
 from src.progena.orchestration.nodes.context import HeartbeatContext
 from src.progena.orchestration.state import ProgenaState
 from src.progena.security.redaction import redact_secrets
+from src.progena.sessions.render import finalize_session_turn
 from src.progena.utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,20 @@ async def cycle_error_node(
 ) -> dict[str, Any]:
     """Apply error handling for a failed cycle."""
     safe_error = redact_secrets(str(state.get("cycle_error") or "Unknown error"))
+    thread_id = str(
+        state.get("requested_thread_id")
+        or (state.get("current_input_metadata") or {}).get("thread_id")
+        or state.get("thread_id")
+        or ""
+    ).strip()
+    if thread_id:
+        await finalize_session_turn(
+            thread_id,
+            "failed",
+            getattr(runtime.context.agent_graph, "checkpointer", None),
+            runtime.context.state_manager,
+        )
+
     scheduled_run_id = str(state.get("scheduled_run_id") or "").strip() or None
     scheduled_schedule_id = str(state.get("scheduled_schedule_id") or "").strip() or None
     if scheduled_run_id:

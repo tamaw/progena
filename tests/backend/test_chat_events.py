@@ -58,15 +58,30 @@ class TestUserMessageEvents:
 
         queue = asyncio.Queue()
         events_stream._ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_clients[queue] = "conversation-tab"
+        events_stream.subscribe_topic("conversation-tab", "chat:thread-event")
+        other_tab = asyncio.Queue()
+        events_stream._ui_stream_subscribers[other_tab] = None
+        events_stream._ui_stream_clients[other_tab] = "other-tab"
         lifecycle_state.client = _MockClient()
         try:
             response = client.post(
                 "/api/ui/responses",
-                json={"model": "progena-v1", "input": "Hello!", "stream": False},
+                json={
+                    "model": "progena-v1",
+                    "input": "Hello!",
+                    "stream": False,
+                    "metadata": {"thread_id": "thread-event"},
+                },
                 headers={"X-Operation-Id": request_id},
             )
             events = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
+            other_events = [other_tab.get_nowait()["envelope"] for _ in range(other_tab.qsize())]
         finally:
+            events_stream._ui_stream_subscribers.pop(other_tab, None)
+            events_stream._ui_stream_clients.pop(other_tab, None)
+            events_stream._ui_stream_clients.pop(queue, None)
+            events_stream._ui_stream_topics.pop("conversation-tab", None)
             events_stream._ui_stream_subscribers.pop(queue, None)
             lifecycle_state.client = original_client
 
@@ -80,7 +95,10 @@ class TestUserMessageEvents:
             "chat.response.delta",
             "chat.response.completed",
         ]
-        assert all(event.payload["request_id"] == request_id for event in events)
+        assert [event.type for event in other_events] == [
+            "chat.response.started",
+            "chat.response.completed",
+        ]
         assert events[1].payload["delta"] == "Hello from agent"
 
     def test_attachment_only_send_with_real_frontend_payload_shape_accepted(self, client):

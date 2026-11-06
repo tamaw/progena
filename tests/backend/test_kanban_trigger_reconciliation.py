@@ -148,8 +148,10 @@ async def test_rest_driven_move_is_not_double_dispatched(workflow_env, backend_c
     """A persisted REST move emits its event once; draining again cannot rerun it."""
     store, state_reader = workflow_env
 
+    client_id = "kanban-rest-tab"
     queue = asyncio.Queue()
     events_stream._ui_stream_subscribers[queue] = None
+    events_stream._ui_stream_clients[queue] = client_id
     try:
         with TestClient(app) as client:
             workflow_id = "workflow_rest_move"
@@ -186,18 +188,18 @@ async def test_rest_driven_move_is_not_double_dispatched(workflow_env, backend_c
 
             request_id = "rest-kanban-move"
             patched = client.patch(
-                f"/api/ui/kanban/cards/{card_id}",
+                f"/api/ui/kanban/cards/{card_id}?client_id={client_id}",
                 json={"column_id": "done"},
                 headers={"X-Operation-Id": request_id},
             )
             assert patched.status_code == 202
             assert patched.json() == {
                 "request_id": request_id,
-                "event_types": ["kanban.snapshot"],
+                "event_types": ["tasks.snapshot"],
             }
             events = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
             assert events
-            snapshot_events = [event for event in events if event.type == "kanban.snapshot"]
+            snapshot_events = [event for event in events if event.type == "tasks.snapshot"]
             assert snapshot_events
             assert all(event.payload.get("request_id") == request_id for event in snapshot_events)
             snapshot = snapshot_events[0]
@@ -215,6 +217,7 @@ async def test_rest_driven_move_is_not_double_dispatched(workflow_env, backend_c
             assert len(matches) == 1
     finally:
         events_stream._ui_stream_subscribers.pop(queue, None)
+        events_stream._ui_stream_clients.pop(queue, None)
 
 
 @pytest.mark.asyncio

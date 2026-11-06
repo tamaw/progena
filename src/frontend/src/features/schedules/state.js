@@ -1,6 +1,17 @@
 import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { createSelector } from '@reduxjs/toolkit';
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from '../../store/async';
+import { withQuery } from '../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
+
+async function requestForSchedules(url, options, requestId) {
+  await waitForRealtimeClient();
+  return requestAcknowledged(
+    withQuery(url, { client_id: realtimeClientId }),
+    { ...options, requestId },
+  );
+}
+
 
 function normalizeSchedule(schedule) {
   if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule)) {
@@ -24,19 +35,21 @@ function schedulesFrom(payload) {
 }
 
 // Acknowledge a schedule-list request; the snapshot arrives on the realtime
-// stream as `schedule.snapshot` (the GET just triggers the broadcast).
-export const fetchSchedules = createAcknowledgedThunk('uiData/fetchSchedules', async ({ schedulesUrl }, { requestId }) => {
-  return requestAcknowledged(schedulesUrl, { requestId });
-});
-
-export const createSchedule = createAcknowledgedThunk('uiData/createSchedule', ({ schedulesUrl, schedule }, { requestId }) => requestAcknowledged(
-  schedulesUrl,
-  { method: 'POST', body: schedule, requestId },
+// stream as `schedules.snapshot` (the GET just triggers the broadcast).
+export const fetchSchedules = createAcknowledgedThunk('uiData/fetchSchedules', async ({ schedulesUrl }, { requestId }) => (
+  requestForSchedules(schedulesUrl, {}, requestId)
 ));
 
-export const retriggerSchedule = createAcknowledgedThunk('uiData/retriggerSchedule', ({ schedulesUrl, scheduleId, text }, { requestId }) => requestAcknowledged(
-  `${schedulesUrl}/${encodeURIComponent(scheduleId)}/trigger`,
-  { method: 'POST', body: { text }, requestId },
+export const createSchedule = createAcknowledgedThunk('uiData/createSchedule', async ({ schedulesUrl, schedule }, { requestId }) => (
+  requestForSchedules(schedulesUrl, { method: 'POST', body: schedule }, requestId)
+));
+
+export const retriggerSchedule = createAcknowledgedThunk('uiData/retriggerSchedule', async ({ schedulesUrl, scheduleId, text }, { requestId }) => (
+  requestForSchedules(
+    `${schedulesUrl}/${encodeURIComponent(scheduleId)}/trigger`,
+    { method: 'POST', body: { text } },
+    requestId,
+  )
 ));
 
 export function buildExtraReducers(builder) {
@@ -65,7 +78,7 @@ export const selectSchedulesState = createSelector(
 );
 
 export const initialState = {
-  // Schedule list, kept live by `schedule.snapshot` events on /api/ui/stream
+  // Schedule list, kept live by `schedules.snapshot` events on /api/ui/stream
   // and seeded once via REST when the Schedules page mounts.
   schedule: [],
   scheduleLoaded: false,
@@ -75,7 +88,7 @@ export const initialState = {
 };
 
 export const eventHandlers = {
-  [UI_EVENT.SCHEDULE_SNAPSHOT]: (state, payload) => {
+  [UI_EVENT.SCHEDULES_SNAPSHOT]: (state, payload) => {
     state.schedule = schedulesFrom(payload);
     state.scheduleLoaded = true;
     if (!state.scheduleLoading || payload.request_id === state.scheduleRequestId) {

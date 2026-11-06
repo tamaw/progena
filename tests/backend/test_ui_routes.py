@@ -194,39 +194,36 @@ class TestUIRoutes:
         assert "agents" not in metrics
         assert "schedule" not in metrics
 
-    def test_widgets_endpoint_broadcasts_snapshot(self, client):
-        """The acknowledgement is backed by a request-correlated canonical event."""
+    def test_widgets_endpoint_broadcasts_snapshot(self, client, ui_stream):
+        """The acknowledgement is backed by a request-correlated, tab-scoped event."""
 
         request_id = "widgets-stream-request"
-        event_start = len(events_stream._ui_event_replay)
-        response = client.get("/api/ui/widgets", headers={"X-Operation-Id": request_id})
+        response = client.get(
+            "/api/ui/widgets?client_id=tab-1", headers={"X-Operation-Id": request_id}
+        )
 
         assert_acknowledged(
             response, ["widgets.updated"], request_id=request_id, check_request_id_header=True
         )
-        envelope = next(
-            event
-            for event in events_stream._ui_event_replay[event_start:]
-            if event.payload.get("request_id") == request_id
-        )
+        envelope = ui_stream.get_nowait()["envelope"]
         assert envelope.type == "widgets.updated"
+        assert envelope.payload["request_id"] == request_id
         assert isinstance(envelope.payload["items"], list)
 
-    def test_mcp_endpoint_broadcasts_snapshot(self, client):
-        """MCP data is available only from a request-correlated canonical event."""
+    def test_mcp_endpoint_broadcasts_snapshot(self, client, ui_stream):
+        """MCP data is available only from a requester-correlated canonical event."""
 
         request_id = "mcp-stream-request"
-        event_start = len(events_stream._ui_event_replay)
-        response = client.get("/api/ui/mcp", headers={"X-Operation-Id": request_id})
+        response = client.get("/api/ui/mcp?client_id=tab-1", headers={"X-Operation-Id": request_id})
 
         assert_acknowledged(
             response, ["mcp.snapshot"], request_id=request_id, check_request_id_header=True
         )
-        envelope = next(
+        [envelope] = [
             event
-            for event in events_stream._ui_event_replay[event_start:]
+            for event in _stream_events(ui_stream)
             if event.payload.get("request_id") == request_id
-        )
+        ]
         assert envelope.type == "mcp.snapshot"
         assert isinstance(envelope.payload["items"], list)
 
@@ -236,7 +233,7 @@ class TestUIRoutes:
 
         patch_request_id = "chat-patch-request"
         patch_response = client.patch(
-            f"/api/ui/chats/{thread_id}",
+            f"/api/ui/chats/{thread_id}?client_id=tab-1",
             json={"pinned": True, "archived": True},
             headers={"X-Operation-Id": patch_request_id},
         )
@@ -274,16 +271,34 @@ class TestUIRoutes:
         ]
         assert loaded.type == "chat.list.loaded"
         assert loaded.payload["total"] == 1
-        assert loaded.payload["next_cursor"] is None
+        assert (loaded.payload["offset"], loaded.payload["groups"]) == (0, [])
         assert loaded.payload["view"]["filter"] == "all"
         [row] = loaded.payload["rows"]
         assert (row["thread_id"], row["pinned"], row["archived"]) == (thread_id, True, True)
         # The page belongs to the requesting tab: never replayed to others.
         assert events_stream._ui_event_replay[replay_start:] == []
 
-    def test_chat_list_requires_an_active_stream_and_a_valid_cursor(self, client, ui_stream):
+    def test_chat_list_requires_an_active_stream_and_all_group_starts(self, client, ui_stream):
         assert client.get("/api/ui/chats?client_id=other-tab").status_code == 409
-        assert client.get("/api/ui/chats?client_id=tab-1&cursor=bogus").status_code == 400
+        assert (
+            client.get("/api/ui/chats?client_id=tab-1&today=2026-03-10T00:00:00Z").status_code
+            == 400
+        )
+
+    def test_chat_list_counts_groups_from_the_browsers_day_starts(
+        self, client, document_store, ui_stream
+    ):
+        _create_session_document(document_store, "recent", "Recent")
+        starts = (
+            "&today=2000-01-04T13:00:00Z&yesterday=2000-01-03T13:00:00Z"
+            "&this_week=1999-12-28T13:00:00Z&last_week=1999-12-21T13:00:00Z"
+        )
+
+        page = _list_chats(client, ui_stream, f"&offset=0&limit=1{starts}").payload
+
+        assert page["view"]["group_starts"]["today"] == "2000-01-04T13:00:00Z"
+        assert {group["key"]: group["count"] for group in page["groups"]}["today"] == 1
+        assert sum(group["count"] for group in page["groups"]) == page["total"] == 1
 
     @pytest.mark.asyncio
     async def test_concurrent_chat_mutations_emit_their_own_correlated_events(self, document_store):
@@ -301,7 +316,10 @@ class TestUIRoutes:
         )
         dispatcher.add_handler(chat_routes._publish_chat_session_document_event)
         await dispatcher.start()
-        event_start = len(events_stream._ui_event_replay)
+        subscriber: asyncio.Queue = asyncio.Queue()
+        events_stream._ui_stream_subscribers[subscriber] = None
+        events_stream._ui_stream_clients[subscriber] = "chat-list-tab"
+        events_stream.subscribe_topic("chat-list-tab", "chats")
         patch_request_id = "chat-mutation-patch"
         delete_request_id = "chat-mutation-delete"
         missing_request_id = "chat-mutation-missing"
@@ -321,26 +339,26 @@ class TestUIRoutes:
                     idempotent_response,
                 ) = await asyncio.gather(
                     async_client.patch(
-                        "/api/ui/chats/thread-patch",
+                        "/api/ui/chats/thread-patch?client_id=chat-list-tab",
                         json={"title": "After", "pinned": True, "archived": True},
                         headers={"X-Operation-Id": patch_request_id},
                     ),
                     async_client.delete(
-                        "/api/ui/chats/thread-delete",
+                        "/api/ui/chats/thread-delete?client_id=chat-list-tab",
                         headers={"X-Operation-Id": delete_request_id},
                     ),
                     async_client.patch(
-                        "/api/ui/chats/missing",
+                        "/api/ui/chats/missing?client_id=chat-list-tab",
                         json={"title": "Never persisted"},
                         headers={"X-Operation-Id": missing_request_id},
                     ),
                     async_client.patch(
-                        "/api/ui/chats/thread-empty",
+                        "/api/ui/chats/thread-empty?client_id=chat-list-tab",
                         json={},
                         headers={"X-Operation-Id": empty_request_id},
                     ),
                     async_client.patch(
-                        "/api/ui/chats/thread-idempotent",
+                        "/api/ui/chats/thread-idempotent?client_id=chat-list-tab",
                         json={"pinned": False},
                         headers={"X-Operation-Id": idempotent_request_id},
                     ),
@@ -348,6 +366,9 @@ class TestUIRoutes:
             await dispatcher.drain()
         finally:
             await dispatcher.stop()
+            events_stream._ui_stream_subscribers.pop(subscriber, None)
+            events_stream._ui_stream_clients.pop(subscriber, None)
+            events_stream._ui_stream_topics.pop("chat-list-tab", None)
 
         assert_acknowledged(
             patch_response,
@@ -374,7 +395,7 @@ class TestUIRoutes:
             request_id=idempotent_request_id,
             check_request_id_header=True,
         )
-        emitted = events_stream._ui_event_replay[event_start:]
+        emitted = [subscriber.get_nowait()["envelope"] for _ in range(subscriber.qsize())]
         by_request_id = {
             request_id: [
                 event for event in emitted if event.payload.get("request_id") == request_id
@@ -638,7 +659,9 @@ class TestUIRoutes:
         assert session["messages"][-1]["content"] == "message 59"
         assert session["message_count"] == 60
 
-    def test_chat_messages_page_loads_older_page_until_exhausted(self, client, document_store):
+    def test_chat_messages_page_loads_older_page_until_exhausted(
+        self, client, document_store, ui_stream
+    ):
         messages = []
         for index in range(60):
             role = "human" if index % 2 == 0 else "ai"
@@ -656,11 +679,15 @@ class TestUIRoutes:
 
         older_response = client.get(
             f"/api/ui/chats/{thread_id}/messages",
-            params={"before_message_id": "m10"},
+            params={"before_message_id": "m10", "client_id": "tab-1"},
         )
         assert older_response.status_code == 202
 
-        page_event = events_stream._ui_event_replay[-1]
+        page_event = next(
+            event
+            for event in _stream_events(ui_stream)
+            if event.type == "chat.messages.page.loaded"
+        )
         assert page_event.type == "chat.messages.page.loaded"
         assert page_event.payload["thread_id"] == thread_id
         assert page_event.payload["has_more"] is False
@@ -675,7 +702,7 @@ class TestUIRoutes:
 
         thread_id = "thread-deleted"
         _create_session_document(document_store, thread_id, "Doomed")
-        assert client.delete(f"/api/ui/chats/{thread_id}").status_code == 202
+        assert client.delete(f"/api/ui/chats/{thread_id}?client_id=tab-1").status_code == 202
 
         class _LiveStateReader:
             """The runtime still holds a current_state document for the thread."""
@@ -690,7 +717,7 @@ class TestUIRoutes:
             "src.backend.monitoring.state.get_state_reader", lambda: _LiveStateReader()
         )
         assert client.get(f"/api/ui/chats/{thread_id}?client_id=tab-1").status_code == 404
-        assert client.get(f"/api/ui/chats/{thread_id}/messages").status_code == 404
+        assert client.get(f"/api/ui/chats/{thread_id}/messages?client_id=tab-1").status_code == 404
         assert not [
             event for event in _stream_events(ui_stream) if event.type == "chat.session.selected"
         ]
@@ -714,7 +741,7 @@ class TestUIRoutes:
         assert [row["title"] for row in rows] == ["Has history"]
 
     def test_rename_is_accepted_while_the_runtime_is_down(
-        self, client, document_store, monkeypatch
+        self, client, document_store, monkeypatch, ui_stream
     ):
         from src.backend.integrations.runtime_history import RuntimeUnavailable
 
@@ -725,14 +752,19 @@ class TestUIRoutes:
 
         monkeypatch.setattr(document_store, "get_checkpoint_thread_snapshot", _unavailable)
 
-        response = client.patch("/api/ui/chats/thread-rename", json={"title": "New"})
+        response = client.patch(
+            "/api/ui/chats/thread-rename?client_id=tab-1", json={"title": "New"}
+        )
 
         assert response.status_code == 202
         stored = document_store.get_document(
             PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread-rename"
         )
         assert stored.payload["title"] == "New"
-        assert client.patch("/api/ui/chats/missing", json={"title": "x"}).status_code == 404
+        assert (
+            client.patch("/api/ui/chats/missing?client_id=tab-1", json={"title": "x"}).status_code
+            == 404
+        )
 
     async def test_session_document_event_sends_the_current_row_once(self, document_store):
         """Document events are historical: the row sent is the document as it is
@@ -762,12 +794,19 @@ class TestUIRoutes:
             )
             return TypedDocumentEvent(event=event, document_type=None, output=None)
 
-        event_start = len(events_stream._ui_event_replay)
-        await chat_routes._publish_chat_session_document_event(typed("updated"))
-        await chat_routes._publish_chat_session_document_event(typed("updated"))
-        await chat_routes._publish_chat_session_document_event(typed("deleted"))
-
-        emitted = events_stream._ui_event_replay[event_start:]
+        subscriber: asyncio.Queue = asyncio.Queue()
+        events_stream._ui_stream_subscribers[subscriber] = None
+        events_stream._ui_stream_clients[subscriber] = "chat-list-tab"
+        events_stream.subscribe_topic("chat-list-tab", "chats")
+        try:
+            await chat_routes._publish_chat_session_document_event(typed("updated"))
+            await chat_routes._publish_chat_session_document_event(typed("updated"))
+            await chat_routes._publish_chat_session_document_event(typed("deleted"))
+            emitted = [subscriber.get_nowait()["envelope"] for _ in range(subscriber.qsize())]
+        finally:
+            events_stream._ui_stream_subscribers.pop(subscriber, None)
+            events_stream._ui_stream_clients.pop(subscriber, None)
+            events_stream._ui_stream_topics.pop("chat-list-tab", None)
         assert [envelope.type for envelope in emitted] == [
             "chat.list.row.upserted",
             "chat.list.row.deleted",
@@ -797,6 +836,8 @@ class TestUIRoutes:
         )
         queue: asyncio.Queue = asyncio.Queue()
         events_stream._ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_clients[queue] = "chat-list-tab"
+        events_stream.subscribe_topic("chat-list-tab", "chats")
         try:
             reader._on_store_change(
                 json.dumps({"prefix": PROGENA_STATE_PREFIX, "key": "session:thread-turn"})
@@ -804,6 +845,8 @@ class TestUIRoutes:
             await asyncio.gather(*monitoring_status._active_chat_list_row_tasks)
         finally:
             events_stream._ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_clients.pop(queue, None)
+            events_stream._ui_stream_topics.pop("chat-list-tab", None)
 
         [row_event] = [e for e in _stream_events(queue) if e.type == "chat.list.row.upserted"]
         row = row_event.payload["row"]
@@ -864,7 +907,7 @@ class TestUIRoutes:
         _create_session_document(document_store, "thread-delete", "Disposable chat")
         thread_id = "thread-delete"
 
-        delete_response = client.delete(f"/api/ui/chats/{thread_id}")
+        delete_response = client.delete(f"/api/ui/chats/{thread_id}?client_id=tab-1")
 
         assert delete_response.status_code == 202
         assert (
@@ -886,13 +929,14 @@ class TestUIRoutes:
         self,
         client,
         document_store,
+        ui_stream,
     ):
         _create_session_document(
             document_store, "thread_current-session-1", "Current synthetic chat"
         )
 
         patch_response = client.patch(
-            "/api/ui/chats/thread_current-session-1",
+            "/api/ui/chats/thread_current-session-1?client_id=tab-1",
             json={"pinned": True, "archived": True},
         )
 
@@ -904,7 +948,7 @@ class TestUIRoutes:
         assert stored.payload["pinned"] is True
         assert stored.payload["archived"] is True
 
-        delete_response = client.delete("/api/ui/chats/thread_current-session-1")
+        delete_response = client.delete("/api/ui/chats/thread_current-session-1?client_id=tab-1")
 
         assert delete_response.status_code == 202
         assert (
@@ -914,13 +958,13 @@ class TestUIRoutes:
             is None
         )
 
-    def test_kanban_endpoint_returns_default_board(self, client, tasks_state_reader):
-        response = client.get("/api/ui/kanban")
+    def test_kanban_endpoint_returns_default_board(self, client, tasks_state_reader, ui_stream):
+        response = client.get("/api/ui/kanban?client_id=tab-1")
         assert response.status_code == 202
         data = response.json()
         assert_acknowledgement_body(data)
 
-        replay = events_stream._ui_event_replay[-1]
+        [replay] = _stream_events(ui_stream)
         board = replay.payload
         assert board["title"] == "Delivery Kanban"
         assert [column["id"] for column in board["columns"]] == [
@@ -941,11 +985,13 @@ class TestUIRoutes:
         }
 
     def test_task_activity_get_uses_middleware_request_id_and_emits_full_state(
-        self, client, tasks_state_reader
+        self, client, tasks_state_reader, ui_stream
     ):
-        """A headerless retained activity read is acknowledged and replayed consistently."""
+        """A headerless activity read replies only to its requesting stream."""
 
-        created = client.post("/api/ui/kanban/cards", json={"title": "Activity task"})
+        created = client.post(
+            "/api/ui/kanban/cards?client_id=tab-1", json={"title": "Activity task"}
+        )
         assert created.status_code == 202
         board = tasks_state_reader.document_store.get_document(
             PROGENA_STATE_PREFIX, "kanban_board", None
@@ -969,20 +1015,16 @@ class TestUIRoutes:
             persisted_activity,
         )
 
-        queue = asyncio.Queue()
-        events_stream._ui_stream_subscribers[queue] = None
-        try:
-            response = client.get(f"/api/ui/tasks/{card_id}/activity")
-            request_id = response.headers["X-Operation-Id"]
-            assert_acknowledged(
-                response,
-                ["task.activity.updated"],
-                request_id=request_id,
-                check_request_id_header=True,
-            )
-            envelopes = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
-        finally:
-            events_stream._ui_stream_subscribers.pop(queue, None)
+        _stream_events(ui_stream)
+        response = client.get(f"/api/ui/tasks/{card_id}/activity?client_id=tab-1")
+        request_id = response.headers["X-Operation-Id"]
+        assert_acknowledged(
+            response,
+            ["task.activity.updated"],
+            request_id=request_id,
+            check_request_id_header=True,
+        )
+        envelopes = _stream_events(ui_stream)
 
         assert request_id.startswith("req-")
         assert len(envelopes) == 1
@@ -995,11 +1037,13 @@ class TestUIRoutes:
             "request_id": request_id,
         }
 
-    def test_task_content_update_acknowledges_and_persists_body(self, client, tasks_state_reader):
-        """Task body writes return an ack while stream state carries the saved content."""
+    def test_task_content_update_acknowledges_and_persists_body(
+        self, client, tasks_state_reader, ui_stream
+    ):
+        """Task body writes reply with saved content and activity to their requester."""
 
         created = client.post(
-            "/api/ui/kanban/cards",
+            "/api/ui/kanban/cards?client_id=tab-1",
             json={"title": "Persisted task", "summary": "Keep the brief"},
         )
         assert created.status_code == 202
@@ -1009,17 +1053,13 @@ class TestUIRoutes:
         assert board is not None
         card_id = board.payload["card_order"][-1]
         request_id = "task-content-save-42"
-        queue = asyncio.Queue()
-        events_stream._ui_stream_subscribers[queue] = None
-        try:
-            response = client.put(
-                f"/api/ui/tasks/{card_id}/content",
-                json={"content": "## Acceptance\n\nKeep this body\n\n"},
-                headers={"X-Operation-Id": request_id},
-            )
-            emitted = [queue.get_nowait() for _ in range(queue.qsize())]
-        finally:
-            events_stream._ui_stream_subscribers.pop(queue, None)
+        _stream_events(ui_stream)
+        response = client.put(
+            f"/api/ui/tasks/{card_id}/content?client_id=tab-1",
+            json={"content": "## Acceptance\n\nKeep this body\n\n"},
+            headers={"X-Operation-Id": request_id},
+        )
+        emitted = _stream_events(ui_stream)
 
         assert_acknowledged(
             response,
@@ -1027,9 +1067,7 @@ class TestUIRoutes:
             request_id=request_id,
             check_request_id_header=True,
         )
-        content_event = next(
-            item["envelope"] for item in emitted if item["envelope"].type == "task.content.updated"
-        )
+        content_event = next(event for event in emitted if event.type == "task.content.updated")
         assert content_event.payload["card_id"] == card_id
         assert content_event.payload["path"] == f"tasks/{card_id}.md"
         assert content_event.payload["content"] == "## Acceptance\n\nKeep this body"
@@ -1041,21 +1079,20 @@ class TestUIRoutes:
         assert stored is not None
         assert stored.payload == {"content": "## Acceptance\n\nKeep this body"}
 
-    def test_kanban_card_create_and_patch_persist(self, client, tasks_state_reader):
+    def test_kanban_card_create_and_patch_persist(self, client, tasks_state_reader, ui_stream):
         create_response = client.post(
-            "/api/ui/kanban/cards",
+            "/api/ui/kanban/cards?client_id=tab-1",
             json={"title": "Build kanban board", "summary": "Server first"},
         )
 
         data = create_response.json()
         assert_acknowledgement_body(data)
-        assert "kanban.snapshot" in data["event_types"]
+        assert "tasks.snapshot" in data["event_types"]
         store = tasks_state_reader.document_store
         board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         card_id = board.payload["card_order"][-1]
         # Cards persist as their own ``kanban_card:<id>`` document; the board
         # structure only records column layout + ``card_order``.
-        store = tasks_state_reader.document_store
         stored_board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         assert stored_board is not None
         assert "cards" not in stored_board.payload
@@ -1064,7 +1101,7 @@ class TestUIRoutes:
         assert stored_card.payload["id"] == card_id
 
         patch_response = client.patch(
-            f"/api/ui/kanban/cards/{card_id}",
+            f"/api/ui/kanban/cards/{card_id}?client_id=tab-1",
             json={
                 "column_id": "build",
                 "status": "running",
@@ -1077,7 +1114,7 @@ class TestUIRoutes:
         assert patch_response.status_code == 202
         data = patch_response.json()
         assert_acknowledgement_body(data)
-        assert "kanban.snapshot" in data["event_types"]
+        assert "tasks.snapshot" in data["event_types"]
 
         stored_card = store.get_document(PROGENA_STATE_PREFIX, f"kanban_card:{card_id}", None)
         assert stored_card is not None
@@ -1088,21 +1125,25 @@ class TestUIRoutes:
         assert stored_card.payload["labels"] == ["frontend", "live-first"]
         assert stored_card.payload["started_at"] is not None
 
-        board_response = client.get("/api/ui/kanban")
+        _stream_events(ui_stream)
+        board_response = client.get("/api/ui/kanban?client_id=tab-1")
         assert board_response.status_code == 202
 
-        board = events_stream._ui_event_replay[-1].payload
+        [snapshot] = _stream_events(ui_stream)
+        board = snapshot.payload
         assert board["cards"][0]["id"] == card_id
         assert board["cards"][0]["column_id"] == "build"
 
-    def test_kanban_card_project_id_persists_and_patches(self, client, tasks_state_reader):
+    def test_kanban_card_project_id_persists_and_patches(
+        self, client, tasks_state_reader, ui_stream
+    ):
         create_response = client.post(
-            "/api/ui/kanban/cards",
+            "/api/ui/kanban/cards?client_id=tab-1",
             json={"title": "Scoped card", "project_id": "acme"},
         )
         data = create_response.json()
         assert_acknowledgement_body(data)
-        assert "kanban.snapshot" in data["event_types"]
+        assert "tasks.snapshot" in data["event_types"]
         store = tasks_state_reader.document_store
         board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         card_id = board.payload["card_order"][-1]
@@ -1113,7 +1154,7 @@ class TestUIRoutes:
         assert stored_card.payload["project_id"] == "acme"
 
         patch_response = client.patch(
-            f"/api/ui/kanban/cards/{card_id}",
+            f"/api/ui/kanban/cards/{card_id}?client_id=tab-1",
             json={"project_id": "beta"},
         )
         assert patch_response.status_code == 202
@@ -1125,7 +1166,7 @@ class TestUIRoutes:
         assert stored_card.payload["project_id"] == "beta"
 
         cleared = client.patch(
-            f"/api/ui/kanban/cards/{card_id}",
+            f"/api/ui/kanban/cards/{card_id}?client_id=tab-1",
             json={"project_id": ""},
         )
         assert cleared.status_code == 202
@@ -1136,10 +1177,10 @@ class TestUIRoutes:
         assert stored_card.payload["project_id"] is None
 
     def test_kanban_card_metadata_persists_subtasks_and_dependencies(
-        self, client, tasks_state_reader
+        self, client, tasks_state_reader, ui_stream
     ):
         client.post(
-            "/api/ui/kanban/cards",
+            "/api/ui/kanban/cards?client_id=tab-1",
             json={"title": "Metadata task"},
         )
         store = tasks_state_reader.document_store
@@ -1147,7 +1188,7 @@ class TestUIRoutes:
         card_id = board.payload["card_order"][-1]
 
         patch_response = client.patch(
-            f"/api/ui/kanban/cards/{card_id}",
+            f"/api/ui/kanban/cards/{card_id}?client_id=tab-1",
             json={
                 "metadata": {
                     "subtasks": [
@@ -1168,7 +1209,7 @@ class TestUIRoutes:
         assert stored_card.payload["metadata"]["dependencies"] == ["task-123", "docs/spec.md"]
 
         patch_response = client.patch(
-            f"/api/ui/kanban/cards/{card_id}",
+            f"/api/ui/kanban/cards/{card_id}?client_id=tab-1",
             json={
                 "metadata": {
                     "subtasks": stored_card.payload["metadata"]["subtasks"],
@@ -1204,18 +1245,18 @@ class TestUIRoutes:
         ]
         assert stored_card_updated.payload["metadata"]["attachments"][1]["kind"] == "pr"
 
-    def test_kanban_card_reorder_persists_positions(self, client, tasks_state_reader):
-        client.post("/api/ui/kanban/cards", json={"title": "First card"})
+    def test_kanban_card_reorder_persists_positions(self, client, tasks_state_reader, ui_stream):
+        client.post("/api/ui/kanban/cards?client_id=tab-1", json={"title": "First card"})
         store = tasks_state_reader.document_store
         board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         first_id = board.payload["card_order"][0]
-        client.post("/api/ui/kanban/cards", json={"title": "Second card"})
-        client.post("/api/ui/kanban/cards", json={"title": "Third card"})
+        client.post("/api/ui/kanban/cards?client_id=tab-1", json={"title": "Second card"})
+        client.post("/api/ui/kanban/cards?client_id=tab-1", json={"title": "Third card"})
         board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         third_id = board.payload["card_order"][2]
 
         reorder_response = client.patch(
-            f"/api/ui/kanban/cards/{third_id}",
+            f"/api/ui/kanban/cards/{third_id}?client_id=tab-1",
             json={"position": 1},
         )
 
@@ -1227,7 +1268,7 @@ class TestUIRoutes:
         assert board.payload["card_order"][1] == third_id
 
         move_response = client.patch(
-            f"/api/ui/kanban/cards/{first_id}",
+            f"/api/ui/kanban/cards/{first_id}?client_id=tab-1",
             json={"column_id": "build", "position": 0},
         )
 
@@ -1235,9 +1276,11 @@ class TestUIRoutes:
         data = move_response.json()
         assert_acknowledgement_body(data)
 
-        board_response = client.get("/api/ui/kanban")
+        _stream_events(ui_stream)
+        board_response = client.get("/api/ui/kanban?client_id=tab-1")
         assert board_response.status_code == 202
-        board = events_stream._ui_event_replay[-1].payload
+        [snapshot] = _stream_events(ui_stream)
+        board = snapshot.payload
         backlog_cards = [card for card in board["cards"] if card["column_id"] == "backlog"]
         build_cards = [card for card in board["cards"] if card["column_id"] == "build"]
 
@@ -1246,7 +1289,7 @@ class TestUIRoutes:
         assert [card["title"] for card in build_cards] == ["First card"]
         assert build_cards[0]["position"] == 0
 
-    def test_kanban_normalizes_legacy_columns(self, client, tasks_state_reader):
+    def test_kanban_normalizes_legacy_columns(self, client, tasks_state_reader, ui_stream):
         legacy_board = {
             "id": "progena-kanban",
             "title": "Delivery Kanban",
@@ -1262,10 +1305,10 @@ class TestUIRoutes:
             PROGENA_STATE_PREFIX, "kanban_board", legacy_board
         )
 
-        board_response = client.get("/api/ui/kanban")
+        board_response = client.get("/api/ui/kanban?client_id=tab-1")
         assert board_response.status_code == 202
 
-        replay = events_stream._ui_event_replay[-1]
+        [replay] = _stream_events(ui_stream)
         board = replay.payload
         assert [column["id"] for column in board["columns"]] == [
             "backlog",
@@ -1291,21 +1334,24 @@ class TestUIRoutes:
         }
         assert store.get_document(PROGENA_STATE_PREFIX, "kanban_card:legacy-test", None) is not None
 
-    def test_kanban_card_delete_persists(self, client, tasks_state_reader):
-        create_response = client.post("/api/ui/kanban/cards", json={"title": "Disposable card"})
+    def test_kanban_card_delete_persists(self, client, tasks_state_reader, ui_stream):
+        create_response = client.post(
+            "/api/ui/kanban/cards?client_id=tab-1", json={"title": "Disposable card"}
+        )
         data = create_response.json()
         assert_acknowledgement_body(data)
         store = tasks_state_reader.document_store
         board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         card_id = board.payload["card_order"][-1]
 
-        delete_response = client.delete(f"/api/ui/kanban/cards/{card_id}")
+        delete_response = client.delete(f"/api/ui/kanban/cards/{card_id}?client_id=tab-1")
 
         assert delete_response.status_code == 202
-        board_response = client.get("/api/ui/kanban")
+        _stream_events(ui_stream)
+        board_response = client.get("/api/ui/kanban?client_id=tab-1")
         assert board_response.status_code == 202
 
-        replay = events_stream._ui_event_replay[-1]
+        [replay] = _stream_events(ui_stream)
         board = replay.payload
         assert all(card["id"] != card_id for card in board["cards"])
         # Deleting the card also removes its backing document and drops it from
@@ -1315,9 +1361,9 @@ class TestUIRoutes:
         structure = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         assert card_id not in structure.payload["card_order"]
 
-    def test_schedule_widget_delete_persists_removal(self, client, kanban_state_reader):
+    def test_schedule_widget_delete_persists_removal(self, client, kanban_state_reader, ui_stream):
         create_response = client.post(
-            "/api/ui/schedules",
+            "/api/ui/schedules?client_id=tab-1",
             json={
                 "name": "Morning summary",
                 "instruction": "Send the daily summary",
@@ -1335,7 +1381,7 @@ class TestUIRoutes:
         schedule_id = list(before_delete.keys())[0]
         assert list(before_delete.keys()) == [schedule_id]
 
-        delete_response = client.delete(f"/api/ui/widgets/schedule:{schedule_id}")
+        delete_response = client.delete(f"/api/ui/widgets/schedule:{schedule_id}?client_id=tab-1")
 
         assert delete_response.status_code == 202
         data = delete_response.json()
@@ -1344,23 +1390,31 @@ class TestUIRoutes:
         after_delete = schedule_doc.payload if schedule_doc else {}
         assert after_delete == {}
 
-        widgets_resp = client.get("/api/ui/widgets")
+        widgets_resp = client.get("/api/ui/widgets?client_id=tab-1")
         assert widgets_resp.status_code == 202
-        widgets = events_stream._ui_event_replay[-1].payload
+        widgets = next(
+            item["envelope"].payload
+            for item in list(ui_stream._queue)
+            if item["envelope"].type == "widgets.updated"
+        )
         assert f"schedule:{schedule_id}" not in {widget["id"] for widget in widgets["items"]}
 
-        repeated_delete = client.delete(f"/api/ui/widgets/schedule:{schedule_id}")
+        repeated_delete = client.delete(f"/api/ui/widgets/schedule:{schedule_id}?client_id=tab-1")
 
         assert repeated_delete.status_code == 202
         data = repeated_delete.json()
         assert_acknowledgement_body(data)
-        response = client.get("/api/ui/schedules")
+        response = client.get("/api/ui/schedules?client_id=tab-1")
         assert response.status_code == 202
         data = response.json()
         assert_acknowledgement_body(data)
 
-        replay = events_stream._ui_event_replay[-1]
-        assert isinstance(replay.payload.get("items"), list)
+        snapshot = next(
+            item["envelope"].payload
+            for item in list(ui_stream._queue)
+            if item["envelope"].type == "schedules.snapshot"
+        )
+        assert isinstance(snapshot.get("items"), list)
 
     def test_ui_alerts_endpoint(self, client):
         """Test /api/ui/alerts returns alerts."""
@@ -1509,7 +1563,7 @@ class TestLogsEndpoint:
         data = response.json()
         assert_acknowledgement_body(data)
 
-    def test_logs_export_returns_downloadable_payload(self, client, kanban_state_reader):
+    def test_logs_export_returns_downloadable_payload(self, client, kanban_state_reader, ui_stream):
         """Test export endpoint returns accepted response."""
         timestamp = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         (kanban_state_reader.logs_dir / "decisions.jsonl").write_text(
@@ -1518,7 +1572,7 @@ class TestLogsEndpoint:
             encoding="utf-8",
         )
 
-        response = client.get("/api/ui/logs/export?format=jsonl")
+        response = client.get("/api/ui/logs/export?format=jsonl&client_id=tab-1")
         assert response.status_code == 202
         data = response.json()
         assert_acknowledgement_body(data)
@@ -1547,9 +1601,10 @@ class TestLogsEndpoint:
 
         queue = asyncio.Queue()
         events_stream._ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_clients[queue] = "tab-1"
         try:
             response = client.get(
-                "/api/ui/logs/export?format=jsonl",
+                "/api/ui/logs/export?format=jsonl&client_id=tab-1",
                 headers={"X-Operation-Id": request_id},
             )
             assert_acknowledged(
@@ -1563,6 +1618,7 @@ class TestLogsEndpoint:
                 emitted.append(queue.get_nowait())
         finally:
             events_stream._ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_clients.pop(queue, None)
 
         assert [event["type"] for event in emitted] == ["ui.event", "ui.event", "ui.event"]
         envelopes = [event["envelope"] for event in emitted]
@@ -1632,9 +1688,10 @@ class TestLogsEndpoint:
         queue = asyncio.Queue()
         assert not any(kanban_state_reader.logs_dir.iterdir())
         events_stream._ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_clients[queue] = "tab-1"
         try:
             response = client.get(
-                "/api/ui/logs/export",
+                "/api/ui/logs/export?client_id=tab-1",
                 headers={"X-Operation-Id": request_id},
             )
             assert_acknowledged(
@@ -1648,6 +1705,7 @@ class TestLogsEndpoint:
                 emitted.append(queue.get_nowait())
         finally:
             events_stream._ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_clients.pop(queue, None)
 
         envelopes = [event["envelope"] for event in emitted]
         assert [envelope.type for envelope in envelopes] == [
@@ -1656,7 +1714,7 @@ class TestLogsEndpoint:
         ]
         assert all(envelope.payload["request_id"] == request_id for envelope in envelopes)
 
-    def test_logs_export_supports_csv(self, client, kanban_state_reader):
+    def test_logs_export_supports_csv(self, client, kanban_state_reader, ui_stream):
         """Test CSV export output."""
         timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
         (kanban_state_reader.logs_dir / "progena.log").write_text(
@@ -1664,7 +1722,7 @@ class TestLogsEndpoint:
             encoding="utf-8",
         )
 
-        response = client.get("/api/ui/logs/export?format=csv")
+        response = client.get("/api/ui/logs/export?format=csv&client_id=tab-1")
 
         assert response.status_code == 202
         data = response.json()
@@ -1676,7 +1734,7 @@ class TestLogsEndpoint:
 class TestScheduleEndpoint:
     """Tests for /api/ui/schedule endpoint."""
 
-    def test_create_and_patch_keep_paused_in_sync(self, client, monkeypatch):
+    def test_create_and_patch_keep_paused_in_sync(self, client, monkeypatch, ui_stream):
         """enabled drives the runtime-honoured paused flag on create and patch."""
         store = InMemoryDocumentStore()
         store.save_document(PROGENA_STATE_PREFIX, "schedule", {})
@@ -1684,7 +1742,7 @@ class TestScheduleEndpoint:
         monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         created = client.post(
-            "/api/ui/schedules",
+            "/api/ui/schedules?client_id=tab-1",
             json={
                 "name": "Sync check",
                 "instruction": "do the thing",
@@ -1705,7 +1763,7 @@ class TestScheduleEndpoint:
         assert entry["paused"] is False
 
         patched = client.patch(
-            f"/api/ui/widgets/schedule:{schedule_id}",
+            f"/api/ui/widgets/schedule:{schedule_id}?client_id=tab-1",
             json={"enabled": False},
         )
         assert patched.status_code == 202
@@ -1716,7 +1774,7 @@ class TestScheduleEndpoint:
         assert entry["enabled"] is False
 
     def test_broadcast_schedule_snapshot_emits_ui_event(self, monkeypatch):
-        """Schedule snapshot broadcasts on the canonical UI event stream."""
+        """Background schedule updates reach only schedule-topic watchers."""
 
         store = InMemoryDocumentStore()
         created_at = datetime.now(UTC).isoformat()
@@ -1737,21 +1795,34 @@ class TestScheduleEndpoint:
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
-        queue = asyncio.Queue()
-        events_stream._ui_stream_subscribers[queue] = None
+        watcher, other = asyncio.Queue(), asyncio.Queue()
+        events_stream._ui_stream_subscribers[watcher] = None
+        events_stream._ui_stream_subscribers[other] = None
+        events_stream._ui_stream_clients[watcher] = "schedule-watcher"
+        events_stream._ui_stream_clients[other] = "other-tab"
+        events_stream.subscribe_topic("schedule-watcher", schedules_service.SCHEDULES_TOPIC)
         try:
             envelope = schedules_service.broadcast_schedule_snapshot()
+            watcher_events = _stream_events(watcher)
+            other_events = _stream_events(other)
         finally:
-            events_stream._ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_subscribers.pop(watcher, None)
+            events_stream._ui_stream_subscribers.pop(other, None)
+            events_stream._ui_stream_clients.pop(watcher, None)
+            events_stream._ui_stream_clients.pop(other, None)
+            events_stream.clear_topics("schedule-watcher")
 
-        assert envelope.type == "schedule.snapshot"
+        assert envelope.type == "schedules.snapshot"
         assert envelope.payload["items"][0]["id"] == "sched-live"
-        assert events_stream._ui_event_replay[-1].type == "schedule.snapshot"
-
-        streamed = queue.get_nowait()
-        assert streamed["type"] == "ui.event"
-        assert streamed["envelope"].type == "schedule.snapshot"
-        assert streamed["envelope"].payload["items"][0]["message"] == "ping"
+        [streamed] = [event for event in watcher_events if event.type == "schedules.snapshot"]
+        assert streamed.payload["items"][0]["message"] == "ping"
+        assert not [event for event in other_events if event.type == "schedules.snapshot"]
+        assert [event.type for event in watcher_events if event.type == "nav.activity"] == [
+            "nav.activity"
+        ]
+        assert [event.type for event in other_events if event.type == "nav.activity"] == [
+            "nav.activity"
+        ]
 
     def test_schedule_snapshot_normalizes_legacy_naive_one_shot_timestamp(self, monkeypatch):
         store = InMemoryDocumentStore()
@@ -1960,6 +2031,14 @@ class TestLogsPage:
 class TestUIStreamEvents:
     """Tests for browser-visible UI stream events."""
 
+    @pytest.fixture(autouse=True)
+    def _fresh_shutdown_event(self):
+        # The event is process-wide and set for good by any app shutdown; a stream
+        # opened while it is set is a draining one and gets no `connection.ready`.
+        events_stream._sse_shutdown_event = None
+        yield
+        events_stream._sse_shutdown_event = None
+
     def test_broadcast_alerts_state_pushes_full_alert_payload(self):
 
         clear_alerts()
@@ -2006,6 +2085,20 @@ class TestUIStreamEvents:
         assert any(a["id"] == alert.id for a in alerts_payload.get("alerts", []))
 
     @pytest.mark.asyncio
+    async def test_ui_stream_opened_while_draining_gets_shutdown_and_no_ready(self, monkeypatch):
+        monkeypatch.setattr(monitoring_status, "start_status_monitor", lambda: None)
+        shutdown = events_stream.get_sse_shutdown_event()
+        shutdown.set()
+        try:
+            generator = events_routes._generate_ui_stream()
+            events = [event async for event in generator]
+        finally:
+            shutdown.clear()
+
+        assert [event.data["type"] for event in events] == ["connection.shutdown"]
+        assert events_stream._ui_stream_subscribers == {}
+
+    @pytest.mark.asyncio
     async def test_ui_stream_after_query_replays_missed_envelopes(self, monkeypatch):
         """A fresh EventSource cannot send Last-Event-ID; ``after`` resumes it."""
         from fastapi.responses import Response
@@ -2037,7 +2130,7 @@ class TestUIStreamEvents:
 class TestWorkspaceBridgeActions:
     """Tests for backend action bridge endpoints."""
 
-    def test_patch_schedule_widget_updates_schedule_document(self, client, monkeypatch):
+    def test_patch_schedule_widget_updates_schedule_document(self, client, monkeypatch, ui_stream):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENA_STATE_PREFIX,
@@ -2059,7 +2152,7 @@ class TestWorkspaceBridgeActions:
         monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.patch(
-            "/api/ui/widgets/schedule:sched-1",
+            "/api/ui/widgets/schedule:sched-1?client_id=tab-1",
             json={
                 "name": "Nightly check",
                 "instruction": "Run the nightly review",
@@ -2077,7 +2170,7 @@ class TestWorkspaceBridgeActions:
         assert updated["schedule"] == "0 1 * * *"
         assert updated["enabled"] is False
 
-    def test_patch_mcp_widget_updates_mcp_config_document(self, client, monkeypatch):
+    def test_patch_mcp_widget_updates_mcp_config_document(self, client, monkeypatch, ui_stream):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENA_STATE_PREFIX,
@@ -2097,7 +2190,7 @@ class TestWorkspaceBridgeActions:
         monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.patch(
-            "/api/ui/widgets/mcp:jina",
+            "/api/ui/widgets/mcp:jina?client_id=tab-1",
             json={
                 "enabled": True,
                 "description": "Live web search",
@@ -2119,7 +2212,9 @@ class TestWorkspaceBridgeActions:
             == "https://mcp.jina.ai/v1?include_tags=search,read"
         )
 
-    def test_mcp_snapshot_omits_tool_detail_content_route_returns_it(self, client, monkeypatch):
+    def test_mcp_snapshot_omits_tool_detail_content_route_returns_it(
+        self, client, monkeypatch, ui_stream
+    ):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENA_STATE_PREFIX,
@@ -2159,27 +2254,27 @@ class TestWorkspaceBridgeActions:
         monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         list_request_id = "mcp-list-lean"
-        event_start = len(events_stream._ui_event_replay)
-        list_response = client.get("/api/ui/mcp", headers={"X-Operation-Id": list_request_id})
+        list_response = client.get(
+            "/api/ui/mcp?client_id=tab-1", headers={"X-Operation-Id": list_request_id}
+        )
         assert_acknowledged(
             list_response,
             ["mcp.snapshot"],
             request_id=list_request_id,
             check_request_id_header=True,
         )
-        list_envelope = next(
+        [list_envelope] = [
             event
-            for event in events_stream._ui_event_replay[event_start:]
+            for event in _stream_events(ui_stream)
             if event.payload.get("request_id") == list_request_id
-        )
+        ]
         jina_item = next(item for item in list_envelope.payload["items"] if item["name"] == "jina")
         assert "tools" not in jina_item["data"]
 
         detail_request_id = "mcp-detail-fetch"
-        event_start = len(events_stream._ui_event_replay)
         detail_response = client.get(
             "/api/ui/mcp/content",
-            params={"id": "mcp:jina"},
+            params={"id": "mcp:jina", "client_id": "tab-1"},
             headers={"X-Operation-Id": detail_request_id},
         )
         assert_acknowledged(
@@ -2188,24 +2283,26 @@ class TestWorkspaceBridgeActions:
             request_id=detail_request_id,
             check_request_id_header=True,
         )
-        detail_envelope = next(
+        [detail_envelope] = [
             event
-            for event in events_stream._ui_event_replay[event_start:]
+            for event in _stream_events(ui_stream)
             if event.payload.get("request_id") == detail_request_id
-        )
+        ]
         detail_tools = detail_envelope.payload["data"]["tools"]
         assert {tool["name"] for tool in detail_tools} == {"search", "read"}
 
-    def test_mcp_content_route_404s_for_unknown_server(self, client, monkeypatch):
+    def test_mcp_content_route_404s_for_unknown_server(self, client, monkeypatch, ui_stream):
         store = InMemoryDocumentStore()
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
-        response = client.get("/api/ui/mcp/content", params={"id": "mcp:missing"})
+        response = client.get(
+            "/api/ui/mcp/content", params={"id": "mcp:missing", "client_id": "tab-1"}
+        )
 
         assert response.status_code == 404
 
-    def test_patch_mcp_tool_broadcasts_server_detail_update(self, client, monkeypatch):
+    def test_patch_mcp_tool_broadcasts_server_detail_update(self, client, monkeypatch, ui_stream):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENA_STATE_PREFIX,
@@ -2229,7 +2326,9 @@ class TestWorkspaceBridgeActions:
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
-        response = client.patch("/api/ui/widgets/mcp_tool:search", json={"enabled": False})
+        response = client.patch(
+            "/api/ui/widgets/mcp_tool:search?client_id=tab-1", json={"enabled": False}
+        )
 
         assert response.status_code == 202
         assert set(response.json()["event_types"]) == {
@@ -2239,13 +2338,15 @@ class TestWorkspaceBridgeActions:
         }
         detail_event = next(
             event
-            for event in reversed(events_stream._ui_event_replay)
+            for event in _stream_events(ui_stream)
             if event.type == "mcp.server.detail.updated"
         )
         detail_tools = detail_event.payload["data"]["tools"]
         assert next(tool for tool in detail_tools if tool["name"] == "search")["enabled"] is False
 
-    def test_refresh_agent_widget_returns_live_card_details(self, client, tmp_path, monkeypatch):
+    def test_refresh_agent_widget_returns_live_card_details(
+        self, client, tmp_path, monkeypatch, ui_stream
+    ):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENA_STATE_PREFIX,
@@ -2298,17 +2399,21 @@ class TestWorkspaceBridgeActions:
             fake_inspect_agent_widget,
         )
 
-        response = client.post("/api/ui/widgets/agent:example_agent/refresh")
+        response = client.post("/api/ui/widgets/agent:example_agent/refresh?client_id=tab-1")
 
         assert response.status_code == 202
         data = response.json()
         assert_acknowledgement_body(data)
 
-        # The refresh broadcasts a widgets.updated event (inspection data is ephemeral)
-        widget_event = events_stream._ui_event_replay[-1]
+        # The calling tab receives widgets.updated with the transient inspection data.
+        widget_event = next(
+            item["envelope"]
+            for item in list(ui_stream._queue)
+            if item["envelope"].type == "widgets.updated"
+        )
         assert widget_event.type == "widgets.updated"
 
-    def test_refresh_mcp_widget_is_rejected(self, client, monkeypatch):
+    def test_refresh_mcp_widget_is_rejected(self, client, monkeypatch, ui_stream):
         # MCP tool discovery is owned by the Progena runtime's MCP init (and
         # ``mcp_refresh``); the backend no longer probes servers itself.
         store = InMemoryDocumentStore()
@@ -2335,18 +2440,18 @@ class TestWorkspaceBridgeActions:
             document_store=store,
         )
         monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
-        response = client.post("/api/ui/widgets/mcp:jina/refresh")
+        response = client.post("/api/ui/widgets/mcp:jina/refresh?client_id=tab-1")
         assert response.status_code == 400
         assert "agent" in response.json()["detail"].lower()
 
-    def test_create_schedule_writes_schedule_document(self, client, monkeypatch):
+    def test_create_schedule_writes_schedule_document(self, client, monkeypatch, ui_stream):
         store = InMemoryDocumentStore()
         store.save_document(PROGENA_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.post(
-            "/api/ui/schedules",
+            "/api/ui/schedules?client_id=tab-1",
             json={
                 "name": "Morning Check-in",
                 "instruction": "Summarize overnight alerts and prep the inbox.",
@@ -2360,6 +2465,7 @@ class TestWorkspaceBridgeActions:
         assert response.status_code == 202
         data = response.json()
         assert_acknowledgement_body(data)
+        assert any(event.type == "schedules.snapshot" for event in _stream_events(ui_stream))
         document = store.get_document(PROGENA_STATE_PREFIX, "schedule", {})
         assert document is not None
         schedule_ids = list(document.payload.keys())
@@ -2372,7 +2478,7 @@ class TestWorkspaceBridgeActions:
         assert updated["cron_expression"] == "*/15 * * * *"
 
     def test_create_once_schedule_uses_cron_prefix_and_persists_scheduled_at(
-        self, client, monkeypatch
+        self, client, monkeypatch, ui_stream
     ):
         store = InMemoryDocumentStore()
         store.save_document(PROGENA_STATE_PREFIX, "schedule", {})
@@ -2380,7 +2486,7 @@ class TestWorkspaceBridgeActions:
         monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.post(
-            "/api/ui/schedules",
+            "/api/ui/schedules?client_id=tab-1",
             json={
                 "name": "One-off reminder",
                 "instruction": "Reply once.",
@@ -2394,6 +2500,7 @@ class TestWorkspaceBridgeActions:
         assert response.status_code == 202
         data = response.json()
         assert_acknowledgement_body(data)
+        assert any(event.type == "schedules.snapshot" for event in _stream_events(ui_stream))
         document = store.get_document(PROGENA_STATE_PREFIX, "schedule", {})
         assert document is not None
         schedule_ids = list(document.payload.keys())
@@ -2407,9 +2514,11 @@ class TestWorkspaceBridgeActions:
         assert updated["scheduled_at"] == "2026-06-19T09:47:00+00:00"
         assert "cron_expression" not in updated
 
-    def test_create_event_widget_writes_event_widget_file(self, client, kanban_state_reader):
+    def test_create_event_widget_writes_event_widget_file(
+        self, client, kanban_state_reader, ui_stream
+    ):
         response = client.post(
-            "/api/ui/events",
+            "/api/ui/events?client_id=tab-1",
             json={
                 "name": "Card created trigger",
                 "event_type": "kanban_card.created",
@@ -2431,12 +2540,16 @@ class TestWorkspaceBridgeActions:
         assert stored[event_widget_id]["event_type"] == "kanban_card.created"
         assert stored[event_widget_id]["trigger_count"] == 0
 
-        widgets_resp = client.get("/api/ui/widgets")
+        widgets_resp = client.get("/api/ui/widgets?client_id=tab-1")
         assert widgets_resp.status_code == 202
-        widgets_items = events_stream._ui_event_replay[-1].payload.get("items", [])
+        widgets_items = next(
+            item["envelope"].payload["items"]
+            for item in list(ui_stream._queue)
+            if item["envelope"].type == "widgets.updated"
+        )
         assert any(widget["id"] == f"event:{event_widget_id}" for widget in widgets_items)
 
-    def test_patch_event_widget_updates_config_file(self, client, kanban_state_reader):
+    def test_patch_event_widget_updates_config_file(self, client, kanban_state_reader, ui_stream):
         store = kanban_state_reader.document_store
         store.save_document(
             BACKEND_STATE_PREFIX,
@@ -2455,7 +2568,7 @@ class TestWorkspaceBridgeActions:
         )
 
         response = client.patch(
-            "/api/ui/widgets/event:evt-1",
+            "/api/ui/widgets/event:evt-1?client_id=tab-1",
             json={
                 "name": "Deleted trigger",
                 "event_type": "kanban_card.deleted",
@@ -2476,12 +2589,11 @@ class TestWorkspaceBridgeActions:
 
     @pytest.mark.asyncio
     async def test_kanban_create_and_update_events_trigger_matching_widgets(
-        self, client, tasks_state_reader
+        self, client, tasks_state_reader, ui_stream
     ):
-
         store = tasks_state_reader.document_store
         client.post(
-            "/api/ui/events",
+            "/api/ui/events?client_id=tab-1",
             json={"name": "Created", "event_type": "kanban_card.created"},
         )
         stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
@@ -2489,25 +2601,32 @@ class TestWorkspaceBridgeActions:
         created_widget_id = next(iter(stored.keys()))
 
         client.post(
-            "/api/ui/events",
+            "/api/ui/events?client_id=tab-1",
             json={"name": "Updated", "event_type": "kanban_card.updated"},
         )
         stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
         stored = stored_doc.payload if stored_doc else {}
-        updated_widget_id = next(k for k in stored if k != created_widget_id)
+        updated_widget_id = next(key for key in stored if key != created_widget_id)
 
         client.post(
-            "/api/ui/kanban/cards",
+            "/api/ui/kanban/cards?client_id=tab-1",
             json={"title": "Evented card", "summary": "Initial summary"},
         )
         await events_dispatch.get_document_event_dispatcher().drain()
         board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         card_id = board.payload["card_order"][-1]
 
-        widgets_resp = client.get("/api/ui/widgets")
+        _stream_events(ui_stream)
+        widgets_resp = client.get("/api/ui/widgets?client_id=tab-1")
         assert widgets_resp.status_code == 202
-        widgets_items = events_stream._ui_event_replay[-1].payload.get("items", [])
-        created_w = next(w for w in widgets_items if w["id"] == f"event:{created_widget_id}")
+        widgets_items = next(
+            event.payload["items"]
+            for event in _stream_events(ui_stream)
+            if event.type == "widgets.updated"
+        )
+        created_w = next(
+            widget for widget in widgets_items if widget["id"] == f"event:{created_widget_id}"
+        )
         created_data = created_w["data"]
         assert created_data["trigger_count"] == 1
         assert created_data["last_payload"]["id"] == card_id
@@ -2515,16 +2634,22 @@ class TestWorkspaceBridgeActions:
         assert created_data["last_payload"]["op"] == "created"
 
         update_response = client.patch(
-            f"/api/ui/kanban/cards/{card_id}",
+            f"/api/ui/kanban/cards/{card_id}?client_id=tab-1",
             json={"summary": "Updated summary"},
         )
-
         assert update_response.status_code == 202
         await events_dispatch.get_document_event_dispatcher().drain()
-        widgets_resp = client.get("/api/ui/widgets")
+        _stream_events(ui_stream)
+        widgets_resp = client.get("/api/ui/widgets?client_id=tab-1")
         assert widgets_resp.status_code == 202
-        widgets_items = events_stream._ui_event_replay[-1].payload.get("items", [])
-        updated_w = next(w for w in widgets_items if w["id"] == f"event:{updated_widget_id}")
+        widgets_items = next(
+            event.payload["items"]
+            for event in _stream_events(ui_stream)
+            if event.type == "widgets.updated"
+        )
+        updated_w = next(
+            widget for widget in widgets_items if widget["id"] == f"event:{updated_widget_id}"
+        )
         updated_data = updated_w["data"]
         assert updated_data["trigger_count"] == 1
         assert updated_data["last_payload"]["id"] == card_id
@@ -2533,12 +2658,11 @@ class TestWorkspaceBridgeActions:
 
     @pytest.mark.asyncio
     async def test_kanban_update_and_delete_events_trigger_matching_widgets(
-        self, client, tasks_state_reader
+        self, client, tasks_state_reader, ui_stream
     ):
-
         store = tasks_state_reader.document_store
         client.post(
-            "/api/ui/events",
+            "/api/ui/events?client_id=tab-1",
             json={"name": "Updated", "event_type": "kanban_card.updated"},
         )
         stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
@@ -2546,55 +2670,68 @@ class TestWorkspaceBridgeActions:
         updated_widget_id = next(iter(stored.keys()))
 
         client.post(
-            "/api/ui/events",
+            "/api/ui/events?client_id=tab-1",
             json={"name": "Deleted", "event_type": "kanban_card.deleted"},
         )
         stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
         stored = stored_doc.payload if stored_doc else {}
-        deleted_widget_id = next(k for k in stored if k != updated_widget_id)
+        deleted_widget_id = next(key for key in stored if key != updated_widget_id)
 
-        client.post("/api/ui/kanban/cards", json={"title": "First card"})
+        client.post("/api/ui/kanban/cards?client_id=tab-1", json={"title": "First card"})
         await events_dispatch.get_document_event_dispatcher().drain()
         board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         first_id = board.payload["card_order"][0]
-        client.post("/api/ui/kanban/cards", json={"title": "Second card"})
+        client.post("/api/ui/kanban/cards?client_id=tab-1", json={"title": "Second card"})
         await events_dispatch.get_document_event_dispatcher().drain()
         board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         second_id = board.payload["card_order"][-1]
 
         move_response = client.patch(
-            f"/api/ui/kanban/cards/{second_id}",
+            f"/api/ui/kanban/cards/{second_id}?client_id=tab-1",
             json={"column_id": "done"},
         )
         assert move_response.status_code == 202
         await events_dispatch.get_document_event_dispatcher().drain()
 
-        widgets_resp = client.get("/api/ui/widgets")
+        _stream_events(ui_stream)
+        widgets_resp = client.get("/api/ui/widgets?client_id=tab-1")
         assert widgets_resp.status_code == 202
-        widgets_items = events_stream._ui_event_replay[-1].payload.get("items", [])
-        updated_w = next(w for w in widgets_items if w["id"] == f"event:{updated_widget_id}")
+        widgets_items = next(
+            event.payload["items"]
+            for event in _stream_events(ui_stream)
+            if event.type == "widgets.updated"
+        )
+        updated_w = next(
+            widget for widget in widgets_items if widget["id"] == f"event:{updated_widget_id}"
+        )
         updated_data = updated_w["data"]
         assert updated_data["trigger_count"] == 1
         assert updated_data["last_payload"]["id"] == second_id
         assert updated_data["last_payload"]["document_type"] == "kanban_card"
         assert updated_data["last_payload"]["op"] == "updated"
 
-        delete_response = client.delete(f"/api/ui/kanban/cards/{first_id}")
+        delete_response = client.delete(f"/api/ui/kanban/cards/{first_id}?client_id=tab-1")
         assert delete_response.status_code == 202
         await events_dispatch.get_document_event_dispatcher().drain()
 
-        widgets_resp = client.get("/api/ui/widgets")
+        _stream_events(ui_stream)
+        widgets_resp = client.get("/api/ui/widgets?client_id=tab-1")
         assert widgets_resp.status_code == 202
-        widgets_items = events_stream._ui_event_replay[-1].payload.get("items", [])
-        deleted_w = next(w for w in widgets_items if w["id"] == f"event:{deleted_widget_id}")
+        widgets_items = next(
+            event.payload["items"]
+            for event in _stream_events(ui_stream)
+            if event.type == "widgets.updated"
+        )
+        deleted_w = next(
+            widget for widget in widgets_items if widget["id"] == f"event:{deleted_widget_id}"
+        )
         deleted_data = deleted_w["data"]
         assert deleted_data["trigger_count"] == 1
         assert deleted_data["last_payload"]["id"] == first_id
         assert deleted_data["last_payload"]["document_type"] == "kanban_card"
         assert deleted_data["last_payload"]["op"] == "deleted"
 
-    def test_run_and_generate_actions_use_existing_client(self, client):
-
+    def test_run_and_generate_actions_use_existing_client(self, client, ui_stream):
         original_client = lifecycle_state.client
         mock_client = AsyncMock()
         mock_client.send_message = AsyncMock(
@@ -2605,11 +2742,11 @@ class TestWorkspaceBridgeActions:
         lifecycle_state.client = mock_client
         try:
             run_response = client.post(
-                "/api/ui/actions/run",
+                "/api/ui/actions/run?client_id=tab-1",
                 json={"widget_id": "prompt:test", "prompt": "Run this", "input": "From upstream"},
             )
             generate_response = client.post(
-                "/api/ui/actions/generate",
+                "/api/ui/actions/generate?client_id=tab-1",
                 json={
                     "widget_id": "prompt:test",
                     "prompt": "Generate this",
@@ -2619,10 +2756,15 @@ class TestWorkspaceBridgeActions:
 
             assert run_response.status_code == 202
             assert generate_response.status_code == 202
-            data = run_response.json()
-            assert_acknowledgement_body(data)
-            data = generate_response.json()
-            assert_acknowledgement_body(data)
+            run_ack = run_response.json()
+            generate_ack = generate_response.json()
+            assert_acknowledgement_body(run_ack)
+            assert_acknowledgement_body(generate_ack)
+            assert {
+                event.payload["request_id"]
+                for event in _stream_events(ui_stream)
+                if event.type == "widgets.updated"
+            } == {run_ack["request_id"], generate_ack["request_id"]}
             assert mock_client.send_message.await_count == 2
             sent_messages = [call.args[0] for call in mock_client.send_message.await_args_list]
             assert sent_messages == [
@@ -2632,8 +2774,7 @@ class TestWorkspaceBridgeActions:
         finally:
             lifecycle_state.client = original_client
 
-    def test_workspace_actions_generate_distinct_threads_per_execution(self, client):
-
+    def test_workspace_actions_generate_distinct_threads_per_execution(self, client, ui_stream):
         original_client = lifecycle_state.client
         mock_client = AsyncMock()
         mock_client.send_message = AsyncMock(
@@ -2644,11 +2785,11 @@ class TestWorkspaceBridgeActions:
         lifecycle_state.client = mock_client
         try:
             first = client.post(
-                "/api/ui/actions/run",
+                "/api/ui/actions/run?client_id=tab-1",
                 json={"widget_id": "prompt:first", "prompt": "Run first"},
             )
             second = client.post(
-                "/api/ui/actions/run",
+                "/api/ui/actions/run?client_id=tab-1",
                 json={"widget_id": "prompt:second", "prompt": "Run second"},
             )
 
@@ -2665,8 +2806,7 @@ class TestWorkspaceBridgeActions:
         finally:
             lifecycle_state.client = original_client
 
-    def test_workspace_actions_reuse_explicit_thread(self, client):
-
+    def test_workspace_actions_reuse_explicit_thread(self, client, ui_stream):
         original_client = lifecycle_state.client
         mock_client = AsyncMock()
         mock_client.send_message = AsyncMock(
@@ -2679,7 +2819,7 @@ class TestWorkspaceBridgeActions:
             thread_id = "thread_shared_chain"
 
             run_response = client.post(
-                "/api/ui/actions/run",
+                "/api/ui/actions/run?client_id=tab-1",
                 json={
                     "widget_id": "prompt:root",
                     "root_widget_id": "prompt:root",
@@ -2688,7 +2828,7 @@ class TestWorkspaceBridgeActions:
                 },
             )
             generate_response = client.post(
-                "/api/ui/actions/generate",
+                "/api/ui/actions/generate?client_id=tab-1",
                 json={
                     "widget_id": "prompt:child",
                     "root_widget_id": "prompt:root",
@@ -2707,6 +2847,5 @@ class TestWorkspaceBridgeActions:
                 for call in mock_client.send_message.await_args_list
             ]
             assert metadata_values == [thread_id, thread_id]
-
         finally:
             lifecycle_state.client = original_client

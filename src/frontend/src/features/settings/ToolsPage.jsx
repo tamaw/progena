@@ -40,6 +40,7 @@ import { fetchMcp, fetchMcpServerDetail, selectMcpServers, selectMcpServerDetail
 import { formatShortLocalDateTime } from '../../lib/displayTime';
 import { reportFailure } from '../../lib/failures';
 import { selectRealtime } from '../../realtime/realtimeSlice';
+import useStreamTopic from '../../hooks/useStreamTopic';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { createUuid } from '../../lib/uuid';
 import { selectAgentName } from './state/preferences';
@@ -160,6 +161,7 @@ export default function ToolsPage() {
     : null;
   const { getApiUrl } = useConfig();
   const { show } = useNotifications();
+  useStreamTopic('mcp');
   const realtime = useSelector(selectRealtime);
   const mcpServers = useSelector(selectMcpServers);
   const mcpState = useSelector(selectMcpState);
@@ -256,9 +258,9 @@ export default function ToolsPage() {
   }), [servers]);
 
   useEffect(() => {
-    if (!realtime.connected) return;
+    if (!realtime.streamReady) return;
     void refreshMcp().catch(() => {});
-  }, [realtime.connected, refreshMcp]);
+  }, [realtime.streamReady, refreshMcp]);
 
   const loadServerDetail = useCallback(() => {
     const id = selectedServer?.id;

@@ -14,9 +14,8 @@ const bridge = vi.hoisted(() => {
       },
     },
     dispatch: vi.fn(),
-    fetchChatSessions: vi.fn((payload) => ({ type: 'ui/fetchChatSessions', payload })),
     requestChatSessionReconciliation: vi.fn((payload) => ({ type: 'ui/requestChatSessionReconciliation', payload })),
-    fetchInbox: vi.fn((payload) => ({ type: 'ui/fetchInbox', payload })),
+    fetchInboxCounts: vi.fn((payload) => ({ type: 'ui/fetchInboxCounts', payload })),
     fetchModelProfiles: vi.fn((payload) => ({ type: 'ui/fetchModelProfiles', payload })),
     getApiUrl: vi.fn((path) => `/api/ui/${path}`),
     hooks,
@@ -80,11 +79,10 @@ vi.mock('@frontend/realtime/realtimeSlice', () => ({
 }));
 
 vi.mock("@frontend/features/chat/state/chats", () => ({
-  fetchChatSessions: bridge.fetchChatSessions,
   requestChatSessionReconciliation: bridge.requestChatSessionReconciliation,
 }));
 vi.mock("@frontend/features/inbox/state", () => ({
-  fetchInbox: bridge.fetchInbox
+  fetchInboxCounts: bridge.fetchInboxCounts
 }));
 vi.mock("@frontend/features/settings/state/modelProfiles", () => ({
   fetchModelProfiles: bridge.fetchModelProfiles
@@ -109,10 +107,9 @@ describe('RealtimeBridge reconnect recovery', () => {
     bridge.connected = true;
     bridge.state.uiData.chatRuntime.generatingChatIds = [];
     bridge.state.uiData.chatRuntime.responseThreadsByRequestId = {};
-    bridge.state.uiData.chats = { view: { q: 'release', sort: 'name', filter: 'archived' }, active: { threadId: null } };
-    bridge.fetchChatSessions.mockClear();
+    bridge.state.uiData.chats = { active: { threadId: null } };
     bridge.requestChatSessionReconciliation.mockClear();
-    bridge.fetchInbox.mockClear();
+    bridge.fetchInboxCounts.mockClear();
     bridge.fetchModelProfiles.mockClear();
     bridge.getApiUrl.mockClear();
   });
@@ -121,11 +118,14 @@ describe('RealtimeBridge reconnect recovery', () => {
     bridge.resetHooks();
   });
 
-  it('does not reconcile or fetch chats on the first connection', () => {
+  it('does not reconcile a chat on the first connection, and asks only for the inbox count and profiles', () => {
     renderBridge();
 
-    expect(bridge.fetchChatSessions).not.toHaveBeenCalled();
     expect(bridge.requestChatSessionReconciliation).not.toHaveBeenCalled();
+    expect(snapshotCalls('ui/fetchInboxCounts')).toEqual([
+      { type: 'ui/fetchInboxCounts', payload: { inboxUrl: '/api/ui/inbox' } },
+    ]);
+    expect(bridge.fetchModelProfiles).toHaveBeenCalledTimes(1);
   });
 
   it('does not reconcile when selecting chats while connected', () => {
@@ -136,7 +136,7 @@ describe('RealtimeBridge reconnect recovery', () => {
     expect(bridge.requestChatSessionReconciliation).not.toHaveBeenCalled();
   });
 
-  it('reconciles the open non-streaming chat and refetches its view on reconnect', () => {
+  it('reconciles the open non-streaming chat and asks for the inbox count and profiles again on reconnect', () => {
     renderBridge();
     bridge.state.uiData.chats.active.threadId = 'chat-open';
     bridge.connected = false;
@@ -144,16 +144,8 @@ describe('RealtimeBridge reconnect recovery', () => {
     bridge.connected = true;
     renderBridge();
 
-    expect(snapshotCalls('ui/fetchChatSessions')).toEqual([
-      {
-        type: 'ui/fetchChatSessions',
-        payload: {
-          chatsUrl: '/api/ui/chats',
-          view: { q: 'release', sort: 'name', filter: 'archived' },
-          limit: 50,
-        },
-      },
-    ]);
+    expect(bridge.fetchInboxCounts).toHaveBeenCalledTimes(2);
+    expect(bridge.fetchModelProfiles).toHaveBeenCalledTimes(2);
     expect(snapshotCalls('ui/requestChatSessionReconciliation')).toEqual([
       {
         type: 'ui/requestChatSessionReconciliation',

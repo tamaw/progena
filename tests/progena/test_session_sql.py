@@ -120,7 +120,12 @@ async def test_first_user_message_creates_one_session(conn: Any) -> None:
         "title": "New chat",
         "first_message": "plan a hike",
     }
-    assert (session["pinned"], session["archived"], session["content"]) == (False, False, "")
+    assert (session["pinned"], session["archived"], session["unread"], session["errored"]) == (
+        False,
+        False,
+        False,
+        False,
+    )
     assert _UTC_STAMP.match(session["created_at"])
     assert session["last_activity"] == session["created_at"]
 

@@ -23,6 +23,7 @@ import { useListSelection } from '../../hooks/useListSelection';
 import { useSnapshotSave } from '../../hooks/useSnapshotSave';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
+import useStreamTopic from '../../hooks/useStreamTopic';
 import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { fetchChatSessions, selectChatRowsById, selectChatSourceTotals } from '../chat/state/chats';
 import {
@@ -404,6 +405,7 @@ export default function ChannelsPage() {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const channelsUrl = getApiUrl('channels');
+  useStreamTopic('channels');
   const connected = useSelector(selectRealtimeStreamReady);
   const channels = useSelector(selectChannels);
   const channelState = useSelector(selectChannelsState);

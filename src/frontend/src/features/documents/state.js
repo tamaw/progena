@@ -5,7 +5,13 @@ import { UI_EVENT } from '../../realtime/eventVocabulary';
  * Fetched once and kept live by `document_types.snapshot` on /api/ui/stream.
  */
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from '../../store/async';
+import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
+import { withQuery } from '../../store/http';
 
+async function requestForClient(url, options) {
+  await waitForRealtimeClient();
+  return requestAcknowledged(withQuery(url, { client_id: realtimeClientId }), options);
+}
 export const initialState = {
   documentTypes: {
     items: [],
@@ -29,7 +35,7 @@ function applyDocumentTypes(state, items, requestId = null) {
 }
 
 export const fetchDocumentTypes = createAcknowledgedThunk('uiData/fetchDocumentTypes', async ({ documentTypesUrl } = {}, { requestId }) => {
-  return requestAcknowledged(documentTypesUrl, { requestId });
+  return requestForClient(documentTypesUrl, { requestId });
 });
 
 export const eventHandlers = {

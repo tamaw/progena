@@ -42,7 +42,7 @@ async def test_checkpoint_without_page_subscription_does_not_read_state(feed, mo
     assert not events
 
 
-async def test_global_lifecycle_survives_no_page_subscription(feed):
+async def test_lifecycle_publishes_to_routines_topic(feed):
     listener, store, events = feed
     for status in ["started", "completed"]:
         payload = {
@@ -54,11 +54,10 @@ async def test_global_lifecycle_survives_no_page_subscription(feed):
         store.save_document(PROGENA_STATE_PREFIX, f"{RUN_EVENT_PREFIX}attempt:{status}", payload)
     store.delete_document(PROGENA_STATE_PREFIX, f"{RUN_EVENT_PREFIX}attempt:started")
     logged = store.read_document_events(EVENT_LOG_START, 100)
-    # Replaying the log (e.g. dispatcher catch-up) must not re-announce a transition.
     for event in [*logged, *logged]:
         await listener.document_event(event)
     assert [e[0] for e in events] == ["agent.routine.run.started", "agent.routine.run.completed"]
-    assert all(not e[2] for e in events)
+    assert all(e[2] == {"topic": "routines"} for e in events)
 
 
 async def test_detail_only_reads_selected_threads_and_stops_after_unsubscribe(feed, monkeypatch):
@@ -105,10 +104,11 @@ async def test_recovery_snapshot_keeps_latest_attempt_status_without_outputs(fee
     assert events[0][2]["client_id"] == "background"
 
 
-async def test_targeted_detail_never_enters_global_replay(monkeypatch):
+async def test_topic_lifecycle_reaches_watchers_and_keeps_nav_activity_global(monkeypatch):
     first, other = asyncio.Queue(), asyncio.Queue()
     monkeypatch.setattr(events_stream, "_ui_stream_subscribers", {first: None, other: None})
     monkeypatch.setattr(events_stream, "_ui_stream_clients", {first: "first", other: "other"})
+    monkeypatch.setattr(events_stream, "_ui_stream_topics", {"first": {"routines"}, "other": set()})
     replay = []
     monkeypatch.setattr(events_stream, "_ui_event_replay", replay)
     events_stream.broadcast_ui_event(
@@ -117,8 +117,11 @@ async def test_targeted_detail_never_enters_global_replay(monkeypatch):
     assert first.qsize() == 1
     assert other.empty()
     assert not replay
-    events_stream.broadcast_ui_event("agent.routine.run.completed", {"agent_id": "demo"})
-    assert first.qsize() == 2 and other.qsize() == 1
+    events_stream.broadcast_ui_event(
+        "agent.routine.run.completed", {"agent_id": "demo"}, topic="routines"
+    )
+    assert first.qsize() == 3  # targeted detail, topic event, global nav.activity
+    assert other.qsize() == 1  # nav.activity only
     assert len(replay) == 1
 
 

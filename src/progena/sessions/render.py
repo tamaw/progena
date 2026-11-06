@@ -14,6 +14,7 @@ from src.progena.settings.preferences import agent_display_name
 
 from .history import Conversation, load_conversation
 from .messages import extract_message_text
+from .status import SessionTurnStatus
 from .titles import DEFAULT_USER_NICK, display_title, session_preview
 from .transcript import format_log, render_transcript
 
@@ -68,6 +69,29 @@ async def render_session_fields(
         tz_name=tz_name,
     )
     return {"content": content, "preview": latest_message_preview(conversation)}
+
+
+async def record_session_turn_terminal(
+    thread_id: str, state_manager: Any, status: SessionTurnStatus
+) -> None:
+    """Persist terminal flags without loading stale session fields into a merge."""
+    try:
+        merged = await state_manager.record_session_turn_terminal(thread_id, status)
+        if not merged:
+            logger.debug("Session %s not found for terminal status", thread_id)
+    except Exception:
+        logger.warning("Session status merge failed for %s", thread_id, exc_info=True)
+
+
+async def finalize_session_turn(
+    thread_id: str,
+    status: SessionTurnStatus,
+    checkpointer: Any,
+    state_manager: Any,
+) -> None:
+    """Persist terminal flags before publishing the re-rendered session document."""
+    await record_session_turn_terminal(thread_id, state_manager, status)
+    await merge_session_after_turn(thread_id, checkpointer, state_manager)
 
 
 async def merge_session_after_turn(

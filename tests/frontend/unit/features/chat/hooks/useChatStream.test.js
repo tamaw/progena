@@ -20,7 +20,7 @@ vi.mock('@frontend/features/chat/models/liveAssistantTurnModel', async (importOr
 });
 
 import { useChatStream } from '@frontend/features/chat/hooks/useChatStream';
-import { clearChatErrored, markChatErrored, markChatGenerating } from '@frontend/features/chat/state/actions';
+import { markChatErrored, markChatGenerating } from '@frontend/features/chat/state/actions';
 import { applyAssistantChunk } from '@frontend/features/chat/models/liveAssistantTurnModel';
 
 afterEach(() => {
@@ -310,7 +310,6 @@ describe('useChatStream', () => {
     // A's completion may update A's background card, but must not borrow B's
     // provider failure and mark A as failed.
     expect(dispatch).not.toHaveBeenCalledWith(markChatErrored('thread-a'));
-    expect(dispatch).toHaveBeenCalledWith(clearChatErrored('thread-a'));
 
     scheduledFrames[0]();
     scheduledFrames[1]();

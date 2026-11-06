@@ -993,9 +993,12 @@ class TestAsyncResponseHandling:
         previous_client = lifecycle_state.client
         lifecycle_state.client = _MockClient()
         chat_responses._active_response_streams[target_request_id] = cancel_event
+        subscriber: asyncio.Queue = asyncio.Queue()
+        events_stream._ui_stream_subscribers[subscriber] = None
+        events_stream._ui_stream_clients[subscriber] = "tab-1"
         try:
             response = client.put(
-                f"/api/ui/responses/{target_request_id}/cancel",
+                f"/api/ui/responses/{target_request_id}/cancel?client_id=tab-1",
                 headers={"X-Operation-Id": cancel_request_id},
             )
             await chat_responses._run_response_event_stream(
@@ -1005,14 +1008,17 @@ class TestAsyncResponseHandling:
                 "resp-cancel-test",
                 "thread-cancel-test",
             )
-            emitted = [
+            acknowledgement = subscriber.get_nowait()["envelope"]
+            emitted = [acknowledgement] + [
                 event
                 for event in events_stream._ui_event_replay[event_start:]
-                if event.payload.get("request_id") in {cancel_request_id, target_request_id}
+                if event.payload.get("request_id") == target_request_id
             ]
         finally:
             chat_responses._active_response_streams.pop(target_request_id, None)
             lifecycle_state.client = previous_client
+            events_stream._ui_stream_subscribers.pop(subscriber, None)
+            events_stream._ui_stream_clients.pop(subscriber, None)
 
         assert response.status_code == 202
         assert response.headers["X-Operation-Id"] == cancel_request_id
@@ -1054,21 +1060,21 @@ class TestAsyncResponseHandling:
         lifecycle_state.client = _MockClient()
         chat_responses._active_response_streams[request_id] = cancel_event
         chat_responses._response_request_ids[response_id] = request_id
-        event_start = len(events_stream._ui_event_replay)
+        subscriber: asyncio.Queue = asyncio.Queue()
+        events_stream._ui_stream_subscribers[subscriber] = None
+        events_stream._ui_stream_clients[subscriber] = "tab-1"
         try:
             response = client.put(
-                f"/api/ui/responses/{response_id}/cancel",
+                f"/api/ui/responses/{response_id}/cancel?client_id=tab-1",
                 headers={"X-Operation-Id": "cancel-operation-42"},
             )
-            emitted = [
-                event
-                for event in events_stream._ui_event_replay[event_start:]
-                if event.payload.get("target_response_id") == response_id
-            ]
+            emitted = [subscriber.get_nowait()["envelope"] for _ in range(subscriber.qsize())]
         finally:
             chat_responses._active_response_streams.pop(request_id, None)
             chat_responses._response_request_ids.pop(response_id, None)
             lifecycle_state.client = previous_client
+            events_stream._ui_stream_subscribers.pop(subscriber, None)
+            events_stream._ui_stream_clients.pop(subscriber, None)
 
         assert response.status_code == 202
         assert response.json() == {
@@ -1112,14 +1118,19 @@ class TestAsyncResponseHandling:
                 return False
 
         lifecycle_state.client = _MockClient()
+        subscriber: asyncio.Queue = asyncio.Queue()
+        events_stream._ui_stream_subscribers[subscriber] = None
+        events_stream._ui_stream_clients[subscriber] = "tab-1"
 
         try:
             response = client.put(
-                "/api/ui/responses/not-active/cancel",
+                "/api/ui/responses/not-active/cancel?client_id=tab-1",
                 headers={"X-Operation-Id": "unknown-cancel-request"},
             )
         finally:
             lifecycle_state.client = original_client
+            events_stream._ui_stream_subscribers.pop(subscriber, None)
+            events_stream._ui_stream_clients.pop(subscriber, None)
 
         assert response.status_code == 404
 
@@ -1146,7 +1157,13 @@ class TestAsyncResponseHandling:
 
                 return AgentResponse(response="Hello", reasoning=None, reasoning_tokens=None)
 
-        event_start = len(events_stream._ui_event_replay)
+        topic_subscriber: asyncio.Queue = asyncio.Queue()
+        other_subscriber: asyncio.Queue = asyncio.Queue()
+        events_stream._ui_stream_subscribers[topic_subscriber] = None
+        events_stream._ui_stream_clients[topic_subscriber] = "chat-tab"
+        events_stream._ui_stream_subscribers[other_subscriber] = None
+        events_stream._ui_stream_clients[other_subscriber] = "other-tab"
+        events_stream.subscribe_topic("chat-tab", "chat:thread_sess_thread_xyz")
         lifecycle_state.client = _MockClient()
         try:
             client.cookies.set("progena_session", "sess_thread_xyz")
@@ -1156,14 +1173,19 @@ class TestAsyncResponseHandling:
                 headers={"X-Operation-Id": request_id},
             )
             events = [
-                event
-                for event in events_stream._ui_event_replay[event_start:]
-                if event.payload.get("request_id") == request_id
+                topic_subscriber.get_nowait()["envelope"] for _ in range(topic_subscriber.qsize())
+            ]
+            other_events = [
+                other_subscriber.get_nowait()["envelope"] for _ in range(other_subscriber.qsize())
             ]
         finally:
             client.cookies.clear()
             lifecycle_state.client = original_client
-
+            events_stream._ui_stream_subscribers.pop(topic_subscriber, None)
+            events_stream._ui_stream_clients.pop(topic_subscriber, None)
+            events_stream._ui_stream_subscribers.pop(other_subscriber, None)
+            events_stream._ui_stream_clients.pop(other_subscriber, None)
+            events_stream.clear_topics("chat-tab")
         assert response.status_code == 202
         assert response.headers["X-Operation-Id"] == request_id
         assert response.json() == {
@@ -1183,6 +1205,10 @@ class TestAsyncResponseHandling:
         ]
         assert all(event.payload["request_id"] == request_id for event in events)
         assert events[1].payload["delta"] == "Hello"
+        assert [event.type for event in other_events] == [
+            "chat.response.started",
+            "chat.response.completed",
+        ]
 
     def test_non_streaming_responses_include_reasoning_output(self, client):
         """Non-streaming /api/ui/responses should include reasoning items when available."""
@@ -1207,7 +1233,13 @@ class TestAsyncResponseHandling:
                     reasoning_tokens=17,
                 )
 
-        event_start = len(events_stream._ui_event_replay)
+        topic_subscriber: asyncio.Queue = asyncio.Queue()
+        other_subscriber: asyncio.Queue = asyncio.Queue()
+        events_stream._ui_stream_subscribers[topic_subscriber] = None
+        events_stream._ui_stream_clients[topic_subscriber] = "chat-tab"
+        events_stream._ui_stream_subscribers[other_subscriber] = None
+        events_stream._ui_stream_clients[other_subscriber] = "other-tab"
+        events_stream.subscribe_topic("chat-tab", "chat:thread-reasoning")
         lifecycle_state.client = _MockClient()
 
         request_id = "reasoning-generation-request"
@@ -1219,16 +1251,23 @@ class TestAsyncResponseHandling:
                     "input": "hi",
                     "stream": False,
                     "include_reasoning": True,
+                    "metadata": {"thread_id": "thread-reasoning"},
                 },
                 headers={"X-Operation-Id": request_id},
             )
             events = [
-                event
-                for event in events_stream._ui_event_replay[event_start:]
-                if event.payload.get("request_id") == request_id
+                topic_subscriber.get_nowait()["envelope"] for _ in range(topic_subscriber.qsize())
+            ]
+            other_events = [
+                other_subscriber.get_nowait()["envelope"] for _ in range(other_subscriber.qsize())
             ]
         finally:
             lifecycle_state.client = original_client
+            events_stream._ui_stream_subscribers.pop(topic_subscriber, None)
+            events_stream._ui_stream_clients.pop(topic_subscriber, None)
+            events_stream._ui_stream_subscribers.pop(other_subscriber, None)
+            events_stream._ui_stream_clients.pop(other_subscriber, None)
+            events_stream.clear_topics("chat-tab")
 
         assert response.status_code == 202
         assert response.headers["X-Operation-Id"] == request_id
@@ -1245,3 +1284,7 @@ class TestAsyncResponseHandling:
         assert delta["delta"] == "10.50. At $0.75 per pencil, 14 pencils cost $10.50."
         assert delta["reasoning"] == "Checked the unit price before multiplying by 14."
         assert delta["reasoning_tokens"] == 17
+        assert [event.type for event in other_events] == [
+            "chat.response.started",
+            "chat.response.completed",
+        ]

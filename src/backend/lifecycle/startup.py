@@ -182,13 +182,39 @@ async def lifespan(app: FastAPI):
         request_id = data.get("request_id")
         should_broadcast = chat_responses.handle_runtime_queue_lifecycle(event_type, data)
         if should_broadcast:
-            events_stream.broadcast_ui_event(
-                event_type,
-                data,
-                scope="chat",
-                session_id=thread_id,
-                request_id=request_id if isinstance(request_id, str) and request_id else None,
-            )
+            request_id = request_id if isinstance(request_id, str) and request_id else None
+            if (
+                event_type
+                in {
+                    events_contracts.UiEvent.CHAT_RESPONSE_ACTIVITY,
+                    events_contracts.UiEvent.CHAT_RESPONSE_CANCELLED,
+                    events_contracts.UiEvent.CHAT_RESPONSE_COMPLETED,
+                    events_contracts.UiEvent.CHAT_RESPONSE_FAILED,
+                    events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
+                }
+                and thread_id
+                and request_id
+            ):
+                chat_responses.broadcast_response_lifecycle(
+                    event_type, data, thread_id=thread_id, request_id=request_id
+                )
+            elif event_type == events_contracts.UiEvent.CHAT_QUEUE_UPDATED and thread_id:
+                events_stream.broadcast_ui_event(
+                    event_type,
+                    data,
+                    scope="chat",
+                    session_id=thread_id,
+                    request_id=request_id,
+                    topic=f"chat:{thread_id}",
+                )
+            else:
+                events_stream.broadcast_ui_event(
+                    event_type,
+                    data,
+                    scope="chat",
+                    session_id=thread_id,
+                    request_id=request_id,
+                )
         # Reflect runtime-driven schedule changes on the canonical UI stream so
         # the Schedules page updates live (e.g. a one-off firing and removing
         # itself, or a schedule created from a chat).

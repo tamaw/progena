@@ -46,7 +46,9 @@ def _queue_routine_agent_reconciliation(_snapshot, changed_key: str | None = Non
                 policy_catalog, storage_documents.get_default_document_store()
             )
             events_stream.broadcast_ui_event(
-                events_contracts.UiEvent.POLICIES_SNAPSHOT, {"items": items}
+                events_contracts.UiEvent.POLICIES_SNAPSHOT,
+                {"items": items},
+                topic="policies",
             )
 
         policy_task = asyncio.create_task(push_policies())
@@ -82,7 +84,9 @@ async def _reconcile_routine_agent(changed_key: str | None) -> None:
                 if deleted:
                     roster_changed = True
                     events_stream.broadcast_ui_event(
-                        events_contracts.UiEvent.AGENT_DELETED, {"agent_id": agent_id}
+                        events_contracts.UiEvent.AGENT_DELETED,
+                        {"agent_id": agent_id},
+                        topic=agents_routes.AGENTS_TOPIC,
                     )
                 continue
             created = await asyncio.to_thread(store.ensure_routine_agent, agent_id, graph_document)
@@ -114,6 +118,7 @@ async def _reconcile_routine_agent(changed_key: str | None) -> None:
                 "agent_id": agent_id,
                 "graph": agents_routes.AgentGraphModel(**graph_payload).model_dump(by_alias=True),
             },
+            topic=agents_routes.AGENTS_TOPIC,
         )
         # The `store` trigger that fired this reconcile pass also appended a
         # row to `routine_graph_revisions` (or no-opped on identical content,
@@ -136,6 +141,7 @@ async def _reconcile_routine_agent(changed_key: str | None) -> None:
                         for revision in revisions
                     ],
                 },
+                topic=agents_routes.AGENTS_TOPIC,
             )
 
     if roster_changed:

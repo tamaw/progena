@@ -18,6 +18,7 @@ from fastapi.sse import EventSourceResponse, format_sse_event
 import src.backend.attachments.processing as attachments_processing
 import src.backend.attachments.routes as attachments_routes
 import src.backend.attachments.store as attachments_store
+import src.backend.chat.background_tasks as chat_background_tasks
 import src.backend.chat.models as chat_models
 import src.backend.chat.session as chat_session
 import src.backend.events.contracts as events_contracts
@@ -167,11 +168,10 @@ def _set_response_delegation_active(
         return
 
     state.activity = "delegating" if is_delegating else "generating"
-    events_stream.broadcast_ui_event(
+    broadcast_response_lifecycle(
         events_contracts.UiEvent.CHAT_RESPONSE_ACTIVITY,
         {"thread_id": state.thread_id, "activity": state.activity},
-        scope="chat",
-        session_id=state.thread_id,
+        thread_id=state.thread_id,
         request_id=request_id,
     )
 
@@ -369,6 +369,35 @@ def _claim_response_terminal(request_id: str) -> bool:
     return True
 
 
+def broadcast_response_lifecycle(
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    thread_id: str,
+    request_id: str,
+) -> None:
+    """Publish chrome-safe response lifecycle plus queue-start content to its chat."""
+    queued_message = payload.get("queued_message")
+    if event_type == events_contracts.UiEvent.CHAT_RESPONSE_STARTED and isinstance(
+        queued_message, dict
+    ):
+        events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.CHAT_RESPONSE_QUEUE_STARTED,
+            {key: value for key, value in payload.items() if key != "response"},
+            scope="chat",
+            session_id=thread_id,
+            request_id=request_id,
+            topic=f"chat:{thread_id}",
+        )
+    events_stream.broadcast_ui_event(
+        event_type,
+        {key: value for key, value in payload.items() if key not in {"queued_message", "response"}},
+        scope="chat",
+        session_id=thread_id,
+        request_id=request_id,
+    )
+
+
 def _broadcast_response_terminal(
     event_type: str,
     payload: dict[str, Any],
@@ -379,13 +408,7 @@ def _broadcast_response_terminal(
     """Publish a terminal edge once across local relays and runtime broadcasts."""
     if not _claim_response_terminal(request_id):
         return
-    events_stream.broadcast_ui_event(
-        event_type,
-        payload,
-        scope="chat",
-        session_id=thread_id,
-        request_id=request_id,
-    )
+    broadcast_response_lifecycle(event_type, payload, thread_id=thread_id, request_id=request_id)
 
 
 def _accepts_keyword(function: Callable[..., Any], keyword: str) -> bool:
@@ -526,11 +549,10 @@ async def recover_runtime_queued_executions() -> None:
                 "queued_message": queued_message,
             }
             handle_runtime_queue_lifecycle(events_contracts.UiEvent.CHAT_RESPONSE_STARTED, payload)
-            events_stream.broadcast_ui_event(
+            broadcast_response_lifecycle(
                 events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
                 payload,
-                scope="chat",
-                session_id=thread_id,
+                thread_id=thread_id,
                 request_id=request_id,
             )
 
@@ -707,11 +729,10 @@ async def responses(
         started_payload["content_request_id"] = content_request_id
     if active_response is not None:
         started_payload["queued"] = True
-    events_stream.broadcast_ui_event(
+    broadcast_response_lifecycle(
         events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
         started_payload,
-        scope="chat",
-        session_id=thread_id,
+        thread_id=thread_id,
         request_id=request_id,
     )
 
@@ -732,9 +753,11 @@ async def responses(
 async def cancel_response(
     generation_id: str,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Cancel a generation using either its browser response or request ID."""
+    chat_background_tasks.require_stream(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     target_id = generation_id.strip()
     if not target_id:
@@ -772,15 +795,16 @@ async def cancel_response(
         cancellation_payload,
         scope="chat",
         request_id=request_id,
+        client_id=client_id,
     )
     if cancel_event is None:
         # A generation accepted by another backend instance has no local runner
         # to emit the target terminal event after a successful remote cancel.
         _clear_response_activity(target_request_id)
-        events_stream.broadcast_ui_event(
+        broadcast_response_lifecycle(
             events_contracts.UiEvent.CHAT_RESPONSE_CANCELLED,
             cancellation_payload,
-            scope="chat",
+            thread_id="",
             request_id=target_request_id,
         )
 
@@ -977,11 +1001,10 @@ async def _run_response_event_stream(
             payload["response"] = item["response"]
         if not handle_runtime_queue_lifecycle(event_type, payload):
             return
-        events_stream.broadcast_ui_event(
+        broadcast_response_lifecycle(
             event_type,
             payload,
-            scope="chat",
-            session_id=thread_id,
+            thread_id=thread_id,
             request_id=request_id,
         )
 
@@ -1035,15 +1058,14 @@ async def _run_response_event_stream(
                         emit_deferred_lifecycle(events_contracts.UiEvent.CHAT_RESPONSE_STARTED)
                     elif admission_queued and not admission_corrected:
                         _register_response_activity(request_id, thread_id)
-                        events_stream.broadcast_ui_event(
+                        broadcast_response_lifecycle(
                             events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
                             response_payload(
                                 stream=True,
                                 content_request_id=request_id,
                                 queued=False,
                             ),
-                            scope="chat",
-                            session_id=thread_id,
+                            thread_id=thread_id,
                             request_id=request_id,
                         )
                         admission_corrected = True
@@ -1157,6 +1179,7 @@ async def _run_response_event_stream(
                 scope="chat",
                 session_id=thread_id,
                 request_id=request_id,
+                topic=f"chat:{thread_id}",
             )
 
         if deferred:

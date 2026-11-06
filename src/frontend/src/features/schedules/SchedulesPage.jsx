@@ -37,6 +37,7 @@ import { useConfig } from '../../context/ConfigContext';
 import { useNotifications } from '../../context/NotificationContext';
 import { useWidgetsApi } from './useWidgetsApi';
 import useConfirmAction from '../../hooks/useConfirmAction';
+import useStreamTopic from '../../hooks/useStreamTopic';
 import useEntityDraft from '../../hooks/useEntityDraft';
 import useInlineTitleEditor from '../../hooks/useInlineTitleEditor';
 import useUiAction from '../../hooks/useUiAction';
@@ -44,6 +45,7 @@ import { reportFailure } from '../../lib/failures';
 import { fetchSchedules, selectSchedulesState } from './state';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { selectRealtimeConnected } from '../../realtime/realtimeSlice';
+import { selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
 import { selectAgentName, selectPreferences } from '../settings/state/preferences';
 import { fetchChatSessions, selectChatLookupResults, selectChatRowsById } from '../chat/state/chats';
 
@@ -313,7 +315,7 @@ function SchedulesPage() {
   const selectedScheduleId = typeof urlScheduleId === 'string' && urlScheduleId.trim().length > 0
     ? urlScheduleId
     : null;
-  // The list is owned by the Redux store and kept live by `schedule.snapshot`
+  // The list is owned by the Redux store and kept live by `schedules.snapshot`
   // events on /api/ui/stream (backend mutations + runtime fires/CRUD). We only
   // seed it once after realtime connects; every change after that arrives as an
   // event.
@@ -328,6 +330,8 @@ function SchedulesPage() {
   const agentName = useSelector(selectAgentName);
   const preferenceTimezone = useSelector((state) => selectPreferences(state).timezone);
   const realtimeConnected = useSelector(selectRealtimeConnected);
+  const streamReady = useSelector(selectRealtimeStreamReady);
+  useStreamTopic('schedules');
   const chatRowsById = useSelector(selectChatRowsById);
   const chatLookupResults = useSelector(selectChatLookupResults);
   const availableChats = useMemo(
@@ -361,10 +365,10 @@ function SchedulesPage() {
   ), [dispatch, getApiUrl]);
 
   useEffect(() => {
-    if (realtimeConnected) {
+    if (streamReady) {
       void requestSchedules();
     }
-  }, [realtimeConnected, requestSchedules]);
+  }, [requestSchedules, streamReady]);
   const scheduleConversationIds = useMemo(
     () => [...new Set(schedules.map(conversationIdFor).filter(Boolean))],
     [schedules],
@@ -578,7 +582,7 @@ function SchedulesPage() {
     const requestId = createUuid();
     trackSave(ticket, {
       requestId,
-      events: [UI_EVENT.SCHEDULE_SNAPSHOT],
+      events: [UI_EVENT.SCHEDULES_SNAPSHOT],
     });
     try {
       await updateWidget(
@@ -652,7 +656,7 @@ function SchedulesPage() {
     const requestId = createUuid();
     trackIntentSave(ticket, {
       requestId,
-      events: [UI_EVENT.SCHEDULE_SNAPSHOT],
+      events: [UI_EVENT.SCHEDULES_SNAPSHOT],
     });
     try {
       await updateWidget(
@@ -706,7 +710,7 @@ function SchedulesPage() {
     const requestId = createUuid();
     trackTriggerSave(ticket, {
       requestId,
-      events: [UI_EVENT.SCHEDULE_SNAPSHOT],
+      events: [UI_EVENT.SCHEDULES_SNAPSHOT],
     });
     try {
       await retriggerSchedule(target.id, text, { requestId });
@@ -745,7 +749,7 @@ function SchedulesPage() {
     const requestId = createUuid();
     trackDestinationSave(ticket, {
       requestId,
-      events: [UI_EVENT.SCHEDULE_SNAPSHOT],
+      events: [UI_EVENT.SCHEDULES_SNAPSHOT],
     });
     try {
       await updateWidget(

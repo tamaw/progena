@@ -1,5 +1,6 @@
 import { UI_EVENT } from '../../../realtime/eventVocabulary';
 import { usePaneCollapse } from '../../../hooks/usePaneCollapse';
+import useStreamTopic from '../../../hooks/useStreamTopic';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -12,11 +13,12 @@ import useAiRename, { aiRenameBlockedReason, createAiRenameAction } from '../hoo
 import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
 import { reportFailure } from '../../../lib/failures';
 import { createUuid } from '../../../lib/uuid';
-import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession, reconcileChatPagination } from '../state/actions';
-import { deleteChatSession, fetchChatMessages, fetchChatSessions, requestChatSessionDetail, requestChatSessionReconciliation, selectActiveChatSession, selectActiveChatSessionState, selectChatReconciliationState, selectChatRowsById, selectChatSessions, selectChatSessionsState, updateChatSessionMetadata } from '../state/chats';
+import { clearChatGenerating, clearChatUnread, clearActiveChatSession, reconcileChatPagination } from '../state/actions';
+import { CHAT_LIST_PAGE_SIZE, deleteChatSession, fetchChatMessages, fetchChatSessions, requestChatSessionDetail, requestChatSessionReconciliation, selectActiveChatSession, selectActiveChatSessionState, selectChatReconciliationState, selectChatRowsById, selectChatSessions, selectChatSessionsState, updateChatSessionMetadata } from '../state/chats';
 import { savePreferences, selectPreferences, selectPreferencesSaveRequest } from '../../settings/state/preferences';
 import { selectModelProfiles } from '../../settings/state/modelProfiles';
 import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
+import { selectRealtimeStreamReady } from '../../../realtime/realtimeSlice';
 import ChatInput from '../components/ChatInput';
 import ChatQueue from '../components/ChatQueue';
 import { BackgroundActivity, BackgroundActivityHistory } from '../components/BackgroundActivity';
@@ -26,14 +28,16 @@ import QuickActions from '../components/QuickActions';
 import InlineFailure from '../../../components/InlineFailure';
 import PageShell from '../../../components/layout/PageShell';
 import DetailPane from '../../../components/layout/DetailPane';
-import { areChatTranscriptsEquivalent, mergeCanonicalMessages, excludeLiveOwnedMessage, shouldRetireLiveOwnerAfterCanonicalReconciliation, countTokens, countToolInvocations, deriveChatTitle, groupSessionItems, shouldShowChatContentLoading, getActiveRouteThreadId, shouldShowNewChatEmptyState, shouldDisableChatComposer, resolveInitialChatThreadId, shouldDeferInitialRosterSelection, shouldDeferRouteSelection, shouldDismissEmptySelection, shouldSkipRoutedMountOpen, isReopeningCurrentLocalDraft, shouldAdoptMaterializedDraft } from '../models/conversationModel';
-import { buildChatSessionItems, findAdjacentSessionItem, normalizeBackendChatMessage, shouldLoadSelectedBackendChat, sidebarEmptyMessage, visibleGroupsForFilter } from '../models/chatSessionsModel';
+import { areChatTranscriptsEquivalent, mergeCanonicalMessages, excludeLiveOwnedMessage, shouldRetireLiveOwnerAfterCanonicalReconciliation, countTokens, countToolInvocations, deriveChatTitle, groupSessionItems, getTimeBucketBoundaries, shouldShowChatContentLoading, getActiveRouteThreadId, shouldShowNewChatEmptyState, shouldDisableChatComposer, resolveInitialChatThreadId, shouldDeferInitialRosterSelection, shouldDeferRouteSelection, shouldDismissEmptySelection, shouldSkipRoutedMountOpen, isReopeningCurrentLocalDraft, shouldAdoptMaterializedDraft } from '../models/conversationModel';
+import { buildBackendSessionItem, buildChatSessionItems, findAdjacentSessionItem, normalizeBackendChatMessage, shouldLoadSelectedBackendChat, sidebarEmptyMessage, visibleGroupsForFilter } from '../models/chatSessionsModel';
 import { isEventVisible, loadStreamFilters } from '../models/streamFilters';
 import ChatMessages from '../components/ChatMessages';
 import { LiveConversationHeader } from '../components/ConversationHeader';
 import { ARCHIVED_CHAT_SESSIONS_KEY, loadQuickChatHandoff, persistPinnedSessionIds } from '../models/chatStorage';
 import { useEntityUrlSync } from '../../../lib/routes';
 import { getDailyWelcomeMessage, normalizeStoredMessage, stripEphemeralStreamEvents } from '../models/conversationPageModel';
+import usePositionalListRange from '../../../hooks/usePositionalListRange';
+import useStreamResync from '../../../hooks/useStreamResync';
 import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from '../models/transcriptScroll';
 import { ConversationSessionsPane } from '../components/ConversationSessionsPane';
 import { useConversationAttachments } from '../hooks/useConversationAttachments';
@@ -61,6 +65,16 @@ function alignSummaryMarkerAnchors(markers, canonicalMessages, renderedMessages)
 function sameSidebarView(left, right) {
   return left?.q === right.q && left?.sort === right.sort && left?.filter === right.filter;
 }
+
+function browserGroupStarts() {
+  const boundaries = getTimeBucketBoundaries();
+  return {
+    today: new Date(boundaries.today).toISOString(),
+    yesterday: new Date(boundaries.yesterday).toISOString(),
+    thisWeek: new Date(boundaries.thisWeek).toISOString(),
+    lastWeek: new Date(boundaries.lastWeek).toISOString(),
+  };
+}
 // A row update this soon after the open chat was reloaded brings nothing new.
 const ROW_RELOAD_COALESCE_MS = 3000;
 
@@ -73,6 +87,7 @@ function ConversationPage() {
   const { collapsed: sessionsCollapsed, setCollapsed: setSessionsCollapsed, paneClassName: sessionsPaneClassName } = usePaneCollapse('chat-sessions-pane');
   const { config, getApiUrl } = useConfig();
   const { connectionState, sendMessageStream, queueMessage, cancelStream, observeResponseStream } = useChatApi();
+  const streamReady = useSelector(selectRealtimeStreamReady);
   const { show } = useNotifications();
   const backendChatSessions = useSelector(selectChatSessions);
   const chatRowsById = useSelector(selectChatRowsById);
@@ -128,6 +143,8 @@ function ConversationPage() {
     createThreadId: createUuid,
   }));
   const derivedChatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
+  useStreamTopic('chats');
+  useStreamTopic(threadId ? `chat:${threadId}` : null);
   // The open thread's session document, once Postgres has created it. Its title
   // is authoritative: anyone (the header, a workflow, Progena) may rename it.
   const threadSession = threadId ? chatRowsById[threadId] || null : null;
@@ -149,36 +166,26 @@ function ConversationPage() {
   const sidebarView = useMemo(() => ({
     q: sidebarQuery,
     sort: sidebarSort === 'Name' ? 'name' : 'recent',
-    filter: sidebarFilter === 'archived' ? 'archived' : 'active',
+    filter: ['archived', 'unread', 'error'].includes(sidebarFilter) ? sidebarFilter : 'active',
   }), [sidebarFilter, sidebarQuery, sidebarSort]);
-  useEffect(() => {
-    const current = backendChatSessionsState.view;
-    if (
-      sameSidebarView(current, sidebarView)
-      && (backendChatSessionsState.loaded || backendChatSessionsState.loading)
-    ) {
-      return undefined;
-    }
-    const timer = window.setTimeout(() => {
-      dispatch(fetchChatSessions({ chatsUrl: getApiUrl('chats'), view: sidebarView, limit: 50 }));
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [backendChatSessionsState.loaded, backendChatSessionsState.loading, backendChatSessionsState.view, dispatch, getApiUrl, sidebarView]);
-  const loadNextSidebarPage = useCallback(() => {
-    if (
-      !backendChatSessionsState.nextCursor
-      || backendChatSessionsState.loading
-      || backendChatSessionsState.loadingMore
-    ) {
-      return;
-    }
-    dispatch(fetchChatSessions({
+  const fetchSidebarPage = useCallback(
+    ({ view, offset, limit }) => dispatch(fetchChatSessions({
       chatsUrl: getApiUrl('chats'),
-      view: sidebarView,
-      cursor: backendChatSessionsState.nextCursor,
-      limit: 50,
-    }));
-  }, [backendChatSessionsState.loading, backendChatSessionsState.loadingMore, backendChatSessionsState.nextCursor, dispatch, getApiUrl, sidebarView]);
+      view,
+      offset,
+      limit,
+      groupStarts: browserGroupStarts(),
+    })),
+    [dispatch, getApiUrl],
+  );
+  const requestSidebarRange = usePositionalListRange({
+    list: backendChatSessionsState,
+    view: sidebarView,
+    sameView: sameSidebarView,
+    streamReady,
+    pageSize: CHAT_LIST_PAGE_SIZE,
+    fetchPage: fetchSidebarPage,
+  });
   // The no-route bootstrap creates a fresh draft session asynchronously. Keep
   // initial roster auto-selection behind that bootstrap; otherwise the two
   // mount effects race and the selected chat can oscillate between the draft
@@ -259,6 +266,12 @@ function ConversationPage() {
       requestId,
     }));
   }, [dispatch, getApiUrl]);
+  // The server drops this tab's chat topics and background-task interest with
+  // the stream, and a reply or delta missed meanwhile is never replayed.
+  useStreamResync(() => {
+    const openThreadId = selectedBackendChatIdRef.current;
+    if (openThreadId) reloadOpenChat(openThreadId);
+  });
 
   const beginForegroundStream = useCallback(() => {
     foregroundOwnershipTokenRef.current += 1;
@@ -441,7 +454,6 @@ function ConversationPage() {
     setSelectedBackendChatId(requestedThreadId);
     dispatch(clearChatGenerating(requestedThreadId));
     dispatch(clearChatUnread(requestedThreadId));
-    dispatch(clearChatErrored(requestedThreadId));
     lastAppliedBackendChatRequestIdRef.current = null;
     const request = dispatch(requestChatSessionDetail({
       chatsUrl: getApiUrl('chats'),
@@ -499,7 +511,20 @@ function ConversationPage() {
     (event) => isEventVisible(event, streamFilters),
     [streamFilters],
   );
-  const hasUnreadChats = unreadChatIds.size > 0;
+
+  const markingReadRef = useRef(new Set());
+  // Reading is account-wide; error status belongs to the last turn, not selection.
+  useEffect(() => {
+    if (!selectedBackendChatId || !chatRowsById[selectedBackendChatId]?.unread
+      || markingReadRef.current.has(selectedBackendChatId)) return;
+    markingReadRef.current.add(selectedBackendChatId);
+    dispatch(clearChatUnread(selectedBackendChatId));
+    dispatch(updateChatSessionMetadata({
+      chatsUrl: getApiUrl('chats'),
+      threadId: selectedBackendChatId,
+      patch: { unread: false },
+    })).finally(() => markingReadRef.current.delete(selectedBackendChatId));
+  }, [chatRowsById, dispatch, getApiUrl, selectedBackendChatId]);
 
   const updateStreamFilters = useCallback(
     (nextFilters) => {
@@ -1324,6 +1349,79 @@ function ConversationPage() {
     }
     return groups;
   }, [sessionItems, sidebarFilter, sidebarSort]);
+  const localSidebarItems = useMemo(() => sessionItems.filter((item) => (
+    item.source === 'local'
+    && (sidebarFilter !== 'archived' || item.archived)
+    && (sidebarFilter !== 'all' || !item.archived)
+    && (sidebarFilter !== 'unread' || (item.unread && !item.archived))
+    && (sidebarFilter !== 'error' || (item.erroredInBackground && !item.archived))
+  )), [sessionItems, sidebarFilter]);
+  const virtualSidebarList = useMemo(() => {
+    if (
+      localSidebarItems.length > 0
+      || !sameSidebarView(backendChatSessionsState.view, sidebarView)
+    ) {
+      return null;
+    }
+    const groupTitles = {
+      pinned: 'Pinned',
+      today: 'Today',
+      yesterday: 'Yesterday',
+      'this-week': 'This Week',
+      'last-week': 'Last Week',
+      later: 'Later',
+    };
+    const groups = sidebarFilter === 'archived'
+      ? [{ key: 'archived', title: 'Archived', count: backendChatSessionsState.total }]
+      : sidebarView.sort === 'recent'
+        ? backendChatSessionsState.groups.map((group) => ({
+          ...group,
+          title: groupTitles[group.key] ?? group.key,
+        }))
+        : [];
+    return {
+      total: backendChatSessionsState.total,
+      rowHeight: 51,
+      headerHeight: 27,
+      groups,
+      rowAt: (index) => {
+        const threadId = backendChatSessionsState.rowsByIndex[index];
+        const row = threadId ? chatRowsById[threadId] : null;
+        return row ? buildBackendSessionItem(
+          row,
+          selectedBackendChatId || threadSession?.thread_id || null,
+          unreadChatIds,
+          backgroundGeneratingChatIds,
+          backgroundChatActivityByThreadId,
+          backgroundErrorChatIds,
+          isGenerating,
+        ) : undefined;
+      },
+      onRangeNeeded: requestSidebarRange,
+      refreshKey: streamReady,
+      rowDelta: backendChatSessionsState.rowDelta,
+    };
+  }, [
+    backendChatSessionsState.groups,
+    backendChatSessionsState.rowDelta,
+    backendChatSessionsState.rowsByIndex,
+    backendChatSessionsState.total,
+    backendChatSessionsState.view,
+    backgroundChatActivityByThreadId,
+    backgroundErrorChatIds,
+    backgroundGeneratingChatIds,
+    chatRowsById,
+    isGenerating,
+    localSidebarItems.length,
+    requestSidebarRange,
+    selectedBackendChatId,
+    sidebarFilter,
+    sidebarView,
+    threadSession,
+    streamReady,
+    unreadChatIds,
+  ]);
+
   const visibleSessionItems = useMemo(
     () => visibleSessionGroups.flatMap((group) => group.items),
     [visibleSessionGroups],
@@ -1618,7 +1716,6 @@ function ConversationPage() {
         setSessionsCollapsed={setSessionsCollapsed}
         sidebarFilter={sidebarFilter}
         setSidebarFilter={setSidebarFilter}
-        hasUnreadChats={hasUnreadChats}
         startNewChatSession={startNewChatSession}
         isClearingSession={isClearingSession}
         sidebarQuery={sidebarQuery}
@@ -1626,7 +1723,7 @@ function ConversationPage() {
         sidebarSort={sidebarSort}
         setSidebarSort={setSidebarSort}
         visibleSessionGroups={visibleSessionGroups}
-        loadNextPage={loadNextSidebarPage}
+        virtualList={virtualSidebarList}
         sidebarEmptyMessageText={sidebarEmptyMessageText}
         selectSessionItem={selectSessionItem}
       />

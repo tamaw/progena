@@ -29,11 +29,7 @@ describe('compareSessionItems', () => {
     )).toBeGreaterThan(0);
   });
 
-  // Regression: this comparator existed and was unit-tested (above) but was
-  // never actually called from ConversationPage's "Recent" sort, so toggling
-  // it was a no-op - items kept whatever order chats.order last happened to
-  // be in. This mirrors the fix: sort with compareSessionItems before
-  // grouping, so within-bucket order reflects recency instead of arrival order.
+  // Keep each time bucket in recency order before rendering.
   it('sorting with compareSessionItems before grouping puts each bucket in recency order', () => {
     const items = [
       { id: 'old', title: 'Old', bucket: 'today', pinned: false, activityAt: 1 },

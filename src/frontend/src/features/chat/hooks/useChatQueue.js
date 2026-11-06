@@ -5,7 +5,8 @@ import { reportFailure } from '../../../lib/failures';
 import { createUuid } from '../../../lib/uuid';
 import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
 import { UI_EVENT } from '../../../realtime/eventVocabulary';
-import { requestAcknowledged } from '../../../store/http';
+import { requestAcknowledged, withQuery } from '../../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realtimeClient';
 
 function normalizeSnapshot(payload, conversationId) {
   if (
@@ -52,7 +53,10 @@ export function useChatQueue(conversationId, detailQueue) {
   const requestSnapshot = useCallback(async (report = false) => {
     if (!conversationId) return false;
     try {
-      await requestAcknowledged(queueUrl(getApiUrl, conversationId), { requestId: createUuid() });
+      await waitForRealtimeClient();
+      await requestAcknowledged(withQuery(queueUrl(getApiUrl, conversationId), {
+        client_id: realtimeClientId,
+      }), { requestId: createUuid() });
       return true;
     } catch (error) {
       if (report) reportFailure(show, 'Load message queue', error);
@@ -112,7 +116,10 @@ export function useChatQueue(conversationId, detailQueue) {
     commandRef.current = commandId;
     setPendingMutation({ conversationId, commandId });
     try {
-      await requestAcknowledged(`${queueUrl(getApiUrl, conversationId)}/actions`, {
+      await waitForRealtimeClient();
+      await requestAcknowledged(withQuery(`${queueUrl(getApiUrl, conversationId)}/actions`, {
+        client_id: realtimeClientId,
+      }), {
         method: 'POST',
         requestId: commandId,
         body: {

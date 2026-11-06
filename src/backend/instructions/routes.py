@@ -22,6 +22,15 @@ router = APIRouter(prefix="/api/ui/instructions", tags=["instructions"])
 _REQUEST_ID_HEADER = Header(default=None, alias="X-Operation-Id")
 _PATH_QUERY = Query(..., description="Instruction path, e.g. progena/genesis.md")
 
+INSTRUCTIONS_TOPIC = "instructions"
+
+
+def _require_stream(client_id: str) -> None:
+    if client_id not in events_stream._ui_stream_clients.values():
+        raise HTTPException(
+            status_code=409, detail="Instruction requests require an active UI stream"
+        )
+
 
 class InstructionUpdateRequest(BaseModel):
     path: str
@@ -34,12 +43,15 @@ def _not_found(path: str) -> HTTPException:
 
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def list_instructions(
-    request: Request, x_request_id: str | None = _REQUEST_ID_HEADER
+    request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
+    x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
     """Publish every instruction's summary."""
     request_id = _request_correlation_id(request, x_request_id)
+    _require_stream(client_id)
     instructions = await asyncio.to_thread(instruction_service.list_instructions)
-    broadcast_instructions_snapshot(instructions, request_id=request_id)
+    broadcast_instructions_snapshot(instructions, request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.INSTRUCTIONS_SNAPSHOT]
     )
@@ -47,10 +59,14 @@ async def list_instructions(
 
 @router.get("/content", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_instruction(
-    request: Request, path: str = _PATH_QUERY, x_request_id: str | None = _REQUEST_ID_HEADER
+    request: Request,
+    path: str = _PATH_QUERY,
+    client_id: str = Query(min_length=1, max_length=64),
+    x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
     """Publish one instruction with its content."""
     request_id = _request_correlation_id(request, x_request_id)
+    _require_stream(client_id)
     try:
         instruction = await asyncio.to_thread(instruction_service.get_instruction, path)
     except FileNotFoundError as exc:
@@ -58,7 +74,10 @@ async def get_instruction(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.INSTRUCTION_LOADED, instruction, request_id=request_id
+        events_contracts.UiEvent.INSTRUCTION_LOADED,
+        instruction,
+        request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.INSTRUCTION_LOADED]
@@ -69,10 +88,12 @@ async def get_instruction(
 async def update_instruction(
     body: InstructionUpdateRequest,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
     """Save a new version of an editable instruction."""
     request_id = _request_correlation_id(request, x_request_id)
+    _require_stream(client_id)
     try:
         saved = await asyncio.to_thread(
             instruction_service.save_instruction, body.path, body.content
@@ -84,9 +105,12 @@ async def update_instruction(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.INSTRUCTION_LOADED, saved, request_id=request_id
+        events_contracts.UiEvent.INSTRUCTION_LOADED,
+        saved,
+        request_id=request_id,
+        client_id=client_id,
     )
-    broadcast_instructions_snapshot(request_id=request_id)
+    broadcast_instructions_snapshot(request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id,
         [
@@ -98,10 +122,14 @@ async def update_instruction(
 
 @router.get("/revisions", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def list_instruction_revisions(
-    request: Request, path: str = _PATH_QUERY, x_request_id: str | None = _REQUEST_ID_HEADER
+    request: Request,
+    path: str = _PATH_QUERY,
+    client_id: str = Query(min_length=1, max_length=64),
+    x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
     """Publish an instruction's captured revisions, newest first."""
     request_id = _request_correlation_id(request, x_request_id)
+    _require_stream(client_id)
     try:
         revisions = await asyncio.to_thread(instruction_service.list_revisions, path)
     except FileNotFoundError as exc:
@@ -112,6 +140,7 @@ async def list_instruction_revisions(
         events_contracts.UiEvent.INSTRUCTION_REVISIONS_LOADED,
         {"path": path, "revisions": revisions},
         request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.INSTRUCTION_REVISIONS_LOADED]
@@ -127,16 +156,21 @@ async def get_instruction_revision(
     revision_id: str,
     request: Request,
     path: str = _PATH_QUERY,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
     """Publish one revision's content."""
     request_id = _request_correlation_id(request, x_request_id)
+    _require_stream(client_id)
     try:
         revision = await asyncio.to_thread(instruction_service.get_revision, path, revision_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Instruction revision not found.") from exc
     events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.INSTRUCTION_REVISION_LOADED, revision, request_id=request_id
+        events_contracts.UiEvent.INSTRUCTION_REVISION_LOADED,
+        revision,
+        request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.INSTRUCTION_REVISION_LOADED]
@@ -152,10 +186,12 @@ async def restore_instruction_revision(
     revision_id: str,
     request: Request,
     path: str = _PATH_QUERY,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
     """Make a captured revision the live instruction."""
     request_id = _request_correlation_id(request, x_request_id)
+    _require_stream(client_id)
     try:
         restored = await asyncio.to_thread(instruction_service.restore_revision, path, revision_id)
     except FileNotFoundError as exc:
@@ -165,9 +201,12 @@ async def restore_instruction_revision(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.INSTRUCTION_LOADED, restored, request_id=request_id
+        events_contracts.UiEvent.INSTRUCTION_LOADED,
+        restored,
+        request_id=request_id,
+        client_id=client_id,
     )
-    broadcast_instructions_snapshot(request_id=request_id)
+    broadcast_instructions_snapshot(request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id,
         [
@@ -178,17 +217,23 @@ async def restore_instruction_revision(
 
 
 def broadcast_instructions_snapshot(
-    instructions: list[dict[str, Any]] | None = None, *, request_id: str | None = None
+    instructions: list[dict[str, Any]] | None = None,
+    *,
+    request_id: str | None = None,
+    client_id: str | None = None,
 ) -> events_contracts.UiEventEnvelope:
-    """Broadcast every instruction's summary to /api/ui/stream subscribers.
-
-    Emitted after the Instructions page requests the list, after edits and
-    restores, and whenever an ``instruction:`` document changes (runtime boot
-    sync surfaced via the Postgres NOTIFY watcher).
-    """
+    """Publish the current instruction catalogue to a requester or page tabs."""
     payload = instruction_service.list_instructions() if instructions is None else instructions
+    if client_id:
+        return events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.INSTRUCTIONS_SNAPSHOT,
+            {"instructions": payload},
+            request_id=request_id,
+            client_id=client_id,
+        )
     return events_stream.broadcast_ui_event(
         events_contracts.UiEvent.INSTRUCTIONS_SNAPSHOT,
         {"instructions": payload},
         request_id=request_id,
+        topic=INSTRUCTIONS_TOPIC,
     )

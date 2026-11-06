@@ -491,20 +491,30 @@ function buildSessionSummary({ messageCount, toolCount, tokenCount }) {
   return parts.join(' · ');
 }
 
+export function getTimeBucketBoundaries(now = Date.now()) {
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const thisWeek = new Date(today);
+  thisWeek.setDate(thisWeek.getDate() - 7);
+  const lastWeek = new Date(today);
+  lastWeek.setDate(lastWeek.getDate() - 14);
+  return {
+    today: today.getTime(),
+    yesterday: yesterday.getTime(),
+    thisWeek: thisWeek.getTime(),
+    lastWeek: lastWeek.getTime(),
+  };
+}
+
 export function getTimeBucket(timestamp, now = Date.now()) {
   const activityAt = toValidTimestamp(timestamp);
   if (!activityAt) {
     return 'today';
   }
 
-  const startOfToday = new Date(now);
-  startOfToday.setHours(0, 0, 0, 0);
-
-  const today = startOfToday.getTime();
-  const yesterday = today - (24 * 60 * 60 * 1000);
-  const thisWeek = today - (7 * 24 * 60 * 60 * 1000);
-  const lastWeek = today - (14 * 24 * 60 * 60 * 1000);
-
+  const { today, yesterday, thisWeek, lastWeek } = getTimeBucketBoundaries(now);
   if (activityAt >= today) {
     return 'today';
   }

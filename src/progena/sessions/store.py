@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from src.progena.documents.kinds import SESSION_KEY_PREFIX
 from src.progena.persistence.documents import StateDocuments
+from src.progena.sessions.status import SessionTurnStatus, terminal_session_fields
 
 
 class SessionStore:
@@ -30,3 +32,10 @@ class SessionStore:
         Returns ``True`` when the row existed.
         """
         return await self._access.store.merge_document(f"{SESSION_KEY_PREFIX}{thread_id}", fields)
+
+    async def record_turn_terminal(self, thread_id: str, status: SessionTurnStatus) -> bool:
+        """Persist terminal flags and activity without replacing other session fields."""
+        return await self.merge_session(
+            thread_id,
+            {**terminal_session_fields(status), "last_activity": datetime.now(UTC).isoformat()},
+        )

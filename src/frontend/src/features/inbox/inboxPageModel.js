@@ -27,33 +27,3 @@ export function inboxMessageNeedsDecision(message) {
   return Boolean(message?.requires_approval) && !message?.decision;
 }
 
-export function matchesInboxFilter(message, filter) {
-  if (filter === 'archived') return Boolean(message.archived);
-  if (message.archived) return false;
-  if (filter === 'unread') return getInboxMessageStatus(message) === 'unread';
-  if (filter === 'pending') return inboxMessageNeedsDecision(message);
-  return true;
-}
-
-export function matchesInboxQuery(message, query) {
-  const needle = String(query || '').trim().toLowerCase();
-  if (!needle) return true;
-  return (
-    String(message.title || '').toLowerCase().includes(needle)
-    || String(message.body || '').toLowerCase().includes(needle)
-  );
-}
-
-export function filterInboxMessages(messages, filter, query) {
-  if (!Array.isArray(messages)) return [];
-  return messages.filter((message) => matchesInboxFilter(message, filter) && matchesInboxQuery(message, query));
-}
-
-export function sortInboxMessages(messages, sort) {
-  const list = Array.isArray(messages) ? messages : [];
-  if (sort === 'Name') {
-    return [...list].sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
-  }
-  // Server order is already created_at desc ("Recent").
-  return list;
-}

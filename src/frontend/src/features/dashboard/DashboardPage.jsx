@@ -121,7 +121,7 @@ export default function DashboardPage() {
     connected,
     streamReady,
     collectionState,
-    retryRuns, retrySchedules, retryInbox,
+    retryRuns, retrySchedules,
   } = useDashboardData();
 
   const [widgetFilter, setWidgetFilter] = useState('all');
@@ -396,7 +396,6 @@ export default function DashboardPage() {
             </div>
             <div className="dashboard-panel__body">
               <InlineFailure failure={collectionState.runs.error} operation="Load workflow reviews" onRetry={retryRuns} />
-              <InlineFailure failure={collectionState.inbox.error} operation="Load review messages" onRetry={retryInbox} />
               {unreadAlerts.length === 0 && pendingReview.length === 0 && pendingApprovals.length === 0 && unavailableResources.length === 0 ? (
                 !collectionState.runs.error && !collectionState.inbox.error && <EmptyState small>
                   {attentionReady ? 'Nothing needs attention right now' : 'Waiting for review data…'}

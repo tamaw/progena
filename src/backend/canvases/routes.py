@@ -212,11 +212,12 @@ def _validate_pattern(pattern: str, types: dict[str, DocumentType]) -> str:
 
 @router.get("/canvases", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_canvases(
-    request: Request, x_request_id: str | None = _REQUEST_ID_HEADER
+    request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
+    x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
     request_id = _request_correlation_id(request, x_request_id)
-
-    broadcast_canvases_snapshot(request_id=request_id)
+    broadcast_canvases_snapshot(request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.CANVASES_SNAPSHOT]
     )
@@ -257,7 +258,8 @@ async def delete_canvas(
     client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
-    del client_id
+    if client_id not in events_stream._ui_stream_clients.values():
+        raise HTTPException(status_code=409, detail="An active UI stream is required")
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     files = await asyncio.to_thread(_canvas_files, store, name)
@@ -269,8 +271,18 @@ async def delete_canvas(
         for key, _document in store.list_documents(PROGENA_STATE_PREFIX, data_prefix):
             store.delete_document(PROGENA_STATE_PREFIX, key)
     request_id = _request_correlation_id(request, x_request_id)
+    payload = {"name": name}
     events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.CANVAS_DELETED, {"name": name}, request_id=request_id
+        events_contracts.UiEvent.CANVAS_DELETED,
+        payload,
+        request_id=request_id,
+        client_id=client_id,
+    )
+    events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.CANVAS_DELETED,
+        payload,
+        topic="canvases",
+        exclude_client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.CANVAS_DELETED]
@@ -495,13 +507,23 @@ async def delete_canvas_subscription(
 
 
 def broadcast_canvases_snapshot(
-    *, request_id: str | None = None
+    *, request_id: str | None = None, client_id: str | None = None
 ) -> events_contracts.UiEventEnvelope:
-    """Broadcast the live summary of every agent-built canvas."""
+    """Publish the live summary of every agent-built canvas."""
 
     from src.backend.canvases.routes import canvas_summaries
 
     items = [summary.model_dump(mode="json") for summary in canvas_summaries()]
+    if client_id is not None:
+        return events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.CANVASES_SNAPSHOT,
+            {"items": items},
+            request_id=request_id,
+            client_id=client_id,
+        )
     return events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.CANVASES_SNAPSHOT, {"items": items}, request_id=request_id
+        events_contracts.UiEvent.CANVASES_SNAPSHOT,
+        {"items": items},
+        request_id=request_id,
+        topic="canvases",
     )

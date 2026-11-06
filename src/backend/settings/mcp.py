@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 
 import src.backend.events.contracts as events_contracts
 import src.backend.events.stream as events_stream
@@ -48,7 +48,9 @@ def _mcp_widget_items() -> list[schedules_models.WidgetResponse]:
     return items
 
 
-def _broadcast_mcp_server_detail(widget_id: str, *, request_id: str | None = None) -> bool:
+def _broadcast_mcp_server_detail(
+    widget_id: str, *, request_id: str | None = None, client_id: str | None = None
+) -> bool:
     """Re-publish one MCP server's full detail (including tools) on the UI stream.
 
     Returns ``False`` (no broadcast) when ``widget_id`` no longer names a live
@@ -70,6 +72,8 @@ def _broadcast_mcp_server_detail(widget_id: str, *, request_id: str | None = Non
         events_contracts.UiEvent.MCP_SERVER_DETAIL_UPDATED,
         response.model_dump(mode="json"),
         request_id=request_id,
+        client_id=client_id,
+        topic=None if client_id else "mcp",
     )
     return True
 
@@ -77,6 +81,7 @@ def _broadcast_mcp_server_detail(widget_id: str, *, request_id: str | None = Non
 @router.get("/mcp", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_mcp_servers(
     request: Request,
+    client_id: str | None = Query(default=None, min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Acknowledge MCP-list requests and publish the snapshot on the UI stream.
@@ -87,7 +92,7 @@ async def get_mcp_servers(
     """
     request_id = http_requests.request_correlation_id(request, x_request_id)
     items = _mcp_widget_items()
-    broadcast_mcp_snapshot(items, request_id=request_id)
+    broadcast_mcp_snapshot(items, request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.MCP_SNAPSHOT]
     )
@@ -97,6 +102,7 @@ async def get_mcp_servers(
 async def get_mcp_server_detail(
     id: str,
     request: Request,
+    client_id: str | None = Query(default=None, min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Acknowledge a request for one MCP server's full detail and publish it.
@@ -106,7 +112,7 @@ async def get_mcp_server_detail(
     (including tools) is fetched on demand here.
     """
     request_id = http_requests.request_correlation_id(request, x_request_id)
-    if not _broadcast_mcp_server_detail(id, request_id=request_id):
+    if not _broadcast_mcp_server_detail(id, request_id=request_id, client_id=client_id):
         raise HTTPException(status_code=404, detail=f"MCP server '{id}' not found")
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.MCP_SERVER_DETAIL_UPDATED]
@@ -114,7 +120,10 @@ async def get_mcp_server_detail(
 
 
 def broadcast_mcp_snapshot(
-    items: list[schedules_models.WidgetResponse] | None = None, *, request_id: str | None = None
+    items: list[schedules_models.WidgetResponse] | None = None,
+    *,
+    request_id: str | None = None,
+    client_id: str | None = None,
 ) -> events_contracts.UiEventEnvelope:
     """Broadcast the current MCP server list to /api/ui/stream subscribers.
 
@@ -128,5 +137,9 @@ def broadcast_mcp_snapshot(
     source = _mcp_widget_items() if items is None else items
     payload = [item.model_dump(mode="json") for item in source]
     return events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.MCP_SNAPSHOT, {"items": payload}, request_id=request_id
+        events_contracts.UiEvent.MCP_SNAPSHOT,
+        {"items": payload},
+        request_id=request_id,
+        client_id=client_id,
+        topic=None if client_id else "mcp",
     )

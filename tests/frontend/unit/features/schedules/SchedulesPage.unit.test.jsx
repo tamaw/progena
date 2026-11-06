@@ -5,7 +5,7 @@ import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import realtimeReducer, { realtimeConnected } from '@frontend/realtime/realtimeSlice';
+import realtimeReducer, { realtimeConnected, realtimeStreamReady } from '@frontend/realtime/realtimeSlice';
 import uiDataReducer from '@frontend/store/uiDataSlice';
 import { applyUiEvent } from '@frontend/store/uiEvents';
 import editorDraftsReducer from '@frontend/store/editorDraftsSlice';
@@ -33,6 +33,13 @@ vi.mock('@frontend/features/schedules/useWidgetsApi', () => {
   const api = { updateWidget, deleteWidget: () => Promise.resolve() };
   return { useWidgetsApi: () => api };
 });
+vi.mock('@frontend/realtime/realtimeClient', () => ({
+  realtimeClientId: 'schedule-test-client',
+  waitForRealtimeClient: () => Promise.resolve(),
+}));
+vi.mock('@frontend/hooks/useStreamTopic', () => ({
+  default: () => {},
+}));
 
 let host;
 let root;
@@ -90,7 +97,7 @@ async (entryTimezone, preferenceTimezone, expectedZone) => {
     type: 'preferences.snapshot', payload: { timezone: preferenceTimezone },
   }));
   store.dispatch(applyUiEvent({
-    type: 'schedule.snapshot',
+    type: 'schedules.snapshot',
     payload: { items: [{
       id: 'legacy', name: 'Legacy', timezone: entryTimezone,
       scheduled_at: '2026-07-15T13:00:00Z', next_run: '2026-07-15T13:00:00Z',
@@ -118,7 +125,7 @@ it('retains independent unsaved intent drafts for schedules A and B across selec
     reducer: { realtime: realtimeReducer, uiData: uiDataReducer, editorDrafts: editorDraftsReducer },
   });
   store.dispatch(applyUiEvent({
-    type: 'schedule.snapshot',
+    type: 'schedules.snapshot',
     payload: {
       items: [
         { id: 'a', name: 'Alpha', message: 'alpha intent', cron: '0 * * * *' },
@@ -166,18 +173,19 @@ it('retains independent unsaved intent drafts for schedules A and B across selec
 it('keeps a deep link that a cached list lacks until this visit’s refresh settles', async () => {
   let refreshRequestId = null;
   vi.stubGlobal('fetch', vi.fn(async (url, { headers = {} } = {}) => {
-    if (url === '/api/schedules') {
+    if (url.startsWith('/api/schedules?')) {
       refreshRequestId = headers['X-Operation-Id'];
     }
-    return new Response(JSON.stringify({ request_id: refreshRequestId, event_types: ['schedule.snapshot'] }), { status: 202 });
+    return new Response(JSON.stringify({ request_id: refreshRequestId, event_types: ['schedules.snapshot'] }), { status: 202 });
   }));
   const store = configureStore({
     reducer: { realtime: realtimeReducer, uiData: uiDataReducer, editorDrafts: editorDraftsReducer },
   });
   store.dispatch(realtimeConnected());
+  store.dispatch(realtimeStreamReady());
   // Hydrated by an earlier visit, before schedule "b" was created elsewhere.
   store.dispatch(applyUiEvent({
-    type: 'schedule.snapshot',
+    type: 'schedules.snapshot',
     payload: { items: [{ id: 'a', name: 'Alpha', message: 'alpha intent', cron: '0 * * * *' }] },
   }));
   await act(async () => root.render(
@@ -194,7 +202,7 @@ it('keeps a deep link that a cached list lacks until this visit’s refresh sett
   expect(location()).toBe('/schedules/b');
 
   await act(async () => store.dispatch(applyUiEvent({
-    type: 'schedule.snapshot',
+    type: 'schedules.snapshot',
     payload: {
       request_id: refreshRequestId,
       items: [
@@ -241,7 +249,7 @@ it('retargets a schedule only when the destination changes', async () => {
     reducer: { realtime: realtimeReducer, uiData: uiDataReducer, editorDrafts: editorDraftsReducer },
   });
   store.dispatch(applyUiEvent({
-    type: 'schedule.snapshot',
+    type: 'schedules.snapshot',
     payload: {
       items: [{
         id: 'schedule-a',

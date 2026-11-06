@@ -1,6 +1,8 @@
 import { UI_EVENT } from '../../realtime/eventVocabulary';
 /** Global search slice — replaces the old knowledge-only search. */
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from '../../store/async';
+import { withQuery } from '../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
 
 export const initialState = {
   search: {
@@ -10,8 +12,10 @@ export const initialState = {
 
 export const searchAll = createAcknowledgedThunk(
   'uiData/searchAll',
-  async ({ searchUrl, query }, { requestId }) =>
-    requestAcknowledged(`${searchUrl}?q=${encodeURIComponent(query)}`, { requestId }),
+  async ({ searchUrl, query }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(withQuery(searchUrl, { q: query, client_id: realtimeClientId }), { requestId });
+  },
 );
 
 export const eventHandlers = {

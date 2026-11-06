@@ -23,7 +23,10 @@ export const initialState = {
 
 export const fetchCanvases = createAcknowledgedThunk(
   'uiData/fetchCanvases',
-  async ({ canvasesUrl }, { requestId }) => requestAcknowledged(canvasesUrl, { requestId }),
+  async ({ canvasesUrl }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(withQuery(canvasesUrl, { client_id: realtimeClientId }), { requestId });
+  },
 );
 export const fetchCanvasFiles = createAcknowledgedThunk(
   'uiData/fetchCanvasFiles',

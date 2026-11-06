@@ -31,6 +31,11 @@ vi.mock('@frontend/realtime/realtimeEvents', () => ({
 }));
 vi.mock('@frontend/store/http', () => ({
   requestAcknowledged: mocks.requestAcknowledged,
+  withQuery: (url) => url,
+}));
+vi.mock('@frontend/realtime/realtimeClient', () => ({
+  realtimeClientId: 'tab-1',
+  waitForRealtimeClient: () => Promise.resolve(),
 }));
 vi.mock('@frontend/lib/uuid', () => ({
   createUuid: () => `00000000-0000-4000-8000-${String(++mocks.nextId).padStart(12, '0')}`,

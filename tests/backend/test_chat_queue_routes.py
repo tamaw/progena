@@ -51,18 +51,22 @@ def test_queue_snapshot_acknowledges_and_emits_correlated_reconnect_snapshot(cli
     original_client = lifecycle_state.client
     subscriber: asyncio.Queue = asyncio.Queue()
     events_stream._ui_stream_subscribers[subscriber] = None
+    events_stream._ui_stream_clients[subscriber] = "tab-1"
     lifecycle_state.client = RuntimeClient()
     try:
         first = client.get(
-            "/api/chat/sessions/thread-queue/queue", headers={"X-Operation-Id": "queue-load-1"}
+            "/api/chat/sessions/thread-queue/queue?client_id=tab-1",
+            headers={"X-Operation-Id": "queue-load-1"},
         )
         second = client.get(
-            "/api/chat/sessions/thread-queue/queue", headers={"X-Operation-Id": "queue-load-2"}
+            "/api/chat/sessions/thread-queue/queue?client_id=tab-1",
+            headers={"X-Operation-Id": "queue-load-2"},
         )
         events = [subscriber.get_nowait()["envelope"] for _ in range(subscriber.qsize())]
     finally:
         lifecycle_state.client = original_client
         events_stream._ui_stream_subscribers.pop(subscriber, None)
+        events_stream._ui_stream_clients.pop(subscriber, None)
 
     assert first.status_code == second.status_code == 202
     assert first.json() == {"request_id": "queue-load-1", "event_types": ["chat.queue.updated"]}
@@ -85,10 +89,11 @@ def test_queue_action_preserves_ids_order_revision_and_command_correlation(clien
     original_client = lifecycle_state.client
     subscriber: asyncio.Queue = asyncio.Queue()
     events_stream._ui_stream_subscribers[subscriber] = None
+    events_stream._ui_stream_clients[subscriber] = "tab-1"
     lifecycle_state.client = runtime_client
     try:
         response = client.post(
-            "/api/chat/sessions/thread-queue/queue/actions",
+            "/api/chat/sessions/thread-queue/queue/actions?client_id=tab-1",
             headers={"X-Operation-Id": "queue-action-1"},
             json={
                 "action": "reorder",
@@ -101,6 +106,7 @@ def test_queue_action_preserves_ids_order_revision_and_command_correlation(clien
     finally:
         lifecycle_state.client = original_client
         events_stream._ui_stream_subscribers.pop(subscriber, None)
+        events_stream._ui_stream_clients.pop(subscriber, None)
 
     assert response.status_code == 202
     assert response.json() == {
@@ -163,10 +169,11 @@ def test_queue_revision_conflict_emits_no_success_snapshot(client):
     original_client = lifecycle_state.client
     subscriber: asyncio.Queue = asyncio.Queue()
     events_stream._ui_stream_subscribers[subscriber] = None
+    events_stream._ui_stream_clients[subscriber] = "tab-1"
     lifecycle_state.client = RuntimeClient()
     try:
         response = client.post(
-            "/api/chat/sessions/thread-queue/queue/actions",
+            "/api/chat/sessions/thread-queue/queue/actions?client_id=tab-1",
             headers={"X-Operation-Id": "queue-conflict-1"},
             json={
                 "action": "send_now",
@@ -178,6 +185,7 @@ def test_queue_revision_conflict_emits_no_success_snapshot(client):
     finally:
         lifecycle_state.client = original_client
         events_stream._ui_stream_subscribers.pop(subscriber, None)
+        events_stream._ui_stream_clients.pop(subscriber, None)
 
     assert response.status_code == 409
     assert response.json() == {"detail": "Queue revision is stale"}
@@ -357,7 +365,11 @@ async def test_queued_admission_reconciles_missed_runtime_lifecycle():
         "answer",
     ]
     assert state.terminal_reached is True
-    assert published == ["chat.response.started", "chat.response.completed"]
+    assert published == [
+        events_contracts.UiEvent.CHAT_RESPONSE_QUEUE_STARTED,
+        events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
+        events_contracts.UiEvent.CHAT_RESPONSE_COMPLETED,
+    ]
 
 
 @pytest.mark.asyncio
@@ -471,7 +483,10 @@ async def test_deferred_cancel_relays_delta_until_runtime_terminal():
         release_delta.set()
         await delta_consumed.wait()
         assert [frame.payload.get("delta") for frame in state.frames] == ["late delta"]
-        assert published == [events_contracts.UiEvent.CHAT_RESPONSE_STARTED]
+        assert published == [
+            events_contracts.UiEvent.CHAT_RESPONSE_QUEUE_STARTED,
+            events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
+        ]
         release_terminal.set()
         await runner
     finally:
@@ -484,6 +499,7 @@ async def test_deferred_cancel_relays_delta_until_runtime_terminal():
         chat_responses._terminal_response_request_ids.discard(request_id)
 
     assert published == [
+        events_contracts.UiEvent.CHAT_RESPONSE_QUEUE_STARTED,
         events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
         events_contracts.UiEvent.CHAT_RESPONSE_CANCELLED,
     ]
@@ -630,6 +646,7 @@ async def test_nonstream_deferred_execution_emits_one_start_and_terminal():
         chat_responses._queue_terminal_request_ids.discard(request_id)
 
     assert published == [
+        events_contracts.UiEvent.CHAT_RESPONSE_QUEUE_STARTED,
         events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
         events_contracts.UiEvent.CHAT_RESPONSE_COMPLETED,
     ]

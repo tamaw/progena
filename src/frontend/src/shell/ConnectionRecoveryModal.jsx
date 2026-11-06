@@ -1,4 +1,3 @@
-import { UI_EVENT } from '../realtime/eventVocabulary';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useDispatch } from 'react-redux';
 import { useConfig } from '../context/ConfigContext';
@@ -8,7 +7,9 @@ import { createOperationRequestId, requestAcknowledged, subscribeSessionExpiry }
 import useIdleTimeout from '../hooks/useIdleTimeout';
 import Modal from '../components/Modal';
 
-const STATUS_GRACE_MS = 20000;
+// The server sends `connection.heartbeat` after 15 s without any other event, so a
+// healthy stream is never silent for longer than this.
+const SILENCE_GRACE_MS = 30000;
 const RECONNECT_INTERVAL_MS = 10000;
 
 export default function ConnectionRecoveryModal() {
@@ -18,7 +19,7 @@ export default function ConnectionRecoveryModal() {
   const titleId = useId();
   const reconnectRef = useRef(null);
   const pausedRef = useRef(false);
-  const timingRef = useRef({ lastStatusAt: 0, retryAt: null });
+  const timingRef = useRef({ lastEventAt: 0, retryAt: null });
   const preferencesUrl = getApiUrl('preferences');
   const [countdown, setCountdown] = useState(null);
   const [sessionExpired, setSessionExpired] = useState(false);
@@ -53,7 +54,7 @@ export default function ConnectionRecoveryModal() {
   }, [dispatch, paused]);
 
   const resume = useCallback(() => {
-    timingRef.current.lastStatusAt = Date.now();
+    timingRef.current.lastEventAt = Date.now();
     timingRef.current.retryAt = null;
     setCountdown(null);
     resumeIdle();
@@ -64,20 +65,18 @@ export default function ConnectionRecoveryModal() {
 
   useEffect(() => {
     const timing = timingRef.current;
-    timing.lastStatusAt = Date.now();
+    timing.lastEventAt = Date.now();
     timing.retryAt = null;
-    const unsubscribe = subscribeUiEvent((event) => {
-      // Headers, connection.ready and unrelated events do not prove that the
-      // backend's periodic status publisher is running again.
-      if (event.type !== UI_EVENT.STATUS_UPDATED) return;
-      timing.lastStatusAt = Date.now();
+    const unsubscribe = subscribeUiEvent(() => {
+      // Any event proves the stream is delivering; an idle one still carries heartbeats.
+      timing.lastEventAt = Date.now();
       timing.retryAt = null;
       setCountdown(null);
     });
     const timer = setInterval(() => {
       const now = Date.now();
       if (pausedRef.current) return;
-      if (now - timing.lastStatusAt < STATUS_GRACE_MS) return;
+      if (now - timing.lastEventAt < SILENCE_GRACE_MS) return;
       timing.retryAt ??= now + RECONNECT_INTERVAL_MS;
       if (now >= timing.retryAt) reconnect();
       else setCountdown(Math.ceil((timing.retryAt - now) / 1000));

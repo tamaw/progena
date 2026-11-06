@@ -76,7 +76,7 @@ const Harness = forwardRef(function Harness({ threadId = 'thread-1' }, ref) {
 
 function started(requestId, queuedMessageId) {
   return {
-    type: UI_EVENT.CHAT_RESPONSE_STARTED,
+    type: UI_EVENT.CHAT_RESPONSE_QUEUE_STARTED,
     payload: {
       thread_id: 'thread-1',
       request_id: `queue-${requestId}`,

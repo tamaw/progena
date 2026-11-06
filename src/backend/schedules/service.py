@@ -29,6 +29,9 @@ from src.progena.utils import normalize_utc_datetime, utcnow
 
 logger = logging.getLogger(__name__)
 
+SCHEDULES_TOPIC = "schedules"
+DASHBOARD_TOPIC = "dashboard"
+
 
 def _next_run_iso(next_run: datetime) -> str:
     """Serialize scheduler-produced instants as UTC for stored/UI schedule state."""
@@ -288,23 +291,30 @@ def _broadcast_widget_refresh(
     state_reader: monitoring_state.StateReader,
     *,
     request_id: str | None = None,
+    client_id: str | None = None,
     refreshed_widget: dict[str, Any] | None = None,
 ) -> None:
-    """Notify status listeners that backend-derived widgets changed.
-
-    A live agent inspection is ephemeral: it comes from the agent card rather
-    than a state document.  Merge it into this event's snapshot so the UI can
-    consume the inspection without fabricating a local response body.
-    """
+    """Publish changed widgets to dashboard watchers and the request origin."""
     items = state_reader.get_widgets()
     if refreshed_widget is not None:
         items = [
             refreshed_widget if item.get("id") == refreshed_widget.get("id") else item
             for item in items
         ]
+    payload = {"items": items}
     events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.WIDGETS_UPDATED, {"items": items}, request_id=request_id
+        events_contracts.UiEvent.WIDGETS_UPDATED,
+        payload,
+        request_id=request_id,
+        topic=DASHBOARD_TOPIC,
     )
+    if client_id is not None and not events_stream.has_topic(client_id, DASHBOARD_TOPIC):
+        events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.WIDGETS_UPDATED,
+            payload,
+            request_id=request_id,
+            client_id=client_id,
+        )
 
 
 def _find_widget_payload(
@@ -662,14 +672,11 @@ def _schedule_runs_by_schedule(
 
 
 def broadcast_schedule_snapshot(
-    *, request_id: str | None = None
+    *,
+    request_id: str | None = None,
+    client_id: str | None = None,
 ) -> events_contracts.UiEventEnvelope:
-    """Broadcast the current schedule list to canonical /api/ui/stream subscribers.
-
-    Emitted after backend-side schedule mutations and whenever the runtime
-    reports a schedule change (fire / chat-driven CRUD) via the SSE event
-    bridge, so the Schedules page reflects changes live.
-    """
+    """Publish the schedule list to one requester or tabs watching Schedules."""
     state_reader = monitoring_state.get_state_reader()
     runs = _schedule_runs_by_schedule(state_reader)
     preference_timezone = preferences_store.load_preferences().get("timezone", "UTC")
@@ -677,23 +684,42 @@ def broadcast_schedule_snapshot(
         _schedule_item_to_info(item, runs.get(item.id), preference_timezone).model_dump(mode="json")
         for item in state_reader.get_schedule()
     ]
+    if client_id:
+        return events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.SCHEDULES_SNAPSHOT,
+            {"items": items},
+            request_id=request_id,
+            client_id=client_id,
+        )
     return events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.SCHEDULE_SNAPSHOT, {"items": items}, request_id=request_id
+        events_contracts.UiEvent.SCHEDULES_SNAPSHOT,
+        {"items": items},
+        request_id=request_id,
+        topic=SCHEDULES_TOPIC,
     )
 
 
 def broadcast_widgets_snapshot(
-    items: list[schedules_models.WidgetResponse] | None = None, *, request_id: str | None = None
+    items: list[schedules_models.WidgetResponse] | None = None,
+    *,
+    request_id: str | None = None,
+    client_id: str | None = None,
 ) -> events_contracts.UiEventEnvelope:
-    """Broadcast the unified widget list (dashboard/cross-cutting views).
-
-    Callers holding a freshly built list can pass it in to avoid recomputing
-    widgets and to keep the SSE snapshot consistent with their HTTP response.
-    """
+    """Publish widgets to one requester or to dashboard watchers."""
     if items is None:
         state_reader = monitoring_state.get_state_reader()
         items = [_widget_to_response(widget) for widget in state_reader.get_widgets()]
-    payload = [item.model_dump(mode="json") for item in items]
+    payload = {"items": [item.model_dump(mode="json") for item in items]}
+    if client_id is not None:
+        return events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.WIDGETS_UPDATED,
+            payload,
+            request_id=request_id,
+            client_id=client_id,
+        )
     return events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.WIDGETS_UPDATED, {"items": payload}, request_id=request_id
+        events_contracts.UiEvent.WIDGETS_UPDATED,
+        payload,
+        request_id=request_id,
+        topic=DASHBOARD_TOPIC,
     )

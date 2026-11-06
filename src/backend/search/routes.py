@@ -266,6 +266,7 @@ def _schedules_provider(q: str, limit: int = 5) -> dict[str, Any]:
 async def search(
     request: Request,
     q: str = Query(min_length=1),
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
     """Global search across documents, tools, and schedules.
@@ -275,6 +276,8 @@ async def search(
     """
     if len(q.strip()) < 3:
         raise HTTPException(status_code=422, detail="Query must be at least 3 characters.")
+    if client_id not in events_stream._ui_stream_clients.values():
+        raise HTTPException(status_code=409, detail="An active UI stream is required")
 
     request_id = _request_correlation_id(request, x_request_id)
     limit = 5
@@ -334,6 +337,7 @@ async def search(
         events_contracts.UiEvent.SEARCH_RESULTS,
         {"query": q, "sections": sections},
         request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.SEARCH_RESULTS]

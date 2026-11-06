@@ -288,6 +288,8 @@ BEGIN
             'first_message', _text,
             'pinned', false,
             'archived', false,
+            'unread', false,
+            'errored', false,
             'created_at', _stamp,
             'last_activity', _stamp,
             'content', ''

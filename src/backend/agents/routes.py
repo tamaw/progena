@@ -20,6 +20,7 @@ import yaml
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
 import src.backend.lifecycle.state as lifecycle_state
 from src.backend.agents.store import (
@@ -57,6 +58,13 @@ from src.progena.routines.lifecycle import (
 )
 from src.progena.threads import routine_session_from_thread
 from src.progena.utils import utcnow_isoformat
+
+AGENTS_TOPIC = "agents"
+
+
+def _require_stream(client_id: str) -> None:
+    if client_id not in events_stream._ui_stream_clients.values():
+        raise HTTPException(status_code=409, detail="Agent requests require an active UI stream")
 
 
 class AgentGraphModel(BaseModel):
@@ -336,25 +344,27 @@ async def broadcast_agent_profiles_snapshot(
     broadcast_ui_event: BroadcastUiEvent,
     *,
     request_id: str | None = None,
+    client_id: str | None = None,
 ) -> AgentProfilesResponse | None:
-    """Rebuild and publish the agent-profiles snapshot on the UI stream.
-
-    Shared by the ``GET /agent-profiles`` handler and the ``registry`` document
-    change watcher (see ``monitoring.status._queue_state_watch_status``), so an agent
-    editing ``/config/agents.json`` pushes live to the Agents page the same way
-    a UI-driven edit already does. Returns ``None`` (no-op) if the agent store
-    isn't configured yet rather than raising, since this also runs from a
-    background watcher with no request to manage.
-    """
+    """Publish an agent snapshot to its requester or interested catalogue tabs."""
     store = get_agent_store()
     if store is None:
         return None
     response = await asyncio.to_thread(build_agent_profiles, store)
-    broadcast_ui_event(
-        events_contracts.UiEvent.AGENTS_SNAPSHOT,
-        response.model_dump(by_alias=True),
-        request_id=request_id,
-    )
+    if client_id:
+        broadcast_ui_event(
+            events_contracts.UiEvent.AGENTS_SNAPSHOT,
+            response.model_dump(by_alias=True),
+            request_id=request_id,
+            client_id=client_id,
+        )
+    else:
+        broadcast_ui_event(
+            events_contracts.UiEvent.AGENTS_SNAPSHOT,
+            response.model_dump(by_alias=True),
+            request_id=request_id,
+            topic=AGENTS_TOPIC,
+        )
     return response
 
 
@@ -409,20 +419,18 @@ def create_agent_profile_router(
     )
     async def list_agent_profiles(
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
-        """Acknowledge agent-list requests and publish the list on the UI stream.
-
-        Subagents come from the backend DB; A2A agents are read through from
-        Progena's registry document so they always reflect the runtime's live
-        view (status + agent card) without the backend fetching cards itself.
-        """
+        """Acknowledge agent-list requests and publish the list on the UI stream."""
         request_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         response = await asyncio.to_thread(build_agent_profiles, get_agent_store())
         broadcast_ui_event(
             events_contracts.UiEvent.AGENTS_SNAPSHOT,
             response.model_dump(by_alias=True),
             request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.AGENTS_SNAPSHOT]
@@ -436,10 +444,12 @@ def create_agent_profile_router(
     async def create_object_agent_profile(
         payload: ObjectAgentCreateRequest,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Persist an author-created object agent as a portable SYSTEM.md document."""
         request_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         store = _require_store()
         try:
             await asyncio.to_thread(
@@ -453,6 +463,7 @@ def create_agent_profile_router(
             events_contracts.UiEvent.AGENTS_SNAPSHOT,
             response.model_dump(by_alias=True),
             request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.AGENTS_SNAPSHOT]
@@ -467,17 +478,12 @@ def create_agent_profile_router(
         agent_id: str,
         payload: ObjectAgentManifestUpdateRequest,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
-        """Update any manifest-backed object agent's SYSTEM.md manifest.
-
-        Works for every source -- ``native`` agents are rewritten on disk
-        under ``data/agents/objects/<name>/SYSTEM.md``, ``user`` and
-        ``marketplace`` agents in the document store. The request carries the
-        literal ``SYSTEM.md`` text, so any front-matter key can be added,
-        renamed, or removed, not just the runtime-known ones.
-        """
+        """Update any manifest-backed object agent's SYSTEM.md manifest."""
         request_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         store = _require_store()
         try:
             await asyncio.to_thread(
@@ -494,6 +500,7 @@ def create_agent_profile_router(
             events_contracts.UiEvent.AGENTS_SNAPSHOT,
             response.model_dump(by_alias=True),
             request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.AGENTS_SNAPSHOT]
@@ -507,23 +514,21 @@ def create_agent_profile_router(
     async def get_agent_skill_content(
         request: Request,
         path: str,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
-        """Publish one skill's ``SKILL.md`` body (front matter + prompt).
-
-        ``path`` is the absolute ``/skills/...`` virtual-mount path stored in
-        an object agent's manifest ``skills`` list. Resolves the same way the
-        DeepAgent runtime's ``/skills`` mount does: a native skill
-        (``data/skills/``) at ``/skills/<name>`` or an installed
-        marketplace-plugin skill at ``/skills/<marketplace>__<plugin>/<name>``.
-        """
+        """Publish one skill's ``SKILL.md`` body (front matter + prompt)."""
         request_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         store = _require_store()
         skill = await asyncio.to_thread(store.resolve_skill, path)
         if skill is None:
             raise HTTPException(status_code=404, detail=f"skill {path!r} not found")
         broadcast_ui_event(
-            events_contracts.UiEvent.AGENT_SKILL_CONTENT_UPDATED, skill, request_id=request_id
+            events_contracts.UiEvent.AGENT_SKILL_CONTENT_UPDATED,
+            skill,
+            request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.AGENT_SKILL_CONTENT_UPDATED]
@@ -538,16 +543,12 @@ def create_agent_profile_router(
         payload: AgentSkillUpdateRequest,
         request: Request,
         path: str,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
-        """Update one skill's ``SKILL.md`` text.
-
-        Both native (rewritten on disk) and marketplace-installed (rewritten
-        in the document store) skills are editable; only renaming a skill
-        (changing its front-matter ``name``) is refused, since the mount
-        path is referenced by agent manifests' ``skills:`` lists.
-        """
+        """Update one skill's ``SKILL.md`` text."""
         request_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         store = _require_store()
         try:
             skill = await asyncio.to_thread(store.update_skill, path, payload.content)
@@ -556,7 +557,10 @@ def create_agent_profile_router(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         broadcast_ui_event(
-            events_contracts.UiEvent.AGENT_SKILL_CONTENT_UPDATED, skill, request_id=request_id
+            events_contracts.UiEvent.AGENT_SKILL_CONTENT_UPDATED,
+            skill,
+            request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.AGENT_SKILL_CONTENT_UPDATED]
@@ -570,10 +574,12 @@ def create_agent_profile_router(
     async def get_agent_profile(
         agent_id: str,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Acknowledge agent-detail requests and publish the detail on the UI stream."""
         request_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         store = _require_store()
         agent = await asyncio.to_thread(_resolve_profile, store, agent_id)
         if agent is None:
@@ -583,6 +589,7 @@ def create_agent_profile_router(
             events_contracts.UiEvent.AGENT_SELECTED,
             {"agent": profile.model_dump(by_alias=True)},
             request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.AGENT_SELECTED]
@@ -597,10 +604,12 @@ def create_agent_profile_router(
         agent_id: str,
         body: AgentGraphUpdateRequest,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
-        """Validate and persist an edited agent graph, then broadcast the update."""
+        """Validate and persist an edited agent graph, then publish it to the caller."""
         request_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         store = _require_store()
         if agent_id.startswith("a2a-") or agent_id.startswith("acp-"):
             raise HTTPException(status_code=409, detail="A2A and ACP agents are read-only")
@@ -622,7 +631,6 @@ def create_agent_profile_router(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-
         policy_document = await asyncio.to_thread(
             get_document_store().get_document,
             PROGENA_STATE_PREFIX,
@@ -633,7 +641,6 @@ def create_agent_profile_router(
             raise HTTPException(
                 status_code=422, detail=f"Unknown execution policy '{body.policy_id}'"
             )
-
         updated = store.update_graph(
             agent_id,
             {
@@ -650,12 +657,12 @@ def create_agent_profile_router(
         )
         if updated is None:
             raise HTTPException(status_code=404, detail="Agent not found")
-
         graph = AgentGraphModel(**updated)
         broadcast_ui_event(
             events_contracts.UiEvent.AGENT_GRAPH_UPDATED,
             {"agent_id": agent_id, "graph": graph.model_dump(by_alias=True)},
             request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.AGENT_GRAPH_UPDATED]
@@ -715,21 +722,12 @@ def create_agent_profile_router(
         agent_id: str,
         request: Request,
         body: RunRoutineRequest = RunRoutineRequest(),
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
-        """Enqueue a real, deterministic execution of a routine graph.
-
-        Writes a background-task entry (``metadata.kind = "routine_run"``)
-        onto the same Postgres-backed queue the heartbeat runtime already
-        drains (``src.progena.orchestration.background`` -- both processes
-        share the LangGraph ``store`` table via the same
-        ``("progena", "state")`` namespace / ``"progena.state"``
-        prefix). The heartbeat graph recognizes that marker and routes
-        straight to ``routine_run_node``, which calls the routine's already
-        -compiled subagent runnable directly -- no LLM turn decides whether
-        to run it, unlike the old client-side mock this replaces.
-        """
+        """Enqueue a real, deterministic execution of a routine graph."""
         request_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         doc_store = get_document_store()
         async with run_admission_lock:
             lifecycle = await _admit_routine_run(agent_id, body, request_id, doc_store)
@@ -740,6 +738,7 @@ def create_agent_profile_router(
                 events_contracts.UiEvent.AGENT_ROUTINE_RUN_ENQUEUED,
                 lifecycle,
                 request_id=request_id,
+                client_id=client_id,
             )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.AGENT_ROUTINE_RUN_ENQUEUED]
@@ -883,10 +882,12 @@ def create_agent_profile_router(
         agent_id: str,
         body: ContinueInterruptedRoutineRequest,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Settle an orphaned attempt then enqueue its native checkpoint resume."""
         operation_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         session_id = _routine_session_from_thread(agent_id, body.thread_id)
         if session_id is None:
             raise HTTPException(status_code=400, detail="thread_id does not belong to this routine")
@@ -920,6 +921,7 @@ def create_agent_profile_router(
                 events_contracts.UiEvent.AGENT_ROUTINE_RUN_ENQUEUED,
                 enqueued,
                 request_id=operation_id,
+                client_id=client_id,
             )
         return http_contracts.acknowledgement_response(
             operation_id, [events_contracts.UiEvent.AGENT_ROUTINE_RUN_ENQUEUED]
@@ -934,10 +936,12 @@ def create_agent_profile_router(
         agent_id: str,
         body: RoutineRunControlRequest,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Forward an exact routine attempt control request without inventing completion."""
         operation_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         _require_runtime()
         runtime_client = lifecycle_state.client
         controller = getattr(runtime_client, "control_routine_run", None)
@@ -979,6 +983,7 @@ def create_agent_profile_router(
             events_contracts.UiEvent.AGENT_ROUTINE_CONTROL_UPDATED,
             {"run": lifecycle},
             request_id=operation_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             operation_id, [events_contracts.UiEvent.AGENT_ROUTINE_CONTROL_UPDATED]
@@ -993,6 +998,7 @@ def create_agent_profile_router(
         agent_id: str,
         body: RoutineApprovalRequest,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         from src.backend.workflows.events import read_run_state, routine_events
@@ -1003,6 +1009,7 @@ def create_agent_profile_router(
         if session_id is None:
             raise HTTPException(status_code=400, detail="thread_id does not belong to this routine")
         request_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         doc_store = get_document_store()
         if _is_cancelled_routine_session(
             _routine_control_payload(doc_store, agent_id, session_id), agent_id, session_id
@@ -1064,6 +1071,7 @@ def create_agent_profile_router(
                 events_contracts.UiEvent.AGENT_ROUTINE_RUN_ENQUEUED,
                 lifecycle,
                 request_id=request_id,
+                client_id=client_id,
             )
         routine_events.schedule(agent_id)
         return http_contracts.acknowledgement_response(
@@ -1079,6 +1087,7 @@ def create_agent_profile_router(
         agent_id: str,
         thread_id: str,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Read a routine run's live per-node timing/token/output state.
@@ -1093,6 +1102,7 @@ def create_agent_profile_router(
         as of that checkpoint.
         """
         request_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         if not thread_id.startswith(f"routine:{agent_id}:"):
             raise HTTPException(status_code=400, detail="thread_id does not belong to this routine")
 
@@ -1104,6 +1114,7 @@ def create_agent_profile_router(
             events_contracts.UiEvent.AGENT_ROUTINE_RUN_STATE_LOADED,
             payload,
             request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.AGENT_ROUTINE_RUN_STATE_LOADED]
@@ -1119,6 +1130,7 @@ def create_agent_profile_router(
         request: Request,
         before: str | None = Query(default=None),
         limit: int = Query(default=50, ge=1, le=200),
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Publish one page of recent execution runs for one routine.
@@ -1135,6 +1147,7 @@ def create_agent_profile_router(
         response tells the caller whether another page exists.
         """
         request_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         doc_store = get_document_store()
         runs, has_more = await asyncio.to_thread(
             doc_store.list_routine_runs, agent_id, limit=limit, before=before
@@ -1175,7 +1188,10 @@ def create_agent_profile_router(
             ],
         }
         broadcast_ui_event(
-            events_contracts.UiEvent.AGENT_ROUTINE_RUNS_LOADED, payload, request_id=request_id
+            events_contracts.UiEvent.AGENT_ROUTINE_RUNS_LOADED,
+            payload,
+            request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.AGENT_ROUTINE_RUNS_LOADED]
@@ -1189,6 +1205,7 @@ def create_agent_profile_router(
     async def list_routine_revisions(
         agent_id: str,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Publish every captured revision of one routine's graph document.
@@ -1198,6 +1215,7 @@ def create_agent_profile_router(
         newest first.
         """
         request_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         revisions = await asyncio.to_thread(get_document_store().list_routine_revisions, agent_id)
         payload = {
             "agent_id": agent_id,
@@ -1207,7 +1225,10 @@ def create_agent_profile_router(
             ],
         }
         broadcast_ui_event(
-            events_contracts.UiEvent.AGENT_ROUTINE_REVISIONS_LOADED, payload, request_id=request_id
+            events_contracts.UiEvent.AGENT_ROUTINE_REVISIONS_LOADED,
+            payload,
+            request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.AGENT_ROUTINE_REVISIONS_LOADED]
@@ -1222,10 +1243,12 @@ def create_agent_profile_router(
         agent_id: str,
         revision_id: str,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Publish one revision's full graph document, for the Revisions panel to render."""
         request_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         graph = await asyncio.to_thread(
             get_document_store().get_routine_revision, agent_id, revision_id
         )
@@ -1235,6 +1258,7 @@ def create_agent_profile_router(
             events_contracts.UiEvent.AGENT_ROUTINE_REVISION_LOADED,
             {"agent_id": agent_id, "revision_id": revision_id, "graph": graph},
             request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.AGENT_ROUTINE_REVISION_LOADED]
@@ -1248,6 +1272,7 @@ def create_agent_profile_router(
     async def delete_agent_profile(
         agent_id: str,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Delete a routine or an author-created ("source: user") object agent.
@@ -1258,6 +1283,7 @@ def create_agent_profile_router(
         external registries and have no local catalog row to delete.
         """
         request_id = _request_correlation_id(request, x_request_id)
+        _require_stream(client_id)
         store = _require_store()
         if agent_id.startswith("object-"):
             try:
@@ -1272,13 +1298,17 @@ def create_agent_profile_router(
                 raise HTTPException(status_code=404, detail="Agent not found")
             await asyncio.to_thread(store.delete_routine_agent, agent_id)
         broadcast_ui_event(
-            events_contracts.UiEvent.AGENT_DELETED, {"agent_id": agent_id}, request_id=request_id
+            events_contracts.UiEvent.AGENT_DELETED,
+            {"agent_id": agent_id},
+            request_id=request_id,
+            client_id=client_id,
         )
         response = await asyncio.to_thread(build_agent_profiles, store)
         broadcast_ui_event(
             events_contracts.UiEvent.AGENTS_SNAPSHOT,
             response.model_dump(by_alias=True),
             request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id,

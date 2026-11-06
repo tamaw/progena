@@ -1,7 +1,13 @@
 import { UI_EVENT } from '../../../realtime/eventVocabulary';
 import { createAcknowledgedThunk, requestAcknowledged } from '../../../store/async';
 import { failureMessage, isCancellation } from '../../../lib/failures';
+import { withQuery } from '../../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realtimeClient';
 
+async function requestForClient(url, options) {
+  await waitForRealtimeClient();
+  return requestAcknowledged(withQuery(url, { client_id: realtimeClientId }), options);
+}
 export const initialState = {
   providers: {
     items: [],
@@ -20,19 +26,19 @@ export const initialState = {
 
 export const fetchProviders = createAcknowledgedThunk(
   'uiData/fetchProviders',
-  ({ providersUrl }, { requestId }) => requestAcknowledged(providersUrl, { requestId }),
+  ({ providersUrl }, { requestId }) => requestForClient(providersUrl, { requestId }),
 );
 
 export const createProvider = createAcknowledgedThunk(
   'uiData/createProvider',
-  ({ providersUrl, provider }, { requestId }) => requestAcknowledged(providersUrl, {
+  ({ providersUrl, provider }, { requestId }) => requestForClient(providersUrl, {
     method: 'POST', body: provider, requestId,
   }),
 );
 
 export const patchProvider = createAcknowledgedThunk(
   'uiData/patchProvider',
-  ({ providersUrl, providerId, patch }, { requestId }) => requestAcknowledged(
+  ({ providersUrl, providerId, patch }, { requestId }) => requestForClient(
     `${providersUrl}/${encodeURIComponent(providerId)}`,
     { method: 'PATCH', body: patch, requestId },
   ),
@@ -40,7 +46,7 @@ export const patchProvider = createAcknowledgedThunk(
 
 export const deleteProvider = createAcknowledgedThunk(
   'uiData/deleteProvider',
-  ({ providersUrl, providerId }, { requestId }) => requestAcknowledged(
+  ({ providersUrl, providerId }, { requestId }) => requestForClient(
     `${providersUrl}/${encodeURIComponent(providerId)}`,
     { method: 'DELETE', requestId },
   ),
@@ -48,7 +54,7 @@ export const deleteProvider = createAcknowledgedThunk(
 
 export const testProviderConnection = createAcknowledgedThunk(
   'uiData/testProviderConnection',
-  ({ providersUrl, providerId }, { requestId }) => requestAcknowledged(
+  ({ providersUrl, providerId }, { requestId }) => requestForClient(
     `${providersUrl}/${encodeURIComponent(providerId)}/test`,
     { method: 'POST', requestId },
   ),
@@ -56,7 +62,7 @@ export const testProviderConnection = createAcknowledgedThunk(
 
 export const disconnectChatgptProvider = createAcknowledgedThunk(
   'uiData/disconnectChatgptProvider',
-  ({ providersUrl, providerId }, { requestId }) => requestAcknowledged(
+  ({ providersUrl, providerId }, { requestId }) => requestForClient(
     `${providersUrl}/${encodeURIComponent(providerId)}/disconnect`,
     { method: 'POST', requestId },
   ),

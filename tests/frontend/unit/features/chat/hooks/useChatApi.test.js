@@ -27,6 +27,10 @@ vi.mock('@frontend/context/ConfigContext', () => ({
     getApiUrl: mocks.getApiUrl,
   }),
 }));
+vi.mock('@frontend/realtime/realtimeClient', () => ({
+  realtimeClientId: 'tab-1',
+  waitForRealtimeClient: () => Promise.resolve(),
+}));
 
 import { useChatApi } from '@frontend/features/chat/hooks/useChatApi';
 
@@ -195,8 +199,9 @@ describe('useChatApi dedicated response transport', () => {
     await flushMicrotasks();
 
     void hook.cancelStream();
+    await flushMicrotasks();
     expect(fetchMock).toHaveBeenCalledWith(
-      `${RESPONSES_URL}/${primaryRequestId}/cancel`,
+      `${RESPONSES_URL}/${primaryRequestId}/cancel?client_id=tab-1`,
       expect.objectContaining({ method: 'PUT' }),
     );
   });
@@ -519,7 +524,7 @@ describe('useChatApi dedicated response transport', () => {
     await flushMicrotasks();
 
     expect(fetchMock).toHaveBeenLastCalledWith(
-      `${RESPONSES_URL}/${REQUEST_ID}/cancel`,
+      `${RESPONSES_URL}/${REQUEST_ID}/cancel?client_id=tab-1`,
       expect.objectContaining({ method: 'PUT' }),
     );
 
@@ -553,11 +558,11 @@ describe('useChatApi dedicated response transport', () => {
     await flushMicrotasks();
 
     expect(MockEventSource.instances).toHaveLength(1);
-    globalThis.crypto.randomUUID.mockReturnValueOnce(CANCEL_REQUEST_ID);
     const cancellation = hook.cancelStream();
+    await flushMicrotasks();
 
     expect(fetchMock).toHaveBeenLastCalledWith(
-      `${RESPONSES_URL}/${REQUEST_ID}/cancel`,
+      `${RESPONSES_URL}/${REQUEST_ID}/cancel?client_id=tab-1`,
       expect.objectContaining({ method: 'PUT' }),
     );
     publishLifecycle('chat.response.cancelled');

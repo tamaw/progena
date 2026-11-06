@@ -358,7 +358,7 @@ export function normalizeBackendChatMessage(message, index) {
   return normalized;
 }
 
-function buildBackendSessionItem(
+export function buildBackendSessionItem(
   chat,
   selectedBackendChatId,
   unreadChatIds,
@@ -504,6 +504,10 @@ export function buildChatSessionItems({
 export function visibleGroupsForFilter({ sessionItems, sidebarFilter, groupSessionItems }) {
   if (sidebarFilter === 'unread') {
     return [{ key: 'unread', label: 'Unread', items: sessionItems.filter((item) => item.unread && !item.archived) }]
+      .filter((group) => group.items.length > 0);
+  }
+  if (sidebarFilter === 'error') {
+    return [{ key: 'error', label: 'Error', items: sessionItems.filter((item) => item.erroredInBackground && !item.archived) }]
       .filter((group) => group.items.length > 0);
   }
   if (sidebarFilter === 'archived') {

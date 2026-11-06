@@ -2442,6 +2442,29 @@ body,
   border-bottom: 1px solid var(--color-border);
 }
 
+.pane-list-rows--virtual {
+  position: relative;
+}
+
+.pane-list-row--virtual {
+  position: absolute;
+  right: 0;
+  left: 0;
+  overflow: hidden;
+}
+
+.pane-list-row__placeholder {
+  height: 100%;
+  margin: 6px 10px;
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--color-bg-hover) 72%, transparent);
+}
+
+.pane-list-row--virtual .sess-group__head {
+  box-sizing: border-box;
+  height: var(--chat-sidebar-header-height, 27px);
+}
+
 /* Create/refresh action relocated from the removed pane heading into the
    toolbar/search row — keep it intact at the right of the row. */
 .sess-list__tools-action {

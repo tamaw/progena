@@ -40,18 +40,21 @@ def document_store():
 class _StreamCapture:
     """Subscribe to the UI event stream for the duration of a request."""
 
-    def __init__(self):
+    def __init__(self, client_id: str = "tab-1"):
         from src.backend.events import stream as events_stream
 
         self.events_stream = events_stream
+        self.client_id = client_id
         self.queue = asyncio.Queue()
 
     def __enter__(self):
         self.events_stream._ui_stream_subscribers[self.queue] = None
+        self.events_stream._ui_stream_clients[self.queue] = self.client_id
         return self
 
     def __exit__(self, *exc_info):
         self.events_stream._ui_stream_subscribers.pop(self.queue, None)
+        self.events_stream._ui_stream_clients.pop(self.queue, None)
         return False
 
     def event_types(self):
@@ -78,7 +81,7 @@ class TestPluginRoutes:
             },
         )
         with _StreamCapture() as capture:
-            response = client.get("/api/ui/plugins")
+            response = client.get("/api/ui/plugins?client_id=tab-1")
 
         assert_acknowledged(response, ["plugins.snapshot"])
         envelopes = capture.event_types()
@@ -87,7 +90,7 @@ class TestPluginRoutes:
 
     def test_get_empty_defaults(self, client, document_store):
         with _StreamCapture() as capture:
-            response = client.get("/api/ui/plugins")
+            response = client.get("/api/ui/plugins?client_id=tab-1")
 
         assert_acknowledged(response, ["plugins.snapshot"])
         envelopes = capture.event_types()
@@ -134,7 +137,7 @@ class TestPluginRoutes:
 
         with _StreamCapture() as capture:
             response = client.post(
-                "/api/ui/plugins",
+                "/api/ui/plugins?client_id=tab-1",
                 json={"marketplace": "acme", "plugin": "formatter"},
             )
 
@@ -315,7 +318,7 @@ class TestPluginRoutes:
         )
 
         with _StreamCapture() as capture:
-            response = client.delete("/api/ui/plugins/acme/formatter")
+            response = client.delete("/api/ui/plugins/acme/formatter?client_id=tab-1")
 
         assert_acknowledged(response, ["plugins.snapshot"])
         stored = document_store.get_document(PROGENA_STATE_PREFIX, "plugins")

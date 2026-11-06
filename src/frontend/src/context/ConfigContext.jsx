@@ -11,6 +11,7 @@ const defaultConfig = {
     endpoints: {
       responses: '/api/ui/responses',
       stream: '/api/ui/stream',
+      status: '/api/ui/status',
       chats: '/api/ui/chats',
       inbox: '/api/ui/inbox',
       policies: '/api/ui/policies',
