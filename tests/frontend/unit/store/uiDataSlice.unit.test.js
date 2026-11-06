@@ -1060,7 +1060,6 @@ describe('inbox events', () => {
     expect(s.inbox.total).toBe(120);
     expect(s.inbox.rowsByIndex).toEqual({ 0: 'visible' });
     expect(s.inbox.byId.outside.body).toBeUndefined();
-    expect(s.inbox.listRefreshVersion).toBe(1);
   });
 
   it('clears every in-flight page when a positional deletion changes the range version', () => {
@@ -1092,7 +1091,7 @@ describe('inbox events', () => {
     expect(s.inbox.rowsByIndex[0]).toBeUndefined();
   });
 
-  it('refreshes the positional list when a recency row changes its creation instant', () => {
+  it('invalidates the positional list when a recency row changes its creation instant', () => {
     const view = { q: '', filter: 'all', sort: 'recent' };
     let s = reducer(undefined, fetchInboxList.pending('REQ1', {
       inboxUrl: '/api/ui/inbox', view, offset: 0, limit: 50,
@@ -1108,7 +1107,6 @@ describe('inbox events', () => {
     }));
 
     expect(s.inbox.loadedPages).toEqual({});
-    expect(s.inbox.listRefreshVersion).toBe(1);
   });
 
   describe('loaded rows', () => {

@@ -86,10 +86,10 @@ def _app(store: InMemoryDocumentStore, repository: FakeProviderRepository):
     return app, events
 
 
-def test_provider_input_error_is_422_without_event():
+def test_provider_input_error_is_422_without_event(ui_stream_client):
     app, events = _app(InMemoryDocumentStore(), FakeProviderRepository())
     with TestClient(app) as client:
-        response = client.post("/providers", json={"name": "bad"})
+        response = client.post(f"/providers?client_id={ui_stream_client}", json={"name": "bad"})
     assert response.status_code == 422
     assert events == []
 
@@ -233,7 +233,9 @@ def test_chatgpt_oauth_failure_reports_a_test_event(monkeypatch, ui_stream_clien
     }
 
 
-def test_rejected_chatgpt_patch_does_not_change_default_model_or_revision(monkeypatch):
+def test_rejected_chatgpt_patch_does_not_change_default_model_or_revision(
+    monkeypatch, ui_stream_client
+):
     repository = FakeProviderRepository()
     repository.providers = [
         {
@@ -259,7 +261,7 @@ def test_rejected_chatgpt_patch_does_not_change_default_model_or_revision(monkey
     app, events = _app(InMemoryDocumentStore(), repository)
     with TestClient(app) as client:
         response = client.patch(
-            "/providers/chatgpt-1",
+            f"/providers/chatgpt-1?client_id={ui_stream_client}",
             json={"default_model": "gpt-6.2-spark", "is_default": "not-a-boolean"},
         )
 

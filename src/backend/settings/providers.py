@@ -75,7 +75,9 @@ async def broadcast_provider_snapshot(
     *,
     request_id: str,
     client_id: str,
+    fan_out: bool = False,
 ) -> None:
+    """Reply to the requester and optionally refresh other provider watchers."""
     payload = await _snapshot(repository)
     broadcast(
         events_contracts.UiEvent.PROVIDERS_SNAPSHOT,
@@ -83,6 +85,13 @@ async def broadcast_provider_snapshot(
         request_id=request_id,
         client_id=client_id,
     )
+    if fan_out:
+        broadcast(
+            events_contracts.UiEvent.PROVIDERS_SNAPSHOT,
+            payload,
+            topic="providers",
+            exclude_client_id=client_id,
+        )
 
 
 def _profile_references_provider(store: BackendDocumentStore, provider_id: str) -> bool:
@@ -183,7 +192,7 @@ def create_provider_router(
         try:
             await asyncio.to_thread(repository.create, body)
             await broadcast_provider_snapshot(
-                repository, broadcast, request_id=request_id, client_id=client_id
+                repository, broadcast, request_id=request_id, client_id=client_id, fan_out=True
             )
         except Exception as exc:
             raise _repository_error(exc) from exc
@@ -226,7 +235,7 @@ def create_provider_router(
             else:
                 await asyncio.to_thread(repository.update, provider_id, body)
             await broadcast_provider_snapshot(
-                repository, broadcast, request_id=request_id, client_id=client_id
+                repository, broadcast, request_id=request_id, client_id=client_id, fan_out=True
             )
         except Exception as exc:
             raise _repository_error(exc) from exc
@@ -252,7 +261,7 @@ def create_provider_router(
         try:
             await asyncio.to_thread(repository.delete, provider_id)
             await broadcast_provider_snapshot(
-                repository, broadcast, request_id=request_id, client_id=client_id
+                repository, broadcast, request_id=request_id, client_id=client_id, fan_out=True
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail="Provider not found") from exc
@@ -329,7 +338,7 @@ def create_provider_router(
         try:
             await asyncio.to_thread(repository.disconnect_chatgpt, provider_id)
             await broadcast_provider_snapshot(
-                repository, broadcast, request_id=request_id, client_id=client_id
+                repository, broadcast, request_id=request_id, client_id=client_id, fan_out=True
             )
         except Exception as exc:
             raise _repository_error(exc) from exc

@@ -34,7 +34,6 @@ export const initialState = {
     inFlightRequests: {},
     rangeVersion: 0,
     rowDelta: null,
-    listRefreshVersion: 0,
     loaded: false,
     loading: false,
     error: null,
@@ -86,11 +85,6 @@ function upsertCachedRow(inbox, row) {
   inbox.byId[messageId] = { ...(inbox.byId[messageId] || {}), ...slimInboxRow(row) };
   return messageId;
 }
-
-function refreshVisibleList(inbox) {
-  inbox.listRefreshVersion += 1;
-}
-
 function applyInboxRowDelta(inbox, row) {
   const messageId = messageIdFor(row);
   if (!messageId || inbox.tombstones[messageId]) return;
@@ -103,13 +97,11 @@ function applyInboxRowDelta(inbox, row) {
   // new count from a global row event whose position is unknown.
   if (index == null) {
     invalidatePagesFrom(inbox, 0);
-    refreshVisibleList(inbox);
     return;
   }
   if (!rowMatchesFilter(row, inbox.view)) {
     removeRowAt(inbox, index);
     inbox.total = Math.max(0, inbox.total - 1);
-    refreshVisibleList(inbox);
     return;
   }
 
@@ -121,7 +113,6 @@ function applyInboxRowDelta(inbox, row) {
     || (inbox.view.sort === 'recent' && previous?.created_at !== row.created_at)
   ) {
     invalidatePagesFrom(inbox, 0);
-    refreshVisibleList(inbox);
   }
 }
 
@@ -136,7 +127,6 @@ function applyInboxDelete(inbox, messageId) {
   }
   delete inbox.byId[messageId];
   inbox.tombstones[messageId] = true;
-  refreshVisibleList(inbox);
 }
 
 function inboxListUrl(inboxUrl, { view, offset, limit }) {

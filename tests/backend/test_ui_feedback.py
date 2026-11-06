@@ -37,19 +37,22 @@ class TestErrorFeedback:
         response = client.get("/api/ui/nonexistent")
         assert response.status_code == 404
 
-    def test_alerts_endpoint(self, client):
+    def test_alerts_endpoint(self, client, ui_stream_client):
         """Test /api/ui/alerts returns the finite UI acknowledgement contract."""
         request_id = "ui-feedback-alerts"
-        response = client.get("/api/ui/alerts", headers={"X-Operation-Id": request_id})
+        response = client.get(
+            f"/api/ui/alerts?client_id={ui_stream_client}",
+            headers={"X-Operation-Id": request_id},
+        )
         assert response.status_code == 202
         assert response.json() == {
             "request_id": request_id,
             "event_types": ["alerts.updated"],
         }
 
-    def test_dismiss_nonexistent_alert(self, client):
+    def test_dismiss_nonexistent_alert(self, client, ui_stream_client):
         """Test dismissing non-existent alert returns 404."""
-        response = client.post("/api/ui/alerts/nonexistent/dismiss")
+        response = client.post(f"/api/ui/alerts/nonexistent/dismiss?client_id={ui_stream_client}")
         assert response.status_code == 404
 
 

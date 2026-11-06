@@ -189,18 +189,70 @@ def test_route_events_also_light_the_nav_dot_in_every_tab_but_replies_do_not(tab
     assert reply["a"] == [] and reply["c"] == []
 
 
-def test_preferences_and_profiles_reads_reply_only_to_the_asking_tab(tabs):
+def test_preferences_profiles_and_alert_reads_reply_only_to_the_asking_tab(tabs):
     from fastapi.testclient import TestClient
 
     from src.backend.main import app
 
     client = TestClient(app)
-    for path in ("/api/ui/preferences", "/api/ui/model-profiles"):
+    for path in ("/api/ui/preferences", "/api/ui/model-profiles", "/api/ui/alerts"):
         response = client.get(f"{path}?client_id=b")
 
         assert response.status_code == 202
         assert _received(tabs) == {"a": 0, "b": 1, "c": 0}, path
         tabs["b"].get_nowait()
+
+
+def test_provider_mutation_replies_once_then_fans_out_to_other_watchers(tabs):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.backend.settings.providers import create_provider_router
+    from src.backend.storage.documents import InMemoryDocumentStore
+
+    class Repository:
+        def __init__(self):
+            self.providers = [{"id": "foundry-1", "kind": "foundry", "name": "Foundry"}]
+
+        def list_public(self):
+            return [dict(provider) for provider in self.providers]
+
+        def update(self, provider_id, patch):
+            provider = next(
+                provider for provider in self.providers if provider["id"] == provider_id
+            )
+            provider.update(patch)
+
+    repository = Repository()
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def correlate_request(request, call_next):
+        request.state.request_id = request.headers.get("X-Operation-Id", "provider-mutation")
+        return await call_next(request)
+
+    app.include_router(
+        create_provider_router(
+            lambda: repository,
+            InMemoryDocumentStore,
+            events_stream.broadcast_ui_event,
+        )
+    )
+    events_stream.subscribe_topic("b", "providers")
+
+    response = TestClient(app).patch(
+        "/providers/foundry-1?client_id=a",
+        json={"name": "Renamed"},
+        headers={"X-Operation-Id": "provider-mutation"},
+    )
+
+    assert response.status_code == 202
+    assert _received(tabs) == {"a": 1, "b": 1, "c": 0}
+    requester = tabs["a"].get_nowait()["envelope"]
+    watcher = tabs["b"].get_nowait()["envelope"]
+    assert requester.type == watcher.type == "providers.snapshot"
+    assert requester.payload["request_id"] == "provider-mutation"
+    assert "request_id" not in watcher.payload
 
 
 @pytest.fixture

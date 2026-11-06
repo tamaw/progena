@@ -10,12 +10,21 @@ from typing import Any
 import pytest
 from ack_helpers import assert_acknowledged
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient as FastApiTestClient
 
 import src.backend.settings.model_profiles as model_profile_routes
 from src.backend.settings.model_profiles import create_model_profile_router
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 from src.progena.settings.model_profiles import PRICING_FIELDS
+
+
+class TestClient(FastApiTestClient):
+    """Use a live canonical-stream client for finite-route behavior tests."""
+
+    def request(self, method: str, url: str, **kwargs: Any):
+        params = dict(kwargs.pop("params", {}) or {})
+        params.setdefault("client_id", "tab-1")
+        return super().request(method, url, params=params, **kwargs)
 
 
 class FakeProviderRepository:
@@ -51,6 +60,12 @@ def _make_app(
         )
     )
     return app, events
+
+
+@pytest.fixture(autouse=True)
+def _active_ui_stream(ui_stream):
+    """Make the finite-request client above eligible for route side effects."""
+    yield ui_stream
 
 
 class TestPublicLeakageGuard:
@@ -574,6 +589,21 @@ class TestPatchEdits:
         with TestClient(app) as client:
             response = client.patch("/model-profiles/general", json={"provider_id": "missing"})
         assert response.status_code == 422
+
+    def test_patch_requires_client_id_before_work(self):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            "profile",
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
+        )
+        app, events = _make_app(store)
+
+        with FastApiTestClient(app) as client:
+            response = client.patch("/model-profiles/general", json={"deployment": "new"})
+
+        assert response.status_code == 422
+        assert events == []
 
 
 class TestDeleteProfiles:

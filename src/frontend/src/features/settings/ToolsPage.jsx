@@ -41,6 +41,7 @@ import { formatShortLocalDateTime } from '../../lib/displayTime';
 import { reportFailure } from '../../lib/failures';
 import { selectRealtime } from '../../realtime/realtimeSlice';
 import useStreamTopic from '../../hooks/useStreamTopic';
+import useStreamResync from '../../hooks/useStreamResync';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { createUuid } from '../../lib/uuid';
 import { selectAgentName } from './state/preferences';
@@ -175,6 +176,7 @@ export default function ToolsPage() {
   const [configValidationState, setConfigValidationState] = useState(null);
 
   const configInputRef = useRef(null);
+  const selectedServerMarkerRef = useRef(null);
 
   const mcpUrl = getApiUrl('mcp');
   // The catalogue is hydrated only by `mcp.snapshot` on the canonical stream.
@@ -268,11 +270,27 @@ export default function ToolsPage() {
     void dispatch(fetchMcpServerDetail({ mcpUrl, id })).unwrap().catch(() => {});
   }, [dispatch, mcpUrl, realtime.connected, selectedServer?.id, serverDetailRequest.loading]);
 
+  // The stream is ready when this runs; this render's `realtime` may not be yet.
+  useStreamResync(() => {
+    const id = selectedServer?.id;
+    if (id) void dispatch(fetchMcpServerDetail({ mcpUrl, id })).unwrap().catch(() => {});
+  });
+
   useEffect(() => {
     if (!serverDetail && !serverDetailRequest.loading && !serverDetailRequest.error) {
       loadServerDetail();
     }
   }, [loadServerDetail, serverDetail, serverDetailRequest.error, serverDetailRequest.loading]);
+
+  // List snapshots deliberately omit tools and logs. A changed selected row
+  // must therefore refresh its cached rich detail.
+  useEffect(() => {
+    const marker = selectedServer?.updated_at ?? null;
+    if (marker && selectedServerMarkerRef.current && marker !== selectedServerMarkerRef.current) {
+      loadServerDetail();
+    }
+    selectedServerMarkerRef.current = marker;
+  }, [loadServerDetail, selectedServer?.updated_at]);
 
   useMissingEntityRoute({
     hydrated: mcpState.loaded,

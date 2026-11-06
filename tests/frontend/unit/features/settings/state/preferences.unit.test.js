@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { realtimeClientId, setRealtimeClientReady } from '@frontend/realtime/realtimeClient';
 import reducer from '@frontend/store/uiDataSlice';
 import { applyUiEvent } from '@frontend/store/uiEvents';
 import {
@@ -27,7 +28,11 @@ function preferencesSnapshot(agentName) {
   });
 }
 
-afterEach(() => vi.unstubAllGlobals());
+beforeEach(() => setRealtimeClientReady(true));
+afterEach(() => {
+  setRealtimeClientReady(false);
+  vi.unstubAllGlobals();
+});
 
 describe('agent name preferences', () => {
   it('normalizes a missing or blank agent_name to the default', () => {
@@ -60,6 +65,7 @@ describe('agent name preferences', () => {
       lastOpenChatId: null,
     })(vi.fn(), vi.fn(), undefined);
 
+    expect(fetchMock.mock.calls[0][0]).toContain(`client_id=${realtimeClientId}`);
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ agent_name: 'Atlas' });
   });
 });

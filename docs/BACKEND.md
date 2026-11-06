@@ -87,11 +87,11 @@ Every `ui.event` has exactly one audience, chosen by the emitter (`broadcast_ui_
 | Audience | Emitter argument | Replayed | Used for |
 |---|---|---|---|
 | One tab | `client_id=` | no | The reply to that tab's request (`*.snapshot`, `*.loaded`, `*.selected`, `*.tested`, log chunks, search results). Request routes take the tab's `client_id` and answer `409` without an active stream. |
-| Tabs watching a topic | `topic=` | no | Changes made elsewhere that a page must show live (`inbox`, `chats`, `chat:<id>`, `workflows`, `runs`, `tasks`, `schedules`, `agents`, `routines`, `instructions`, `knowledge`, `plugins`, `mcp`, `policies`, `channels`, `repositories`, `canvases`, `dashboard`). |
+| Tabs watching a topic | `topic=` | no | Changes made elsewhere that a page must show live (`inbox`, `chats`, `chat:<id>`, `workflows`, `runs`, `tasks`, `schedules`, `agents`, `routines`, `instructions`, `knowledge`, `plugins`, `mcp`, `policies`, `channels`, `providers`, `repositories`, `canvases`, `dashboard`). |
 | Every tab | neither | yes | App chrome only: `GLOBAL_UI_EVENTS` in `events/stream.py` (alerts, `connection.*`, `inbox.counts.updated`, `nav.activity`, `preferences.snapshot`, `profiles.snapshot`, and the chat lifecycle events that drive the nav chat indicator, which carry no message content). |
 
 `client_id=` and `topic=` are mutually exclusive. `tests/backend/test_event_audience.py` fails when
-an emitter without either names an event that is not in `GLOBAL_UI_EVENTS`.
+an emitter without either names an event that is not in `GLOBAL_UI_EVENTS`; `tests/backend/test_finite_route_contract.py` ensures every finite `202` route declares its required `client_id`.
 
 A tab joins a topic with `PUT /api/ui/stream/topics {client_id, topic, watching}` (topic matches
 `^[a-z][a-z0-9_.:-]{0,63}$`, at most 32 per tab) and receives a targeted `stream.topic.updated`
@@ -162,8 +162,13 @@ This is bounded best-effort replay, not durable catch-up:
   readiness and runs resync handlers. A newly held topic uses the same readiness gate, so its
   mount-time snapshot request cannot race its topic PUT. Holds are reference counted and released
   200 ms after the last holder leaves so a quick remount sends nothing; failed registration stays
-  unsatisfied and retries while held. Pages then re-request state they derived from missed events
-  with `useStreamResync` (the open Inbox message, the open Chat, and other loaded list pages).
+  unsatisfied and retries while held. List pages reload their snapshot when stream readiness
+  returns. Every open detail pane re-requests its targeted detail with `useStreamResync`: the
+  open Inbox message, the open Chat, and the selected agent or routine, workflow, MCP server,
+  repository, knowledge page (with its revisions), plugin skill and task activity. List snapshots
+  alone cannot repair a detail, because targeted replies are never replayed. Paged lists
+  (`usePositionalListRange`) have one reconnect path: page 0 is requested once and other loaded
+  pages are marked stale, so the visible ones reload as the pane asks for them.
   Mount-time loading stays in each page's own effect.
 - **Idle pause:** after `idleTimeoutMinutes` (30 by default) without input the shell stops the
   stream and shows "Updates paused"; input does not dismiss it. Pressing Resume opens a fresh
@@ -623,7 +628,10 @@ responses never are.
 | Schedules and event widgets | `GET/POST /api/ui/schedules`; `POST /api/ui/schedules/{schedule_id}/trigger`; `POST /api/ui/events` | Canonical `ui.event` envelopes: `schedules.snapshot`, `widgets.updated`. `POST /schedules` and `PATCH /widgets/schedule:{id}` accept `conversation_id` (the destination chat; `null`/absent on create is standalone, present on patch retargets). Unknown chats are 404; archived chats are 409, including re-enabling a schedule whose chat is archived. Archiving a chat pauses its schedules and deleting it deletes them. Chat history messages carry `scheduled: {schedule_id, run_id}` on the input a schedule injected, and `scheduled_response` events are scoped (`session_id`/`thread_id`) to the destination chat. |
 | Instructions | `GET /api/ui/instructions`; `GET/PUT /api/ui/instructions/content`; `GET /api/ui/instructions/revisions`; `GET /api/ui/instructions/revisions/{id}`; `POST /api/ui/instructions/revisions/{id}/restore` | `instructions.snapshot` (front matter summaries), `instruction.loaded`, `instruction.revisions.loaded`, `instruction.revision.loaded`. Only `progena/` instructions are editable (403 otherwise); invalid front matter or changed `variables` is a 400. |
 | Marketplaces and plugins | `GET/PUT /api/ui/marketplaces`; `GET /api/ui/marketplaces/{name}/plugins`; `GET/POST /api/ui/plugins`; `DELETE /api/ui/plugins/{marketplace}/{plugin}` | Canonical `ui.event` envelopes: `marketplaces.snapshot`, `plugins.snapshot`, request-scoped `plugin_catalog.snapshot`. Skills are no longer authored directly — they ship inside installed marketplace plugins. |
-| Alerts | `GET /api/ui/alerts`; `POST /api/ui/alerts/viewed`; `POST /api/ui/alerts/{alert_id}/dismiss`; `POST /api/ui/alerts/{alert_id}/respond` | Canonical `ui.event` envelopes: `alerts.updated` and `alert` for independently generated alerts |
+| Providers | `GET/POST /api/ui/providers`; `PATCH/DELETE /api/ui/providers/{id}`; `POST /api/ui/providers/{id}/disconnect` | Reads send a request-correlated `providers.snapshot` only to the active requester. Mutations also send that correlated reply, then send an uncorrelated `providers.snapshot` to `providers` topic watchers other than the requester. |
+| Preferences | `GET/PUT /api/ui/preferences` | Both routes require a nonempty active-stream `client_id` and return `409` before work when it is disconnected. GET sends a request-correlated `preferences.snapshot` only to the requester; PUT publishes the request-correlated global chrome snapshot. |
+| Model profiles | `GET /api/ui/model-profiles`; `PATCH/DELETE /api/ui/model-profiles/{name}` | All routes require a nonempty active-stream `client_id` and return `409` before work when it is disconnected. GET sends a request-correlated `profiles.snapshot` only to the requester; PATCH and DELETE publish their request-correlated global chrome snapshot. |
+| Alerts | `GET /api/ui/alerts`; `POST /api/ui/alerts/viewed`; `POST /api/ui/alerts/{alert_id}/dismiss`; `POST /api/ui/alerts/{alert_id}/respond` | Every route requires a nonempty active-stream `client_id` and returns `409` before work when it is disconnected. GET sends request-correlated `alerts.updated` only to the requester; mutations publish request-correlated global chrome `alerts.updated`, while independently generated alerts use `alert`. |
 | Logs | `GET /api/ui/logs?client_id=<stream client>` (requires that active canonical stream, else `409`; `limit` defaults to 500, `0` returns every match); `GET /api/ui/logs/sources`; `GET /api/ui/logs/export` | Canonical `ui.event` envelopes: `logs.page.loaded` (targeted to the requesting `client_id` only, never replayed), `logs.sources.loaded`, `logs.export.started`, `logs.export.chunk`, `logs.export.completed` |
 | Channels | `GET /api/ui/channels`; `PATCH /api/ui/channels/{channel_id}`; `POST /api/ui/channels/{channel_id}/test`; `POST /api/ui/channels/{channel_id}/reconnect` | Canonical `ui.event` envelopes: `channels.snapshot` (each `channel:<id>` document merged with live connection status, per-process message counts, the type's settings `fields` and credential descriptors; never secret values or ciphertext; also published unsolicited when a channel document or connection state changes), request-scoped `channel.tested` (`{channel_id, ok, error?}`). PATCH accepts only `enabled`, a partial `settings` object (unknown or invalid keys are `422`) and `credentials` (`{source:"environment", env_var}`, `{source:"database", value}` encrypted with `PROGENA_PROVIDER_ENCRYPTION_KEY`, or `null` to clear). Reconnect of a turned-off channel is `409`. |
 
@@ -715,10 +723,10 @@ A deleted path returns `404`; it is not a fallback for a stream failure.
 ## ChatGPT plan provider settings
 
 Provider settings retain the finite acknowledgement/canonical-event contract.
-`GET`/`POST /api/ui/providers` and `PATCH`/`DELETE /api/ui/providers/{id}`
-publish `providers.snapshot`. Its public payload includes `providers`, `go_models`,
-`chatgpt_models` (catalogues keyed by provider ID), and `chatgpt_model_errors`
-(safe per-registration errors). A catalogue failure does not hide other providers.
+`GET /api/ui/providers` replies with a request-correlated `providers.snapshot`
+only to the active requester. `POST /api/ui/providers` and
+`PATCH`/`DELETE /api/ui/providers/{id}` reply to the requester and fan the same
+snapshot out to other tabs watching the `providers` topic.
 
 `POST /api/ui/providers/{id}/test` publishes `providers.tested`; ChatGPT tests
 consume a supported Responses stream through `response.completed`.

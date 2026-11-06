@@ -233,6 +233,9 @@ function ConversationPage() {
   // Current selection, mirrored into a ref so a stream that finishes in the
   // background can tell whether the user is now viewing its origin chat.
   const selectedBackendChatIdRef = useRef(null);
+  // The page's current thread id; while no backend chat is selected it is the
+  // local draft, which has no session document until its first message.
+  const localDraftThreadIdRef = useRef(threadId);
   // Mirrors `backendChatSessions` so the bootstrap effect and openBackendChat
   // can read the current roster without depending on the array itself (it
   // gets a new reference on every session snapshot, which would re-run them).
@@ -252,7 +255,9 @@ function ConversationPage() {
   useEffect(() => {
     selectedBackendChatIdRef.current = selectedBackendChatId;
   }, [selectedBackendChatId]);
-
+  useEffect(() => {
+    localDraftThreadIdRef.current = threadId;
+  }, [threadId]);
   useEffect(() => {
     backendChatSessionsRef.current = backendChatSessions;
   }, [backendChatSessions]);
@@ -434,9 +439,19 @@ function ConversationPage() {
     if (pendingOpenThreadIdRef.current === requestedThreadId) {
       return;
     }
+    // An unsent draft has no session document: the page's own current draft,
+    // a draft the URL does not name, or one the server already answered 404.
     if (
       !backendChatSessionsRef.current.some((session) => session.thread_id === requestedThreadId)
-      && (requestedThreadId !== urlThreadId || missingThreadIdsRef.current.has(requestedThreadId))
+      && (
+        isReopeningCurrentLocalDraft({
+          selectedBackendChatId: selectedBackendChatIdRef.current,
+          currentThreadId: localDraftThreadIdRef.current,
+          requestedThreadId,
+        })
+        || requestedThreadId !== urlThreadId
+        || missingThreadIdsRef.current.has(requestedThreadId)
+      )
     ) {
       openLocalDraft(requestedThreadId);
       return;
@@ -1407,7 +1422,6 @@ function ConversationPage() {
         if (end <= localCount) return;
         requestSidebarRange(Math.max(0, start - localCount), end - localCount, force);
       },
-      refreshKey: streamReady,
       rowDelta: backendChatSessionsState.rowDelta
         ? {
           ...backendChatSessionsState.rowDelta,
@@ -1432,7 +1446,6 @@ function ConversationPage() {
     sidebarFilter,
     sidebarView,
     threadSession,
-    streamReady,
     unreadChatIds,
   ]);
 

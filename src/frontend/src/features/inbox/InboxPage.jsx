@@ -247,16 +247,13 @@ export default function InboxPage() {
       return messageId ? inboxState.byId[messageId] : undefined;
     },
     onRangeNeeded: requestListRange,
-    refreshKey: inboxState.listRefreshVersion || streamReady,
     rowDelta: inboxState.rowDelta,
   }), [
     inboxState.byId,
-    inboxState.listRefreshVersion,
     inboxState.rowDelta,
     inboxState.rowsByIndex,
     inboxState.total,
     requestListRange,
-    streamReady,
   ]);
 
   return (

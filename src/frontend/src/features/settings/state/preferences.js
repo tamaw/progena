@@ -86,22 +86,27 @@ export const savePreferences = createAcknowledgedThunk(
       lastOpenChatId,
     },
     { requestId },
-  ) =>
-    requestAcknowledged(preferencesUrl, {
-      method: 'PUT',
-      body: {
-        display_name: displayName,
-        agent_name: agentName,
-        timezone,
-        theme,
-        nav_collapsed: navCollapsed,
-        pinned_panel: pinnedPanel,
-        notification_sounds: notificationSounds,
-        quick_chat_thread_id: quickChatThreadId,
-        last_open_chat_thread_id: lastOpenChatId,
+  ) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(
+      withQuery(preferencesUrl, { client_id: realtimeClientId }),
+      {
+        method: 'PUT',
+        body: {
+          display_name: displayName,
+          agent_name: agentName,
+          timezone,
+          theme,
+          nav_collapsed: navCollapsed,
+          pinned_panel: pinnedPanel,
+          notification_sounds: notificationSounds,
+          quick_chat_thread_id: quickChatThreadId,
+          last_open_chat_thread_id: lastOpenChatId,
+        },
+        requestId,
       },
-      requestId,
-    }),
+    );
+  },
 );
 
 export const eventHandlers = {

@@ -333,9 +333,6 @@ export function PaneListRows({
   const onRangeNeeded = virtual?.onRangeNeeded;
   const rowDelta = virtual?.rowDelta;
   const virtualRowHeight = virtual?.rowHeight;
-  const refreshKey = virtual?.refreshKey;
-
-
   const syncViewport = useCallback((element) => {
     if (!element) return;
     setViewport({ top: element.scrollTop, height: element.clientHeight });
@@ -358,23 +355,6 @@ export function PaneListRows({
     }, 25);
     return () => window.clearTimeout(rangeTimerRef.current);
   }, [onRangeNeeded, virtualRange.end, virtualRange.start]);
-  // A refresh (e.g. after a reconnect) re-requests the visible rows once per
-  // key change. Reading the callback and range through a ref keeps a new
-  // callback identity, which follows every load-state change, from forcing
-  // another refresh and looping.
-  const latestRangeRef = useRef({ onRangeNeeded, range: virtualRange });
-  const previousRefreshRef = useRef(refreshKey);
-  useEffect(() => {
-    latestRangeRef.current = { onRangeNeeded, range: virtualRange };
-  }, [onRangeNeeded, virtualRange]);
-  useEffect(() => {
-    const previous = previousRefreshRef.current;
-    previousRefreshRef.current = refreshKey;
-    if (previous === undefined || previous === refreshKey) return;
-    const { onRangeNeeded: request, range } = latestRangeRef.current;
-    if (!refreshKey || !request || range.end <= range.start) return;
-    request(range.start, range.end, true);
-  }, [refreshKey]);
 
   useEffect(() => {
     const element = scrollRef.current;

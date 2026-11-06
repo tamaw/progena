@@ -30,6 +30,7 @@ import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { useConfig } from '../../context/ConfigContext';
 import { selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
 import useStreamTopic from '../../hooks/useStreamTopic';
+import useStreamResync from '../../hooks/useStreamResync';
 import { deleteRepo, fetchRepoDetail, fetchRepoUpstream, fetchRepos, selectRepoDetail, selectRepos, selectReposState, selectWorkspaceSignal } from './state';
 import { repoStatus } from './repositoriesPageModel';
 
@@ -99,10 +100,18 @@ export default function RepositoriesPage() {
   const fetchAction = useUiAction(`repository-fetch:${selectedRepoId || ''}`);
   const deleteAction = useConfirmAction(`repository-delete:${selectedRepoId || ''}`);
 
+  const loadRepoDetail = useCallback((repoId) => {
+    if (!repoId) return;
+    dispatch(fetchRepoDetail({ reposUrl, repoId }));
+  }, [dispatch, reposUrl]);
+
   useEffect(() => {
-    if (!selectedRepoId) return;
-    dispatch(fetchRepoDetail({ reposUrl, repoId: selectedRepoId }));
-  }, [dispatch, reposUrl, selectedRepoId]);
+    loadRepoDetail(selectedRepoId);
+  }, [loadRepoDetail, selectedRepoId]);
+
+  useStreamResync(() => {
+    loadRepoDetail(selectedRepoId);
+  });
 
   const openCreateChat = useCallback(() => {
     dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.REPOSITORY_CREATE });

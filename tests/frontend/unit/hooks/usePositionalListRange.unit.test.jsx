@@ -3,7 +3,6 @@ import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import usePositionalListRange from '@frontend/hooks/usePositionalListRange';
-import { notifyStreamReady } from '@frontend/realtime/streamLifecycle';
 
 const VIEW = { q: '', sort: 'recent' };
 const sameView = (left, right) => left.q === right.q && left.sort === right.sort;
@@ -106,7 +105,7 @@ describe('usePositionalListRange', () => {
     expect(fetchPage.mock.calls[0][0]).toMatchObject({ offset: 0, view: { q: 'invoice' } });
   });
 
-  it('after a reconnect reloads page zero once and every other loaded page with the loaded view', async () => {
+  it('after a reconnect requests page zero once and reloads a stale visible page once', async () => {
     const list = freshList({ loadedPages: { 0: true, 10: true, 30: true } });
     await render({ list, streamReady: true });
     expect(offsets()).toEqual([0]);
@@ -114,9 +113,9 @@ describe('usePositionalListRange', () => {
     await render({ list, streamReady: false });
     fetchPage.mockClear();
     await render({ list, streamReady: true });
-    act(() => notifyStreamReady({ dispatch: vi.fn(), streamUrl: '/s' }));
+    act(() => api(10, 20));
 
-    expect(offsets().sort((a, b) => a - b)).toEqual([0, 10, 30]);
+    expect(offsets()).toEqual([0, 10]);
     expect(fetchPage.mock.calls.every(([request]) => request.view === VIEW)).toBe(true);
   });
 });

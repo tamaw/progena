@@ -1,6 +1,7 @@
 import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { usePaneCollapse } from '../../hooks/usePaneCollapse';
 import useStreamTopic from '../../hooks/useStreamTopic';
+import useStreamResync from '../../hooks/useStreamResync';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -216,6 +217,10 @@ export default function TasksPage({ context = null }) {
   useEffect(() => {
     requestTaskActivity(taskScopeKey);
   }, [requestTaskActivity, taskScopeKey]);
+
+  useStreamResync(() => {
+    requestTaskActivity(taskScopeKey);
+  });
 
   const commitTitle = useCallback((nextTitle, { ticket, trackSave, failSave }) => {
     const target = selectedCard;

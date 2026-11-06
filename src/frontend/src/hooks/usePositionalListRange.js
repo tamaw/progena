@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useRef } from 'react';
-import useStreamResync from './useStreamResync';
-
 const SEARCH_DEBOUNCE_MS = 250;
 
 function hasInFlightPage(inFlightRequests, rangeVersion, offset) {
@@ -17,9 +15,8 @@ function hasInFlightPage(inFlightRequests, rangeVersion, offset) {
  *   every page overlapping [start, end) that is neither loaded nor in flight.
  * - Page zero is requested whenever the stream becomes ready (a mount or a
  *   reconnect), even if the store already holds it, because row changes made
- *   while this page was not watching were never delivered. After a reconnect the
- *   other loaded pages are reloaded too (`useStreamResync`), so no stale window
- *   is left behind.
+ *   while this page was not watching were never delivered. Other retained pages
+ *   become stale; the pane's ordinary visible-range request reloads them.
  * - A changed `view` (search text, filter, sort) requests page zero after a
  *   short debounce.
  *
@@ -91,20 +88,6 @@ export default function usePositionalListRange({
     streamReady,
     view,
   ]);
-
-  // The pages to reload come from the latest list without re-running on every change.
-  const loadedRef = useRef({ view: listView, loadedPages });
-  useEffect(() => {
-    loadedRef.current = { view: listView, loadedPages };
-  }, [listView, loadedPages]);
-  // Pages other than zero went stale while the stream was down. Page zero is
-  // requested by the stream-ready effect above.
-  useStreamResync(() => {
-    const { view: loadedView, loadedPages: pages } = loadedRef.current;
-    for (const offset of Object.keys(pages).map(Number)) {
-      if (offset !== 0) fetchPage({ view: loadedView, offset, limit: pageSize });
-    }
-  });
 
   return requestRange;
 }

@@ -217,8 +217,12 @@ def create_model_profile_router(
         response_model=http_contracts.UiRequestAcknowledgement,
     )
     async def patch_model_profile(
-        name: str, body: dict[str, Any], request: Request
+        name: str,
+        body: dict[str, Any],
+        request: Request,
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
 
         allowed_patch_keys = {
@@ -393,8 +397,11 @@ def create_model_profile_router(
         response_model=http_contracts.UiRequestAcknowledgement,
     )
     async def delete_model_profile(
-        name: str, request: Request
+        name: str,
+        request: Request,
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository: ProviderRepository | None = None
         if get_provider_repository is not None:

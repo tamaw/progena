@@ -1,6 +1,6 @@
 import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { usePaneCollapse } from '../../hooks/usePaneCollapse';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { selectRealtime } from '../../realtime/realtimeSlice';
@@ -9,6 +9,7 @@ import MarkdownContent from '../../components/MarkdownContent';
 import InlineFailure from '../../components/InlineFailure';
 import useUiAction from '../../hooks/useUiAction';
 import useStreamTopic from '../../hooks/useStreamTopic';
+import useStreamResync from '../../hooks/useStreamResync';
 import { formatCompactRelativeAge } from '../../lib/displayTime';
 import {
   PLUGIN_FILTERS,
@@ -102,6 +103,27 @@ export default function PluginsPage() {
   const skillPreviewRequest = useSelector((state) => (
     selectPluginSkillContentRequest(state, selectedMarketplace, selectedPlugin?.name, previewSkill)
   ));
+  const selectedPluginMarkerRef = useRef(null);
+  const loadSkillPreview = useCallback(() => {
+    if (!realtime.connected || !previewSkill || !selectedPlugin || !selectedMarketplace) return;
+    dispatch(fetchPluginSkillContent({
+      pluginsUrl,
+      marketplace: selectedMarketplace,
+      plugin: selectedPlugin.name,
+      skill: previewSkill,
+    }));
+  }, [dispatch, pluginsUrl, previewSkill, realtime.connected, selectedMarketplace, selectedPlugin]);
+
+  // The stream is ready when this runs; this render's `realtime` may not be yet.
+  useStreamResync(() => {
+    if (!previewSkill || !selectedPlugin || !selectedMarketplace) return;
+    dispatch(fetchPluginSkillContent({
+      pluginsUrl,
+      marketplace: selectedMarketplace,
+      plugin: selectedPlugin.name,
+      skill: previewSkill,
+    }));
+  });
   const pluginAction = useUiAction(`plugin-action:${selectedMarketplace}/${selectedPlugin?.name || ''}`);
   const initialFailure = marketplacesState.error || pluginsState.error;
 
@@ -175,14 +197,9 @@ export default function PluginsPage() {
     if (!realtime.connected || !previewSkill || !selectedPlugin || !selectedMarketplace || skillPreview) {
       return undefined;
     }
-    dispatch(fetchPluginSkillContent({
-      pluginsUrl,
-      marketplace: selectedMarketplace,
-      plugin: selectedPlugin.name,
-      skill: previewSkill,
-    }));
+    loadSkillPreview();
     return undefined;
-  }, [realtime.connected, previewSkill, selectedPlugin, selectedMarketplace, skillPreview, dispatch, pluginsUrl]);
+  }, [loadSkillPreview, previewSkill, realtime.connected, selectedMarketplace, selectedPlugin, skillPreview]);
 
   const marketplaceOptions = useMemo(
     () => Object.keys(marketplaces).map((name) => ({ value: name, label: name })),
@@ -200,6 +217,28 @@ export default function PluginsPage() {
     });
     return sortPlugins(filtered, sort);
   }, [catalog, query, activeFilter, installedPlugins, selectedMarketplace, sort]);
+
+  const selectedPluginConfig = selectedMarketplace && selectedPlugin
+    ? installedPlugins[`${selectedMarketplace}/${selectedPlugin.name}`] || null
+    : null;
+  const selectedPluginMarker = selectedPluginConfig
+    ? JSON.stringify({
+      source: selectedPluginConfig.source,
+      version: selectedPluginConfig.version,
+      installed_at: selectedPluginConfig.installed_at,
+      last_checked: selectedPluginConfig.last_checked,
+    })
+    : null;
+  useEffect(() => {
+    if (
+      selectedPluginMarker
+      && selectedPluginMarkerRef.current
+      && selectedPluginMarker !== selectedPluginMarkerRef.current
+    ) {
+      loadSkillPreview();
+    }
+    selectedPluginMarkerRef.current = selectedPluginMarker;
+  }, [loadSkillPreview, selectedPluginMarker]);
 
   // Auto-select the plugin named in the URL if it's in the current list,
   // otherwise the top plugin, once the list has something to show -- so the

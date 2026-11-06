@@ -17,6 +17,7 @@ import { fetchInstructions } from '../instructions/state';
 import { PaneCollapseSeam, PaneEmptyState, PaneExpandRail, PaneListFilters, PaneListFooter, PaneListSearch, PaneListSortButton, PaneListToolbar, PaneListRows, PaneSection } from '../../components/layout/PaneList';
 import { usePaneCollapse } from '../../hooks/usePaneCollapse';
 import useStreamTopic from '../../hooks/useStreamTopic';
+import useStreamResync from '../../hooks/useStreamResync';
 import PageShell from '../../components/layout/PageShell';
 import DetailPane from '../../components/layout/DetailPane';
 import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, PauseActionIcon, PlayActionIcon, SaveActionIcon } from '../../components/layout/DetailHeader';
@@ -166,6 +167,14 @@ function WorkflowsInner() {
       dispatch(fetchWorkflowContent({ workflowsUrl, path: selectedPath }));
     }
   }, [detailRequest.loading, dispatch, realtime.streamReady, selectedPath, workflowsUrl]);
+
+  // Rich workflow detail is topic-fanned live but not replayed. Reload into
+  // the same cache as `workflow.updated` after every ready boundary so draft
+  // behavior remains identical to a live update. The stream is ready when this
+  // runs, but this render's `realtime.streamReady` may still be false.
+  useStreamResync(() => {
+    if (selectedPath) dispatch(fetchWorkflowContent({ workflowsUrl, path: selectedPath }));
+  });
 
   useEffect(() => {
     if (selectedPath && !selectedDetail && !detailRequest.loading && !detailRequest.error) {

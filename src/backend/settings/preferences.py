@@ -50,6 +50,7 @@ async def get_preferences(
 async def replace_preferences(
     payload: dict[str, Any],
     request: Request,
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Validate and persist the full preferences document.
@@ -57,6 +58,7 @@ async def replace_preferences(
     Shares ``validate_preferences_payload`` with the agent's
     ``/config/preferences.json`` write path, so both can never disagree on shape.
     """
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     try:
         normalized = validate_preferences_payload(payload)
