@@ -135,16 +135,10 @@ Pruning archives the compact record and its evidence references before a
 conditional deletion; archived records remain discoverable by original task ID.
 Evidence is retained for audit and is not automatically garbage-collected.
 
-**Upgrade ordering:** quiesce old runtime processes that write the
-`a2a_tasks`/`async_subagent_tasks` singletons, install the updated backend event
-trigger, then start the updated runtime. Task access migrates legacy records
-idempotently before retiring each singleton; existing per-task records win over
-replayed migration data. Invalid legacy entries keep their source singleton
-intact and produce a warning rather than being discarded. Only the deliberate
-singleton `DELETE` tagged `progena.task-singleton-retirement` is excluded from
-event capture. This does not erase previously queued legacy events or suppress
-other writes to those keys. Running old singleton writers concurrently with
-this cutover is unsupported.
+There is no automatic legacy-singleton migration or compatibility reader.
+Existing development data is converted once by an operator before deploying
+the per-task runtime. Stop old task writers during that conversion and do not
+restart the old runtime against the converted database.
 
 ## Inbox message revisions
 

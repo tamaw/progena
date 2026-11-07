@@ -12,10 +12,8 @@ from psycopg.types.json import Jsonb
 from src.backend.storage.documents import (
     PROGENA_STATE_PREFIX,
     TASK_EVIDENCE_PREFIX,
-    TASK_SINGLETON_RETIREMENT_ORIGIN,
     DocumentEventTooLargeError,
     PostgresDocumentStore,
-    document_write_origin,
 )
 
 
@@ -201,19 +199,6 @@ def test_postgres_task_evidence_namespace_is_not_captured_as_a_document_event(st
     store.save_document(TASK_EVIDENCE_PREFIX, "sha256:abc", {"raw": "x" * 10_000})
 
     assert _settled_events(store, cursor) == []
-
-
-def test_postgres_retiring_legacy_task_singletons_suppresses_only_the_migration_delete(store):
-    store.save_document(PROGENA_STATE_PREFIX, "a2a_tasks", [{"task_id": "legacy"}])
-    store.save_document(PROGENA_STATE_PREFIX, "unrelated", {"value": "keep replayable"})
-    cursor = store.latest_document_event_position()
-
-    with document_write_origin(TASK_SINGLETON_RETIREMENT_ORIGIN):
-        store.delete_document(PROGENA_STATE_PREFIX, "a2a_tasks")
-        store.delete_document(PROGENA_STATE_PREFIX, "unrelated")
-
-    events = _settled_events(store, cursor)
-    assert [(event.key, event.op) for event in events] == [("unrelated", "deleted")]
 
 
 def test_mutate_document_is_not_overwritten_by_a_concurrent_merge(store):

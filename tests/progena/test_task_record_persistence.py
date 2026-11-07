@@ -26,98 +26,49 @@ def _manager() -> tuple[StateManager, LangGraphRuntimeStore]:
     return StateManager(runtime), runtime
 
 
-async def test_legacy_task_singletons_migrate_to_compact_records_and_hydrate_evidence():
+async def test_per_task_records_compact_and_hydrate_evidence():
     manager, runtime = _manager()
     a2a_payload = {
-        "id": "a2a-legacy",
+        "id": "a2a-task",
         "contextId": "context-1",
         "status": {"state": "working", "message": {"parts": [{"text": "working"}]}},
         "large": "x" * 32_000,
     }
     async_payload = {"status": "running", "large": "y" * 32_000}
-    await runtime.save_document(
-        "a2a_tasks",
-        [
-            A2ATaskRecord(
-                task_id="a2a-legacy",
-                agent_name="agent",
-                status=A2ATaskStatus.WORKING,
-                latest_task=a2a_payload,
-            ).model_dump(mode="json")
-        ],
+    await manager.upsert_a2a_task(
+        A2ATaskRecord(
+            task_id="a2a-task",
+            agent_name="agent",
+            status=A2ATaskStatus.WORKING,
+            latest_task=a2a_payload,
+        )
     )
-    await runtime.save_document(
-        "async_subagent_tasks",
-        [
-            AsyncSubagentTaskRecord(
-                task_id="async-legacy",
-                agent_name="agent",
-                assistant_id="assistant",
-                agent_url="http://agent",
-                run_id="run-1",
-                latest_run=async_payload,
-            ).model_dump(mode="json")
-        ],
+    await manager.upsert_async_subagent_task(
+        AsyncSubagentTaskRecord(
+            task_id="async-task",
+            agent_name="agent",
+            assistant_id="assistant",
+            agent_url="http://agent",
+            run_id="run-1",
+            latest_run=async_payload,
+        )
     )
 
     a2a_records = await manager.get_a2a_tasks()
     async_records = await manager.get_async_subagent_tasks()
 
-    assert await runtime.peek_document("a2a_tasks") is None
-    compact_a2a = await runtime.peek_document(f"{A2A_TASK_KEY_PREFIX}a2a-legacy")
-    compact_async = await runtime.peek_document(f"{ASYNC_SUBAGENT_TASK_KEY_PREFIX}async-legacy")
+    compact_a2a = await runtime.peek_document(f"{A2A_TASK_KEY_PREFIX}a2a-task")
+    compact_async = await runtime.peek_document(f"{ASYNC_SUBAGENT_TASK_KEY_PREFIX}async-task")
     assert len(json.dumps(compact_a2a).encode()) < 24 * 1024
     assert len(json.dumps(compact_async).encode()) < 24 * 1024
-    assert await runtime.peek_document("async_subagent_tasks") is None
     assert a2a_records[0].latest_task is None
     assert async_records[0].latest_run is None
     assert "latest_task" in a2a_records[0].evidence_refs
     assert "latest_run" in async_records[0].evidence_refs
-    migrated_a2a = await manager.get_a2a_task("a2a-legacy")
-    migrated_async = await manager.get_async_subagent_task("async-legacy")
-    assert migrated_a2a is not None and migrated_a2a.latest_task == a2a_payload
-    assert migrated_async is not None and migrated_async.latest_run == async_payload
-
-
-async def test_interrupted_legacy_migration_retries_without_overwriting_newer_record():
-    manager, runtime = _manager()
-    old = utcnow() - timedelta(days=1)
-    await runtime.save_document(
-        "a2a_tasks",
-        [
-            A2ATaskRecord(
-                task_id="resume",
-                agent_name="agent",
-                status=A2ATaskStatus.WORKING,
-                latest_task={"status": "working"},
-                updated_at=old,
-            ).model_dump(mode="json")
-        ],
-    )
-    original_delete = runtime.delete_document
-
-    async def interrupt_retirement(*_args, **_kwargs):
-        raise RuntimeError("simulated interruption")
-
-    runtime.delete_document = interrupt_retirement  # type: ignore[method-assign]
-    with pytest.raises(RuntimeError, match="simulated interruption"):
-        await manager.get_a2a_tasks()
-
-    newer = A2ATaskRecord(
-        task_id="resume",
-        agent_name="agent",
-        status=A2ATaskStatus.COMPLETED,
-        latest_task={"status": "completed"},
-        updated_at=utcnow(),
-    )
-    await runtime.save_document(f"{A2A_TASK_KEY_PREFIX}resume", newer.model_dump(mode="json"))
-    runtime.delete_document = original_delete  # type: ignore[method-assign]
-
-    resumed = await manager.get_a2a_task("resume")
-
-    assert resumed is not None
-    assert resumed.status == A2ATaskStatus.COMPLETED
-    assert await runtime.peek_document("a2a_tasks") is None
+    stored_a2a = await manager.get_a2a_task("a2a-task")
+    stored_async = await manager.get_async_subagent_task("async-task")
+    assert stored_a2a is not None and stored_a2a.latest_task == a2a_payload
+    assert stored_async is not None and stored_async.latest_run == async_payload
 
 
 async def test_unchanged_successful_polls_do_not_rewrite_task_records():
@@ -260,39 +211,6 @@ async def test_terminal_retention_archives_full_evidence_but_never_prunes_unnoti
 
 
 @pytest.mark.parametrize("kind", ["a2a", "async"])
-async def test_replayed_migration_cannot_overwrite_per_task_updates_with_equal_timestamp(kind):
-    manager, runtime = _manager()
-    if kind == "a2a":
-        record = A2ATaskRecord(task_id="migration-replay", agent_name="agent")
-        legacy_key = "a2a_tasks"
-        get_task = manager.get_a2a_task
-        update_task = manager.update_a2a_task
-        terminal_status = "completed"
-    else:
-        record = AsyncSubagentTaskRecord(
-            task_id="migration-replay",
-            agent_name="agent",
-            assistant_id="assistant",
-            agent_url="http://agent",
-            run_id="run-1",
-        )
-        legacy_key = "async_subagent_tasks"
-        get_task = manager.get_async_subagent_task
-        update_task = manager.update_async_subagent_task
-        terminal_status = "success"
-    legacy_payload = [record.model_dump(mode="json")]
-    await runtime.save_document(legacy_key, legacy_payload)
-    assert await get_task(record.task_id) is not None
-    assert await update_task(record.task_id, {"status": terminal_status})
-    # Simulate retry after a partially completed migration: the source still
-    # exists, but a live writer already changed the authoritative task row.
-    await runtime.save_document(legacy_key, legacy_payload)
-    restored = await get_task(record.task_id)
-    assert restored is not None and restored.status == terminal_status
-    assert restored.updated_at == record.updated_at
-
-
-@pytest.mark.parametrize("kind", ["a2a", "async"])
 async def test_shorter_replacement_summary_does_not_restore_stale_archived_value(kind):
     manager, _runtime = _manager()
     if kind == "a2a":
@@ -339,11 +257,11 @@ async def test_replacement_progress_does_not_restore_stale_archived_log():
     assert replaced is not None and replaced.progress_log == restored.progress_log
 
 
-async def test_async_legacy_naive_terminal_timestamps_do_not_block_initialization():
+async def test_naive_terminal_timestamps_do_not_block_initialization():
     manager, runtime = _manager()
     old = (utcnow() - timedelta(days=31)).replace(tzinfo=None)
-    legacy = AsyncSubagentTaskRecord(
-        task_id="naive-legacy",
+    record = AsyncSubagentTaskRecord(
+        task_id="naive-terminal",
         agent_name="agent",
         assistant_id="assistant",
         agent_url="http://agent",
@@ -354,10 +272,10 @@ async def test_async_legacy_naive_terminal_timestamps_do_not_block_initializatio
         updated_at=old,
         notification_sent_at=old,
     ).model_dump(mode="json")
-    # Preserve the historical timezone-naive representation in storage.
+    # Preserve the historical timezone-naive representation in a per-task row.
     for field in ("completed_at", "updated_at", "notification_sent_at"):
-        legacy[field] = old.isoformat()
-    await runtime.save_document("async_subagent_tasks", [legacy])
+        record[field] = old.isoformat()
+    await runtime.save_document(f"{ASYNC_SUBAGENT_TASK_KEY_PREFIX}naive-terminal", record)
     await manager.initialize()
     assert await manager.get_async_subagent_tasks() == []
-    assert await manager.get_async_subagent_task_evidence("naive-legacy") == {"status": "success"}
+    assert await manager.get_async_subagent_task_evidence("naive-terminal") == {"status": "success"}

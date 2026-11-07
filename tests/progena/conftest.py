@@ -32,10 +32,10 @@ class _FakeRuntimeStore:
     async def save_document(self, name: str, payload: Any) -> None:
         self._documents[name] = payload
 
-    async def delete_document(self, name: str, *, origin: str | None = None) -> None:
+    async def delete_document(self, name: str) -> None:
         self._documents.pop(name, None)
 
-    async def delete_document_if(self, name: str, predicate, *, origin: str | None = None) -> bool:
+    async def delete_document_if(self, name: str, predicate) -> bool:
         payload = self._documents.get(name)
         if payload is None or not predicate(payload):
             return False

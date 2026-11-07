@@ -20,8 +20,6 @@ from src.progena.utils import utcnow
 logger = logging.getLogger(__name__)
 
 A2A_TASK_KEY_PREFIX = "a2a_task:"
-_LEGACY_A2A_TASKS_DOCUMENT = "a2a_tasks"
-_TASK_SINGLETON_RETIREMENT_ORIGIN = "progena.task-singleton-retirement"
 _TASK_KIND = "a2a"
 _TERMINAL_RETENTION = timedelta(days=30)
 _MAX_INLINE_TEXT_BYTES = 4 * 1024
@@ -247,7 +245,7 @@ class A2ATaskStore:
         merged.completed_at = current.completed_at or candidate.completed_at
         return merged
 
-    async def _upsert_record(self, record: A2ATaskRecord, *, migration: bool = False) -> bool:
+    async def _upsert_record(self, record: A2ATaskRecord) -> bool:
         candidate = await self._compact_record(record)
 
         def mutate(current: Any | None) -> tuple[dict[str, Any], bool]:
@@ -257,10 +255,6 @@ class A2ATaskStore:
                 existing = A2ATaskRecord.model_validate(current)
             except (TypeError, ValueError):
                 return _record_payload(candidate), True
-            # Once a per-task row exists it is authoritative, including updates
-            # that preserve updated_at. Replaying a migration must not undo it.
-            if migration:
-                return current, False
             merged = self._merge_record(existing, candidate)
             if _same_semantics(existing, merged):
                 return current, False
@@ -271,31 +265,7 @@ class A2ATaskStore:
         )
         return did_write
 
-    async def _migrate_legacy_tasks(self) -> None:
-        """Copy a legacy singleton idempotently before retiring it."""
-        legacy = await self._access.store.peek_document(_LEGACY_A2A_TASKS_DOCUMENT)
-        if not isinstance(legacy, list):
-            return
-        had_invalid_record = False
-        for payload in legacy:
-            try:
-                record = A2ATaskRecord.model_validate(payload)
-            except (TypeError, ValueError):
-                had_invalid_record = True
-                logger.warning("Keeping invalid legacy A2A task record during migration")
-                continue
-            await self._upsert_record(record, migration=True)
-        if had_invalid_record:
-            return
-        # Deployment must quiesce old singleton writers before this exact,
-        # tagged retirement. A crash before deletion simply replays the
-        # idempotent per-record copy on the next access.
-        await self._access.store.delete_document(
-            _LEGACY_A2A_TASKS_DOCUMENT, origin=_TASK_SINGLETON_RETIREMENT_ORIGIN
-        )
-
     async def _compact_records(self) -> list[tuple[str, A2ATaskRecord, dict[str, Any]]]:
-        await self._migrate_legacy_tasks()
         rows = await self._access.store.list_documents(A2A_TASK_KEY_PREFIX)
         records: list[tuple[str, A2ATaskRecord, dict[str, Any]]] = []
         for key, payload in rows:
@@ -342,7 +312,6 @@ class A2ATaskStore:
 
     async def save_a2a_tasks(self, tasks: list[A2ATaskRecord]) -> None:
         """Persist supplied task records individually without rewriting history."""
-        await self._migrate_legacy_tasks()
         for task in tasks:
             await self._upsert_record(task)
 
@@ -359,7 +328,6 @@ class A2ATaskStore:
         self, task_id: str, *, hydrate_evidence: bool = True
     ) -> A2ATaskRecord | None:
         """Return one task, hydrating raw evidence only for an explicit detail read."""
-        await self._migrate_legacy_tasks()
         payload = await self._access.store.peek_document(_task_key(task_id))
         if not isinstance(payload, dict):
             return None
@@ -374,7 +342,6 @@ class A2ATaskStore:
 
     async def get_a2a_task_evidence(self, task_id: str) -> dict[str, Any] | None:
         """Return the full latest task snapshot, including an archived task."""
-        await self._migrate_legacy_tasks()
         payload = await self._access.store.peek_document(_task_key(task_id))
         record_payload = (
             payload
@@ -396,12 +363,10 @@ class A2ATaskStore:
 
     async def upsert_a2a_task(self, task: A2ATaskRecord) -> None:
         """Insert or merge one task record without touching unrelated tasks."""
-        await self._migrate_legacy_tasks()
         await self._upsert_record(task)
 
     async def update_a2a_task(self, task_id: str, updates: dict[str, Any]) -> bool:
         """Apply field updates without a write for an identical observation."""
-        await self._migrate_legacy_tasks()
         compact_updates, update_evidence = await self._compact_updates(updates)
 
         def mutate(current: Any | None) -> tuple[Any, bool]:

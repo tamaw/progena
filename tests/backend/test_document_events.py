@@ -17,7 +17,6 @@ from src.backend.storage.documents import (
     EVENT_LOG_START,
     PROGENA_STATE_PREFIX,
     TASK_EVIDENCE_PREFIX,
-    TASK_SINGLETON_RETIREMENT_ORIGIN,
     DocumentEvent,
     DocumentEventTooLargeError,
     InMemoryDocumentStore,
@@ -169,20 +168,6 @@ def test_task_evidence_namespace_is_not_captured_as_a_document_event():
     store.save_document(TASK_EVIDENCE_PREFIX, "sha256:abc", {"raw": "x" * 10_000})
 
     assert store.read_document_events(EVENT_LOG_START, 10) == []
-
-
-def test_retiring_legacy_task_singletons_suppresses_only_the_explicit_migration_delete():
-    store = InMemoryDocumentStore()
-    store.save_document(PROGENA_STATE_PREFIX, "a2a_tasks", [{"task_id": "legacy"}])
-    store.save_document(PROGENA_STATE_PREFIX, "unrelated", {"value": "keep replayable"})
-    cursor = store.latest_document_event_position()
-
-    with document_write_origin(TASK_SINGLETON_RETIREMENT_ORIGIN):
-        store.delete_document(PROGENA_STATE_PREFIX, "a2a_tasks")
-        store.delete_document(PROGENA_STATE_PREFIX, "unrelated")
-
-    events = store.read_document_events(cursor, 10)
-    assert [(event.key, event.op) for event in events] == [("unrelated", "deleted")]
 
 
 @pytest.mark.asyncio

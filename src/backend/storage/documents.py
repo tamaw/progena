@@ -59,10 +59,6 @@ DocumentEventOp = Literal["created", "updated", "deleted"]
 DOCUMENT_EVENT_REPLAY_MAX_BYTES = 4 * 1024 * 1024
 _DOCUMENT_EVENT_ENVELOPE_BYTES = 128
 TASK_EVIDENCE_PREFIX = "progena.task_evidence"
-TASK_SINGLETON_RETIREMENT_ORIGIN = "progena.task-singleton-retirement"
-_RETIRED_TASK_SINGLETON_KEYS: frozenset[LiteralString] = frozenset(
-    {"a2a_tasks", "async_subagent_tasks"}
-)
 
 # Session-scoped writer identity recorded on each document event. A workflow
 # run sets it to its run id so events caused by its own writes carry their
@@ -982,13 +978,6 @@ class InMemoryDocumentStore:
         origin = _document_write_origin.get()
         if prefix == TASK_EVIDENCE_PREFIX:
             return
-        if (
-            op == "deleted"
-            and prefix == PROGENA_STATE_PREFIX
-            and key in _RETIRED_TASK_SINGLETON_KEYS
-            and origin == TASK_SINGLETON_RETIREMENT_ORIGIN
-        ):
-            return
         if prefix not in _STORE_CHANGE_PREFIXES:
             return
         if op == "updated" and _is_session_noise(prefix, key, before, after):
@@ -1398,7 +1387,6 @@ class PostgresDocumentStore:
         ``store`` schema is never altered.
         """
         prefixes = ", ".join(f"'{prefix}'" for prefix in _STORE_CHANGE_PREFIXES)
-        retired_task_keys = ", ".join(f"'{key}'" for key in sorted(_RETIRED_TASK_SINGLETON_KEYS))
         with self._cursor() as cur, cur.connection.transaction():
             # ``txid`` is the writing transaction (commit-order key, see
             # ``DocumentEventPosition``). Added columns on existing tables are
@@ -1460,17 +1448,6 @@ class PostgresDocumentStore:
                     IF row_prefix = '__TASK_EVIDENCE_PREFIX__' THEN
                         RETURN NULL;
                     END IF;
-                    -- Only the deliberate retirement of the two legacy task
-                    -- singletons is internal. Existing/other task writes remain
-                    -- replayable and therefore fault visibly if oversized.
-                    IF TG_OP = 'DELETE'
-                        AND row_prefix = 'progena.state'
-                        AND COALESCE(NEW.key, OLD.key) IN (__RETIRED_TASK_KEYS__)
-                        AND NULLIF(current_setting('progena.origin', true), '')
-                            = '__TASK_SINGLETON_RETIREMENT_ORIGIN__'
-                    THEN
-                        RETURN NULL;
-                    END IF;
                     IF row_prefix NOT IN (__PREFIXES__) THEN
                         RETURN NULL;
                     END IF;
@@ -1508,8 +1485,6 @@ class PostgresDocumentStore:
                 .replace("__CHANNEL__", DOCUMENT_EVENT_CHANNEL)
                 .replace("__SESSION_PREFIX__", SESSION_KEY_PREFIX)
                 .replace("__TASK_EVIDENCE_PREFIX__", TASK_EVIDENCE_PREFIX)
-                .replace("__RETIRED_TASK_KEYS__", retired_task_keys)
-                .replace("__TASK_SINGLETON_RETIREMENT_ORIGIN__", TASK_SINGLETON_RETIREMENT_ORIGIN)
             )
             cur.execute(
                 """

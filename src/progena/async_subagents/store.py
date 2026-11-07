@@ -20,8 +20,6 @@ from src.progena.utils import utcnow
 logger = logging.getLogger(__name__)
 
 ASYNC_SUBAGENT_TASK_KEY_PREFIX = "async_subagent_task:"
-_LEGACY_ASYNC_SUBAGENT_TASKS_DOCUMENT = "async_subagent_tasks"
-_TASK_SINGLETON_RETIREMENT_ORIGIN = "progena.task-singleton-retirement"
 _TASK_KIND = "async_subagent"
 _TERMINAL_RETENTION = timedelta(days=30)
 _MAX_INLINE_TEXT_BYTES = 4 * 1024
@@ -210,9 +208,7 @@ class AsyncSubagentStore:
         merged.completed_at = current.completed_at or candidate.completed_at
         return merged
 
-    async def _upsert_record(
-        self, record: AsyncSubagentTaskRecord, *, migration: bool = False
-    ) -> bool:
+    async def _upsert_record(self, record: AsyncSubagentTaskRecord) -> bool:
         candidate = await self._compact_record(record)
 
         def mutate(current: Any | None) -> tuple[dict[str, Any], bool]:
@@ -222,10 +218,6 @@ class AsyncSubagentStore:
                 existing = AsyncSubagentTaskRecord.model_validate(current)
             except (TypeError, ValueError):
                 return _record_payload(candidate), True
-            # Existing per-task state wins over a replayed singleton migration,
-            # even when its writer did not change updated_at.
-            if migration:
-                return current, False
             merged = self._merge_record(existing, candidate)
             if _same_semantics(existing, merged):
                 return current, False
@@ -236,30 +228,9 @@ class AsyncSubagentStore:
         )
         return did_write
 
-    async def _migrate_legacy_tasks(self) -> None:
-        """Copy a legacy singleton idempotently before retiring it."""
-        legacy = await self._access.store.peek_document(_LEGACY_ASYNC_SUBAGENT_TASKS_DOCUMENT)
-        if not isinstance(legacy, list):
-            return
-        had_invalid_record = False
-        for payload in legacy:
-            try:
-                record = AsyncSubagentTaskRecord.model_validate(payload)
-            except (TypeError, ValueError):
-                had_invalid_record = True
-                logger.warning("Keeping invalid legacy async-subagent task record during migration")
-                continue
-            await self._upsert_record(record, migration=True)
-        if had_invalid_record:
-            return
-        await self._access.store.delete_document(
-            _LEGACY_ASYNC_SUBAGENT_TASKS_DOCUMENT, origin=_TASK_SINGLETON_RETIREMENT_ORIGIN
-        )
-
     async def _compact_records(
         self,
     ) -> list[tuple[str, AsyncSubagentTaskRecord, dict[str, Any]]]:
-        await self._migrate_legacy_tasks()
         rows = await self._access.store.list_documents(ASYNC_SUBAGENT_TASK_KEY_PREFIX)
         records: list[tuple[str, AsyncSubagentTaskRecord, dict[str, Any]]] = []
         for key, payload in rows:
@@ -306,7 +277,6 @@ class AsyncSubagentStore:
 
     async def save_async_subagent_tasks(self, tasks: list[AsyncSubagentTaskRecord]) -> None:
         """Persist supplied task records individually without rewriting history."""
-        await self._migrate_legacy_tasks()
         for task in tasks:
             await self._upsert_record(task)
 
@@ -314,7 +284,6 @@ class AsyncSubagentStore:
         self, task_id: str, *, hydrate_evidence: bool = True
     ) -> AsyncSubagentTaskRecord | None:
         """Return one task, hydrating raw evidence only for an explicit detail read."""
-        await self._migrate_legacy_tasks()
         payload = await self._access.store.peek_document(_task_key(task_id))
         if not isinstance(payload, dict):
             return None
@@ -329,7 +298,6 @@ class AsyncSubagentStore:
 
     async def get_async_subagent_task_evidence(self, task_id: str) -> dict[str, Any] | None:
         """Return the complete latest run, including a pruned task's archive."""
-        await self._migrate_legacy_tasks()
         payload = await self._access.store.peek_document(_task_key(task_id))
         record_payload = (
             payload
@@ -351,12 +319,10 @@ class AsyncSubagentStore:
 
     async def upsert_async_subagent_task(self, task: AsyncSubagentTaskRecord) -> None:
         """Insert or merge one task record without touching unrelated tasks."""
-        await self._migrate_legacy_tasks()
         await self._upsert_record(task)
 
     async def update_async_subagent_task(self, task_id: str, updates: dict[str, Any]) -> bool:
         """Apply field updates without a write for an identical observation."""
-        await self._migrate_legacy_tasks()
         compact_updates, update_evidence = await self._compact_updates(updates)
 
         def mutate(current: Any | None) -> tuple[Any, bool]:

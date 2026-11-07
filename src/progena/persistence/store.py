@@ -377,29 +377,11 @@ class LangGraphRuntimeStore:
             row = await cur.fetchone()
         return row is not None
 
-    async def delete_document(self, name: str, *, origin: str | None = None) -> None:
-        """Remove one runtime document, optionally tagging its event origin."""
-        if origin is None or getattr(self._store, "conn", None) is None:
-            await self._store.adelete(STATE_NAMESPACE, name)
-            return
-        async with (
-            self._native_connection() as connection,
-            connection.transaction(),
-            connection.cursor() as cur,
-        ):
-            await cur.execute("SELECT set_config('progena.origin', %s, true)", (origin,))
-            await cur.execute(
-                "DELETE FROM store WHERE prefix = 'progena.state' AND key = %s",
-                (name,),
-            )
+    async def delete_document(self, name: str) -> None:
+        """Remove one runtime document."""
+        await self._store.adelete(STATE_NAMESPACE, name)
 
-    async def delete_document_if(
-        self,
-        name: str,
-        predicate: Callable[[Any], bool],
-        *,
-        origin: str | None = None,
-    ) -> bool:
+    async def delete_document_if(self, name: str, predicate: Callable[[Any], bool]) -> bool:
         """Delete a state document only while its current payload still matches."""
         if getattr(self._store, "conn", None) is None:
             lock = self._document_locks.get(name)
@@ -439,8 +421,6 @@ class LangGraphRuntimeStore:
                 current = json.loads(current)
             if current is None or not predicate(current):
                 return False
-            if origin is not None:
-                await cur.execute("SELECT set_config('progena.origin', %s, true)", (origin,))
             await cur.execute(
                 "DELETE FROM store WHERE prefix = 'progena.state' AND key = %s",
                 (name,),
