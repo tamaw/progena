@@ -83,6 +83,69 @@ document-store and route services. It is a separate deployable from the runtime,
 so validation and presentation logic are implemented at the relevant boundary
 rather than by sharing an in-memory filesystem.
 
+### Durable event replay and startup recovery
+
+Document events retain their complete `before` and `after` payloads. Replay
+pages are bounded by both 200 events and 4 MiB of encoded event data, including
+envelope overhead. Postgres chooses the bounded page before returning JSON
+payloads to Python; decoded objects can occupy more memory than their encoding.
+The event cursor advances only after every handler accepts an event.
+
+If the next event alone exceeds the byte budget, replay raises
+`DocumentEventTooLargeError` without acknowledging it. The dispatcher exposes
+the fault through `failure`, including its key, commit position, encoded size,
+and limit, without logging document contents. Resolve the offending event's
+storage/consumer contract before retrying; do not advance the cursor or truncate
+arbitrary payloads to hide the fault. Existing oversized legacy events are not
+silently removed by an upgrade.
+
+Startup workflow recovery reads only `running` and `queued` runs through
+database-filtered keyset pages. It separately reads the identities of nonempty
+persisted trigger queues, so a crash after saving a terminal run cannot strand
+its next trigger. Recovery preserves pending routine execution and isolates
+individual workflow failures without loading terminal run history.
+
+### Tracked A2A and async-subagent tasks
+
+Tasks use individual `progena.state` documents: `a2a_task:<task_id>` and
+`async_subagent_task:<task_id>`. A task update atomically changes only its own
+record. Identical observations, including timestamp-only poll changes and
+duplicate errors, do not rewrite state or append document events.
+
+List and heartbeat reads return compact records. Inline text is limited to
+4 KiB per field, optional metadata to 8 KiB before compaction, and the complete
+compact record to 24 KiB. A2A progress keeps at most 20 entries with 512-byte
+text fields. Required routing metadata remains inline; a record that cannot fit
+without corrupting routing is rejected rather than silently shortened.
+
+Full task/run snapshots and oversized values are preserved in immutable,
+content-addressed `("progena", "task_evidence")` records keyed by
+`sha256:<digest>`. This internal evidence namespace does not emit document
+events and is not a workflow-document collection. Ordinary task records carry
+evidence references instead of those bodies. Single-task detail getters hydrate
+evidence by default; polling uses `hydrate_evidence=False`. The
+`StateManager.get_a2a_task_evidence(task_id)` and
+`get_async_subagent_task_evidence(task_id)` methods retrieve full snapshots,
+including after terminal-task archival.
+
+Terminal records become eligible for archival 30 days after completion (or
+their last update when no completion time exists), only after notification is
+delivered or was disabled. Active and unnotified records are never pruned.
+Pruning archives the compact record and its evidence references before a
+conditional deletion; archived records remain discoverable by original task ID.
+Evidence is retained for audit and is not automatically garbage-collected.
+
+**Upgrade ordering:** quiesce old runtime processes that write the
+`a2a_tasks`/`async_subagent_tasks` singletons, install the updated backend event
+trigger, then start the updated runtime. Task access migrates legacy records
+idempotently before retiring each singleton; existing per-task records win over
+replayed migration data. Invalid legacy entries keep their source singleton
+intact and produce a warning rather than being discarded. Only the deliberate
+singleton `DELETE` tagged `progena.task-singleton-retirement` is excluded from
+event capture. This does not erase previously queued legacy events or suppress
+other writes to those keys. Running old singleton writers concurrently with
+this cutover is unsupported.
+
 ## Inbox message revisions
 
 Each `/inbox/<id>.md` message is a separate `progena.state` /

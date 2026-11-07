@@ -16,8 +16,11 @@ class _Store:
     def __init__(self, payload: list[dict[str, object]]) -> None:
         self.payload = payload
 
-    def get_document(self, _prefix: str, _key: str, _default: object):
-        return SimpleNamespace(payload=self.payload)
+    def list_documents(self, _prefix: str, key_prefix: str):
+        return [
+            (f"{key_prefix}{task['task_id']}", SimpleNamespace(payload=task))
+            for task in self.payload
+        ]
 
 
 def _task(task_id: str, parent_thread_id: str, status: str) -> dict[str, object]:
@@ -34,12 +37,11 @@ def _task(task_id: str, parent_thread_id: str, status: str) -> dict[str, object]
     }
 
 
-def _document_event(after: list[dict[str, object]], seq: int = 0) -> SimpleNamespace:
+def _document_event(seq: int = 0) -> SimpleNamespace:
     return SimpleNamespace(
         event=SimpleNamespace(
             prefix="progena.state",
-            key="async_subagent_tasks",
-            after=after,
+            key="async_subagent_task:owned",
             seq=seq,
         )
     )
@@ -86,7 +88,7 @@ def test_background_task_document_change_reads_current_store_and_targets_watched
     events_stream._ui_stream_clients[queue] = "tab-1"
     events.subscribe("tab-1", "thread-1")
     try:
-        asyncio.run(events.document_event(_document_event([_task("owned", "thread-1", "running")])))
+        asyncio.run(events.document_event(_document_event()))
         event = queue.get_nowait()["envelope"]
     finally:
         events.unsubscribe("tab-1")
@@ -111,9 +113,7 @@ def test_late_background_task_event_does_not_regress_snapshot_state():
     events.subscribe("tab-1", "thread-1")
     tasks, revision = asyncio.run(events.snapshot(store, "thread-1"))
     try:
-        asyncio.run(
-            events.document_event(_document_event([_task("owned", "thread-1", "running")], seq=42))
-        )
+        asyncio.run(events.document_event(_document_event(seq=42)))
         event = queue.get_nowait()["envelope"]
     finally:
         events.unsubscribe("tab-1")

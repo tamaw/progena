@@ -195,7 +195,7 @@ class _A2AState:
     async def get_current_state(self) -> dict[str, str]:
         return {"thread_id": "javascript-bridge"}
 
-    async def get_a2a_task(self, task_id: str) -> Any | None:
+    async def get_a2a_task(self, task_id: str, *, hydrate_evidence: bool = True) -> Any | None:
         return self.records.get(task_id)
 
     async def get_a2a_tasks(self) -> list[Any]:

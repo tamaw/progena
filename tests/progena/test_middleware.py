@@ -264,7 +264,7 @@ class TestAsyncSubagentTrackingMiddleware:
         async def get_async_subagent_tasks(self):
             return self.tasks
 
-        async def get_async_subagent_task(self, task_id):
+        async def get_async_subagent_task(self, task_id, *, hydrate_evidence=True):
             return next((task for task in self.tasks if task.task_id == task_id), None)
 
         async def update_async_subagent_task(self, task_id, updates):

@@ -3,15 +3,20 @@ import asyncio
 import pytest
 
 from src.backend.events.documents import seed_document_types
-from src.backend.storage.documents import InMemoryDocumentStore
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.workflows import service as workflows_service
 from src.backend.workflows.service import (
     PromptExecutionResult,
     WorkflowExecutor,
     build_manual_trigger_event,
     get_workflow_run,
     save_workflow_definition,
+    save_workflow_queue,
+    save_workflow_run,
 )
-from src.progena.workflows.documents import default_workflow_definition
+from src.progena.workflows.constants import WorkflowRunStatus
+from src.progena.workflows.documents import default_workflow_definition, workflow_definition_key
+from src.progena.workflows.models import WorkflowRun
 
 
 async def _wait_for(predicate, timeout=2.0):
@@ -47,6 +52,22 @@ def _executor(store, runner):
         store_getter=lambda: store,
         prompt_runner=runner,
         emit_event=lambda *_args: None,
+    )
+
+
+def _stored_workflow_run(
+    run_id: str,
+    workflow_id: str,
+    status: WorkflowRunStatus,
+    *,
+    timestamp: str,
+) -> WorkflowRun:
+    return WorkflowRun(
+        run_id=run_id,
+        workflow_id=workflow_id,
+        status=status,
+        queued_at=timestamp,
+        updated_at=timestamp,
     )
 
 
@@ -892,3 +913,186 @@ async def test_executor_records_step_and_run_token_usage():
         None,
     ]
     assert completed.tokens == {"input_tokens": 9, "output_tokens": 14, "total_tokens": 23}
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_ignores_terminal_workflow_history(monkeypatch):
+    store = InMemoryDocumentStore()
+    workflow_id = "recover-terminal-history"
+    save_workflow_run(
+        store,
+        _stored_workflow_run(
+            "completed-history",
+            workflow_id,
+            "completed",
+            timestamp="2026-01-01T00:00:00Z",
+        ),
+    )
+    save_workflow_run(
+        store,
+        _stored_workflow_run(
+            "failed-history",
+            workflow_id,
+            "failed",
+            timestamp="2026-01-01T00:01:00Z",
+        ),
+    )
+    save_workflow_run(
+        store,
+        _stored_workflow_run(
+            "queued-recovery",
+            workflow_id,
+            "queued",
+            timestamp="2026-01-01T00:02:00Z",
+        ),
+    )
+    executor = _executor(store, RecordingRunner([]))
+    started: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        executor,
+        "_start_task",
+        lambda workflow_id, run_id: started.append((workflow_id, run_id)),
+    )
+
+    await executor.recover_startup_runs()
+
+    assert started == [(workflow_id, "queued-recovery")]
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_processes_recoverable_runs_across_keyset_pages(monkeypatch):
+    store = InMemoryDocumentStore()
+    monkeypatch.setattr(workflows_service, "WORKFLOW_STARTUP_RECOVERY_PAGE_SIZE", 2)
+    workflow_ids = [f"recover-page-{index}" for index in range(5)]
+    for index, workflow_id in enumerate(workflow_ids):
+        save_workflow_run(
+            store,
+            _stored_workflow_run(
+                f"queued-page-{index}",
+                workflow_id,
+                "queued",
+                timestamp=f"2026-01-01T00:00:0{index}Z",
+            ),
+        )
+    executor = _executor(store, RecordingRunner([]))
+    started: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        executor,
+        "_start_task",
+        lambda workflow_id, run_id: started.append((workflow_id, run_id)),
+    )
+
+    await executor.recover_startup_runs()
+
+    assert set(started) == {
+        (workflow_id, f"queued-page-{index}") for index, workflow_id in enumerate(workflow_ids)
+    }
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_fails_interrupted_run_before_activating_one_queued_run(monkeypatch):
+    store = InMemoryDocumentStore()
+    workflow_id = "recover-shared-workflow"
+    monkeypatch.setattr(workflows_service, "WORKFLOW_STARTUP_RECOVERY_PAGE_SIZE", 1)
+    interrupted = _stored_workflow_run(
+        "run-a-interrupted",
+        workflow_id,
+        "running",
+        timestamp="2026-01-01T00:00:00Z",
+    )
+    save_workflow_run(store, interrupted)
+    save_workflow_run(
+        store,
+        _stored_workflow_run(
+            "run-y-earlier-queued",
+            workflow_id,
+            "queued",
+            timestamp="2026-01-01T00:01:00Z",
+        ),
+    )
+    save_workflow_run(
+        store,
+        _stored_workflow_run(
+            "run-z-later-queued",
+            workflow_id,
+            "queued",
+            timestamp="2026-01-01T00:02:00Z",
+        ),
+    )
+    executor = _executor(store, RecordingRunner([]))
+    started: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        executor,
+        "_start_task",
+        lambda workflow_id, run_id: started.append((workflow_id, run_id)),
+    )
+
+    await executor.recover_startup_runs()
+
+    assert get_workflow_run(store, interrupted.run_id).status == "failed"
+    assert started == [(workflow_id, "run-y-earlier-queued")]
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_claims_pending_queue_after_terminal_history(monkeypatch):
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow_id = "recover-terminal-queue"
+    workflow = default_workflow_definition()
+    workflow["id"] = workflow_id
+    definition = save_workflow_definition(store, workflow)
+    save_workflow_run(
+        store,
+        _stored_workflow_run(
+            "completed-before-queue-claim",
+            workflow_id,
+            "completed",
+            timestamp="2026-01-01T00:00:00Z",
+        ),
+    )
+    save_workflow_queue(store, workflow_id, [build_manual_trigger_event(definition)])
+    executor = _executor(store, RecordingRunner([]))
+    started: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        executor,
+        "_start_task",
+        lambda workflow_id, run_id: started.append((workflow_id, run_id)),
+    )
+
+    await executor.recover_startup_runs()
+    await asyncio.sleep(0)
+
+    assert len(started) == 1
+    assert started[0][0] == workflow_id
+    assert get_workflow_run(store, started[0][1]).status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_malformed_workflow_definition_does_not_abort_startup_recovery(monkeypatch):
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    malformed_workflow_id = "a-malformed-recovery"
+    recovered_workflow_id = "z-recoverable-workflow"
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        workflow_definition_key(malformed_workflow_id),
+        {"id": malformed_workflow_id},
+    )
+    save_workflow_queue(store, malformed_workflow_id, [{"trigger": "malformed"}])
+    workflow = default_workflow_definition()
+    workflow["id"] = recovered_workflow_id
+    definition = save_workflow_definition(store, workflow)
+    save_workflow_queue(store, recovered_workflow_id, [build_manual_trigger_event(definition)])
+    executor = _executor(store, RecordingRunner([]))
+    started: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        executor,
+        "_start_task",
+        lambda workflow_id, run_id: started.append((workflow_id, run_id)),
+    )
+
+    await executor.recover_startup_runs()
+    await asyncio.sleep(0)
+
+    assert len(started) == 1
+    assert started[0][0] == recovered_workflow_id

@@ -75,8 +75,6 @@ class TestStateManager:
         await manager.initialize()
 
         assert "current_state" in store._documents
-        assert "a2a_tasks" in store._documents
-        assert "async_subagent_tasks" in store._documents
         assert "background_tasks" in store._documents
         assert "mcp" in store._documents
         assert "schedule_runs" in store._documents

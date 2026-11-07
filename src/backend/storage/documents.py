@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import copy
 import hashlib
+import json
 import logging
 import threading
 from collections.abc import Callable, Iterable, Iterator
@@ -32,6 +33,7 @@ from src.progena.documents.kinds import (
     INBOX_MESSAGE_KEY_PREFIX,
     INSTRUCTION_DOCUMENT_KEY_PREFIX,
     SESSION_KEY_PREFIX,
+    WORKFLOW_QUEUE_KEY_PREFIX,
 )
 from src.progena.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 
@@ -50,6 +52,17 @@ CONVERSATION_FETCH_CONCURRENCY = 8
 DOCUMENT_EVENT_CHANNEL = "document_events"
 
 DocumentEventOp = Literal["created", "updated", "deleted"]
+
+# A replay batch includes at most this many encoded event bytes before document
+# snapshots are hydrated. Four MiB permits ordinary document edits while
+# bounding a backend recovering from a large backlog.
+DOCUMENT_EVENT_REPLAY_MAX_BYTES = 4 * 1024 * 1024
+_DOCUMENT_EVENT_ENVELOPE_BYTES = 128
+TASK_EVIDENCE_PREFIX = "progena.task_evidence"
+TASK_SINGLETON_RETIREMENT_ORIGIN = "progena.task-singleton-retirement"
+_RETIRED_TASK_SINGLETON_KEYS: frozenset[LiteralString] = frozenset(
+    {"a2a_tasks", "async_subagent_tasks"}
+)
 
 # Session-scoped writer identity recorded on each document event. A workflow
 # run sets it to its run id so events caused by its own writes carry their
@@ -114,6 +127,59 @@ class DocumentEvent:
     @property
     def position(self) -> DocumentEventPosition:
         return DocumentEventPosition(self.txid, self.seq)
+
+
+class DocumentEventTooLargeError(RuntimeError):
+    """The next event cannot fit in the bounded replay envelope."""
+
+    def __init__(
+        self,
+        *,
+        position: DocumentEventPosition,
+        key: str,
+        encoded_bytes: int,
+        max_encoded_bytes: int,
+    ) -> None:
+        self.position = position
+        self.key = key
+        self.encoded_bytes = encoded_bytes
+        self.max_encoded_bytes = max_encoded_bytes
+        super().__init__(
+            f"Document event {position.txid}/{position.seq} for {key!r} is "
+            f"{encoded_bytes} encoded bytes, exceeding the {max_encoded_bytes}-byte replay limit"
+        )
+
+
+def _document_event_encoded_bytes(
+    *,
+    prefix: str,
+    key: str,
+    op: DocumentEventOp,
+    before: Any,
+    after: Any,
+    origin: str | None,
+) -> int:
+    """Estimate the UTF-8 JSON envelope size with the same JSONB text shape as Postgres."""
+
+    def encoded_json_bytes(payload: Any) -> int:
+        return len(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                separators=(", ", ": "),
+                sort_keys=True,
+            ).encode()
+        )
+
+    return (
+        _DOCUMENT_EVENT_ENVELOPE_BYTES
+        + len(prefix.encode())
+        + len(key.encode())
+        + len(op.encode())
+        + len((origin or "").encode())
+        + encoded_json_bytes(before)
+        + encoded_json_bytes(after)
+    )
 
 
 @dataclass(frozen=True)
@@ -271,6 +337,18 @@ class BackendDocumentStore(Protocol):
         """Filter and keyset-page compact workflow metadata in the global run order."""
         ...
 
+    def list_recoverable_workflow_runs(
+        self, *, after_key: str | None = None, limit: int = 50
+    ) -> list[tuple[str, StoredDocument]]:
+        """Keyset-page queued/running workflow runs without hydrating other documents."""
+        ...
+
+    def list_recoverable_workflow_queue_keys(
+        self, *, after_key: str | None = None, limit: int = 50
+    ) -> list[str]:
+        """Keyset-page nonempty workflow queue document keys without loading items."""
+        ...
+
     def search_documents(
         self,
         prefix: str,
@@ -295,7 +373,11 @@ class BackendDocumentStore(Protocol):
     def mutate_document(self, prefix: str, key: str, mutator: Callable[[Any], Any]) -> Any: ...
 
     def read_document_events(
-        self, after: DocumentEventPosition, limit: int
+        self,
+        after: DocumentEventPosition,
+        limit: int,
+        *,
+        max_encoded_bytes: int = DOCUMENT_EVENT_REPLAY_MAX_BYTES,
     ) -> list[DocumentEvent]: ...
 
     def has_deferred_document_events(self, after: DocumentEventPosition) -> bool:
@@ -495,6 +577,43 @@ class InMemoryDocumentStore:
             and isinstance(payload.get("run_id"), str)
             and payload["run_id"]
         ]
+
+    def list_recoverable_workflow_runs(
+        self, *, after_key: str | None = None, limit: int = 50
+    ) -> list[tuple[str, StoredDocument]]:
+        if limit <= 0:
+            return []
+        with self._lock:
+            matches = [
+                (key, document)
+                for (prefix, key), document in sorted(self._documents.items())
+                if prefix == PROGENA_STATE_PREFIX
+                and key.startswith("workflow_run:")
+                and (after_key is None or key > after_key)
+                and isinstance(document.payload, dict)
+                and document.payload.get("status") in {"queued", "running"}
+            ][:limit]
+            return [
+                (key, StoredDocument(copy.deepcopy(document.payload), document.updated_at))
+                for key, document in matches
+            ]
+
+    def list_recoverable_workflow_queue_keys(
+        self, *, after_key: str | None = None, limit: int = 50
+    ) -> list[str]:
+        if limit <= 0:
+            return []
+        with self._lock:
+            return [
+                key
+                for (prefix, key), document in sorted(self._documents.items())
+                if prefix == PROGENA_STATE_PREFIX
+                and key.startswith(WORKFLOW_QUEUE_KEY_PREFIX)
+                and (after_key is None or key > after_key)
+                and isinstance(document.payload, dict)
+                and isinstance(document.payload.get("items"), list)
+                and bool(document.payload["items"])
+            ][:limit]
 
     def query_workflow_run_page(
         self,
@@ -860,6 +979,16 @@ class InMemoryDocumentStore:
         self, prefix: str, key: str, op: DocumentEventOp, before: Any, after: Any
     ) -> None:
         """Append one event; the caller holds ``self._lock``."""
+        origin = _document_write_origin.get()
+        if prefix == TASK_EVIDENCE_PREFIX:
+            return
+        if (
+            op == "deleted"
+            and prefix == PROGENA_STATE_PREFIX
+            and key in _RETIRED_TASK_SINGLETON_KEYS
+            and origin == TASK_SINGLETON_RETIREMENT_ORIGIN
+        ):
+            return
         if prefix not in _STORE_CHANGE_PREFIXES:
             return
         if op == "updated" and _is_session_noise(prefix, key, before, after):
@@ -876,16 +1005,52 @@ class InMemoryDocumentStore:
                 op=op,
                 before=copy.deepcopy(before),
                 after=copy.deepcopy(after),
-                origin=_document_write_origin.get(),
+                origin=origin,
                 created_at=datetime.now(UTC),
             )
         )
         for listener in list(self._event_listeners):
             listener(seq)
 
-    def read_document_events(self, after: DocumentEventPosition, limit: int) -> list[DocumentEvent]:
+    def read_document_events(
+        self,
+        after: DocumentEventPosition,
+        limit: int,
+        *,
+        max_encoded_bytes: int = DOCUMENT_EVENT_REPLAY_MAX_BYTES,
+    ) -> list[DocumentEvent]:
+        if limit <= 0:
+            return []
+        if max_encoded_bytes <= 0:
+            raise ValueError("max_encoded_bytes must be positive")
         with self._lock:
-            return [event for event in self._events if event.position > after][:limit]
+            selected: list[DocumentEvent] = []
+            used_bytes = 0
+            for event in self._events:
+                if event.position <= after:
+                    continue
+                encoded_bytes = _document_event_encoded_bytes(
+                    prefix=event.prefix,
+                    key=event.key,
+                    op=event.op,
+                    before=event.before,
+                    after=event.after,
+                    origin=event.origin,
+                )
+                if not selected and encoded_bytes > max_encoded_bytes:
+                    raise DocumentEventTooLargeError(
+                        position=event.position,
+                        key=event.key,
+                        encoded_bytes=encoded_bytes,
+                        max_encoded_bytes=max_encoded_bytes,
+                    )
+                if used_bytes + encoded_bytes > max_encoded_bytes:
+                    break
+                selected.append(event)
+                used_bytes += encoded_bytes
+                if len(selected) == limit:
+                    break
+            return selected
 
     def has_deferred_document_events(self, after: DocumentEventPosition) -> bool:
         # In-memory writes are readable the moment they are recorded.
@@ -1233,6 +1398,7 @@ class PostgresDocumentStore:
         ``store`` schema is never altered.
         """
         prefixes = ", ".join(f"'{prefix}'" for prefix in _STORE_CHANGE_PREFIXES)
+        retired_task_keys = ", ".join(f"'{key}'" for key in sorted(_RETIRED_TASK_SINGLETON_KEYS))
         with self._cursor() as cur, cur.connection.transaction():
             # ``txid`` is the writing transaction (commit-order key, see
             # ``DocumentEventPosition``). Added columns on existing tables are
@@ -1289,6 +1455,22 @@ class PostgresDocumentStore:
                     row_prefix TEXT := COALESCE(NEW.prefix, OLD.prefix);
                     event_seq BIGINT;
                 BEGIN
+                    -- Task evidence is immutable internal storage, not a workflow
+                    -- document. Do not retain its potentially large snapshots.
+                    IF row_prefix = '__TASK_EVIDENCE_PREFIX__' THEN
+                        RETURN NULL;
+                    END IF;
+                    -- Only the deliberate retirement of the two legacy task
+                    -- singletons is internal. Existing/other task writes remain
+                    -- replayable and therefore fault visibly if oversized.
+                    IF TG_OP = 'DELETE'
+                        AND row_prefix = 'progena.state'
+                        AND COALESCE(NEW.key, OLD.key) IN (__RETIRED_TASK_KEYS__)
+                        AND NULLIF(current_setting('progena.origin', true), '')
+                            = '__TASK_SINGLETON_RETIREMENT_ORIGIN__'
+                    THEN
+                        RETURN NULL;
+                    END IF;
                     IF row_prefix NOT IN (__PREFIXES__) THEN
                         RETURN NULL;
                     END IF;
@@ -1325,6 +1507,9 @@ class PostgresDocumentStore:
                 """.replace("__PREFIXES__", prefixes)  # nosec B608
                 .replace("__CHANNEL__", DOCUMENT_EVENT_CHANNEL)
                 .replace("__SESSION_PREFIX__", SESSION_KEY_PREFIX)
+                .replace("__TASK_EVIDENCE_PREFIX__", TASK_EVIDENCE_PREFIX)
+                .replace("__RETIRED_TASK_KEYS__", retired_task_keys)
+                .replace("__TASK_SINGLETON_RETIREMENT_ORIGIN__", TASK_SINGLETON_RETIREMENT_ORIGIN)
             )
             cur.execute(
                 """
@@ -1850,6 +2035,76 @@ class PostgresDocumentStore:
             rows = cast(list[dict[str, Any]], cur.fetchall())
         return [run_id for row in rows if isinstance((run_id := row.get("run_id")), str) and run_id]
 
+    def list_recoverable_workflow_runs(
+        self, *, after_key: str | None = None, limit: int = 50
+    ) -> list[tuple[str, StoredDocument]]:
+        if limit <= 0:
+            return []
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT key, value, updated_at
+                FROM store
+                WHERE prefix = %s
+                  AND key LIKE %s
+                  AND (%s::text IS NULL OR key > %s)
+                  AND value #>> '{payload,status}' = ANY(%s)
+                ORDER BY key
+                LIMIT %s
+                """,
+                (
+                    PROGENA_STATE_PREFIX,
+                    _escape_like("workflow_run:") + "%",
+                    after_key,
+                    after_key,
+                    ["queued", "running"],
+                    limit,
+                ),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return [
+            (
+                str(row["key"]),
+                StoredDocument(
+                    row["value"].get("payload") if isinstance(row.get("value"), dict) else None,
+                    row.get("updated_at"),
+                ),
+            )
+            for row in rows
+        ]
+
+    def list_recoverable_workflow_queue_keys(
+        self, *, after_key: str | None = None, limit: int = 50
+    ) -> list[str]:
+        if limit <= 0:
+            return []
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT key
+                FROM store
+                WHERE prefix = %s
+                  AND key LIKE %s
+                  AND (%s::text IS NULL OR key > %s)
+                  AND CASE
+                      WHEN jsonb_typeof(value #> '{payload,items}') = 'array'
+                      THEN jsonb_array_length(value #> '{payload,items}') > 0
+                      ELSE FALSE
+                  END
+                ORDER BY key
+                LIMIT %s
+                """,
+                (
+                    PROGENA_STATE_PREFIX,
+                    _escape_like(WORKFLOW_QUEUE_KEY_PREFIX) + "%",
+                    after_key,
+                    after_key,
+                    limit,
+                ),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return [str(row["key"]) for row in rows]
+
     def query_workflow_run_page(
         self,
         *,
@@ -2277,41 +2532,109 @@ class PostgresDocumentStore:
                 cur.execute(query, params)
             return cur.rowcount
 
-    def read_document_events(self, after: DocumentEventPosition, limit: int) -> list[DocumentEvent]:
-        """Events after ``after`` from transactions older than every open one.
+    def read_document_events(
+        self,
+        after: DocumentEventPosition,
+        limit: int,
+        *,
+        max_encoded_bytes: int = DOCUMENT_EVENT_REPLAY_MAX_BYTES,
+    ) -> list[DocumentEvent]:
+        """Read a final commit-order prefix without hydrating beyond its byte budget."""
 
-        Every transaction below the snapshot xmin has committed or rolled back,
-        so this prefix of the ``(txid, seq)`` order can never gain a new row.
-        """
-
+        if limit <= 0:
+            return []
+        if max_encoded_bytes <= 0:
+            raise ValueError("max_encoded_bytes must be positive")
         with self._cursor() as cur:
             cur.execute(
                 """
-                SELECT seq, txid::text::bigint AS txid, prefix, key, op, before, after,
-                       origin, created_at
-                FROM document_events
-                WHERE txid < pg_snapshot_xmin(pg_current_snapshot())
-                  AND (txid, seq) > (%s::text::xid8, %s)
+                WITH candidates AS MATERIALIZED (
+                    SELECT seq, txid::text::bigint AS txid, prefix, key, op, origin, created_at,
+                           %s
+                           + octet_length(prefix)
+                           + octet_length(key)
+                           + octet_length(op)
+                           + COALESCE(octet_length(origin), 0)
+                           + COALESCE(octet_length(before::text), 4)
+                           + COALESCE(octet_length(after::text), 4) AS encoded_bytes
+                    FROM document_events
+                    WHERE txid < pg_snapshot_xmin(pg_current_snapshot())
+                      AND (txid, seq) > (%s::text::xid8, %s)
+                    ORDER BY txid, seq
+                    LIMIT %s
+                ),
+                bounded AS MATERIALIZED (
+                    SELECT *,
+                           sum(encoded_bytes) OVER (
+                               ORDER BY txid, seq ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                           ) AS cumulative_bytes
+                    FROM candidates
+                ),
+                safe AS MATERIALIZED (
+                    SELECT seq, txid, prefix, key, op, origin, created_at, encoded_bytes
+                    FROM bounded
+                    WHERE cumulative_bytes <= %s
+                ),
+                hydrated AS (
+                    SELECT TRUE AS hydrate, b.seq, b.txid, b.prefix, b.key, b.op,
+                           e.before, e.after, b.origin, b.created_at, b.encoded_bytes
+                    FROM safe b
+                    JOIN document_events e ON e.seq = b.seq
+                ),
+                boundary AS (
+                    SELECT FALSE AS hydrate, seq, txid, prefix, key, op,
+                           NULL::jsonb AS before, NULL::jsonb AS after,
+                           origin, created_at, encoded_bytes
+                    FROM bounded
+                    WHERE cumulative_bytes > %s
+                    ORDER BY txid, seq
+                    LIMIT 1
+                )
+                SELECT * FROM hydrated
+                UNION ALL
+                SELECT * FROM boundary
                 ORDER BY txid, seq
-                LIMIT %s
                 """,
-                (str(after.txid), after.seq, limit),
+                (
+                    _DOCUMENT_EVENT_ENVELOPE_BYTES,
+                    str(after.txid),
+                    after.seq,
+                    limit,
+                    max_encoded_bytes,
+                    max_encoded_bytes,
+                ),
             )
             rows = cast(list[dict[str, Any]], cur.fetchall())
-        return [
-            DocumentEvent(
-                seq=int(row["seq"]),
-                txid=int(row["txid"]),
-                prefix=str(row["prefix"]),
-                key=str(row["key"]),
-                op=cast(DocumentEventOp, row["op"]),
-                before=row.get("before"),
-                after=row.get("after"),
-                origin=row.get("origin"),
-                created_at=row["created_at"].astimezone(UTC),
-            )
-            for row in rows
-        ]
+
+        events: list[DocumentEvent] = []
+        boundary: dict[str, Any] | None = None
+        for row in rows:
+            if row["hydrate"]:
+                events.append(
+                    DocumentEvent(
+                        seq=int(row["seq"]),
+                        txid=int(row["txid"]),
+                        prefix=str(row["prefix"]),
+                        key=str(row["key"]),
+                        op=cast(DocumentEventOp, row["op"]),
+                        before=row.get("before"),
+                        after=row.get("after"),
+                        origin=row.get("origin"),
+                        created_at=row["created_at"].astimezone(UTC),
+                    )
+                )
+            else:
+                boundary = row
+        if not events and boundary is not None:
+            encoded_bytes = int(boundary["encoded_bytes"])
+            if encoded_bytes > max_encoded_bytes:
+                raise DocumentEventTooLargeError(
+                    position=DocumentEventPosition(int(boundary["txid"]), int(boundary["seq"])),
+                    key=str(boundary["key"]),
+                    encoded_bytes=encoded_bytes,
+                    max_encoded_bytes=max_encoded_bytes,
+                )
+        return events
 
     def has_deferred_document_events(self, after: DocumentEventPosition) -> bool:
         with self._cursor() as cur:

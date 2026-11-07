@@ -13,9 +13,13 @@ from src.backend.events.documents import (
     seed_document_types,
 )
 from src.backend.storage.documents import (
+    DOCUMENT_EVENT_REPLAY_MAX_BYTES,
     EVENT_LOG_START,
     PROGENA_STATE_PREFIX,
+    TASK_EVIDENCE_PREFIX,
+    TASK_SINGLETON_RETIREMENT_ORIGIN,
     DocumentEvent,
+    DocumentEventTooLargeError,
     InMemoryDocumentStore,
     document_write_origin,
     set_default_document_store,
@@ -148,6 +152,74 @@ def test_store_event_log_records_each_operation_and_skips_identical_rewrites():
     ]
 
 
+def test_event_read_byte_budget_leaves_the_boundary_event_for_the_next_read():
+    store = InMemoryDocumentStore()
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:first", {"body": "x" * 500})
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:second", {"body": "x" * 500})
+
+    [first] = store.read_document_events(EVENT_LOG_START, 200, max_encoded_bytes=1_000)
+    [second] = store.read_document_events(first.position, 200, max_encoded_bytes=1_000)
+
+    assert first.key == "kanban_card:first"
+    assert second.key == "kanban_card:second"
+
+
+def test_task_evidence_namespace_is_not_captured_as_a_document_event():
+    store = InMemoryDocumentStore()
+    store.save_document(TASK_EVIDENCE_PREFIX, "sha256:abc", {"raw": "x" * 10_000})
+
+    assert store.read_document_events(EVENT_LOG_START, 10) == []
+
+
+def test_retiring_legacy_task_singletons_suppresses_only_the_explicit_migration_delete():
+    store = InMemoryDocumentStore()
+    store.save_document(PROGENA_STATE_PREFIX, "a2a_tasks", [{"task_id": "legacy"}])
+    store.save_document(PROGENA_STATE_PREFIX, "unrelated", {"value": "keep replayable"})
+    cursor = store.latest_document_event_position()
+
+    with document_write_origin(TASK_SINGLETON_RETIREMENT_ORIGIN):
+        store.delete_document(PROGENA_STATE_PREFIX, "a2a_tasks")
+        store.delete_document(PROGENA_STATE_PREFIX, "unrelated")
+
+    events = store.read_document_events(cursor, 10)
+    assert [(event.key, event.op) for event in events] == [("unrelated", "deleted")]
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_stops_on_oversized_event_without_acknowledging_it(monkeypatch):
+    from src.backend.events import documents as document_events
+
+    budget = 1_000
+    monkeypatch.setattr(document_events, "DOCUMENT_EVENT_REPLAY_MAX_BYTES", budget)
+    store = InMemoryDocumentStore()
+    seen: list[str] = []
+
+    async def record(typed: TypedDocumentEvent) -> None:
+        seen.append(typed.event.key)
+
+    dispatcher = DocumentEventDispatcher(store_getter=lambda: store)
+    dispatcher.add_handler(record)
+    await dispatcher.start()
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:oversized", {"body": "x" * 2_000})
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:after", {"body": "small"})
+    await _wait_for(lambda: dispatcher.stopped)
+    await dispatcher.stop()
+
+    assert seen == []
+    failure = dispatcher.failure
+    assert isinstance(failure, DocumentEventTooLargeError)
+    assert failure.key == "kanban_card:oversized"
+    assert failure.encoded_bytes > budget
+    assert store.get_document_event_cursor(dispatcher._consumer) == EVENT_LOG_START
+
+    monkeypatch.setattr(document_events, "DOCUMENT_EVENT_REPLAY_MAX_BYTES", 8_000)
+    await dispatcher.start()
+    await dispatcher.drain()
+    await dispatcher.stop()
+
+    assert seen == ["kanban_card:oversized", "kanban_card:after"]
+
+
 @pytest.mark.asyncio
 async def test_dispatcher_starts_at_head_and_catches_up_on_events_written_while_stopped():
     store = InMemoryDocumentStore()
@@ -268,8 +340,18 @@ async def test_dispatcher_rechecks_while_events_are_deferred(monkeypatch):
     class DeferringStore(InMemoryDocumentStore):
         open_transaction = True
 
-        def read_document_events(self, after, limit):
-            return [] if self.open_transaction else super().read_document_events(after, limit)
+        def read_document_events(
+            self, after, limit, *, max_encoded_bytes=DOCUMENT_EVENT_REPLAY_MAX_BYTES
+        ):
+            return (
+                []
+                if self.open_transaction
+                else super().read_document_events(
+                    after,
+                    limit,
+                    max_encoded_bytes=max_encoded_bytes,
+                )
+            )
 
         def has_deferred_document_events(self, after):
             return self.open_transaction and bool(super().read_document_events(after, 1))

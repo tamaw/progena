@@ -23,7 +23,9 @@ class _State:
     def __init__(self, records: list[A2ATaskRecord] | None = None) -> None:
         self.records = {record.task_id: record for record in records or []}
 
-    async def get_a2a_task(self, task_id: str) -> A2ATaskRecord | None:
+    async def get_a2a_task(
+        self, task_id: str, *, hydrate_evidence: bool = True
+    ) -> A2ATaskRecord | None:
         return self.records.get(task_id)
 
     async def get_a2a_tasks(self) -> list[A2ATaskRecord]:

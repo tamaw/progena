@@ -21,8 +21,7 @@ from src.backend.storage.documents import (
     get_default_document_store,
 )
 from src.progena.async_subagents.models import AsyncSubagentTaskRecord
-
-_ASYNC_TASKS_DOCUMENT = "async_subagent_tasks"
+from src.progena.async_subagents.store import ASYNC_SUBAGENT_TASK_KEY_PREFIX
 
 
 class BackgroundTaskSubscription(BaseModel):
@@ -66,18 +65,14 @@ class BackgroundTaskEvents:
 
     async def document_event(self, typed: TypedDocumentEvent) -> None:
         event = typed.event
-        if event.prefix != PROGENA_STATE_PREFIX or event.key != _ASYNC_TASKS_DOCUMENT:
+        if event.prefix != PROGENA_STATE_PREFIX or not event.key.startswith(
+            ASYNC_SUBAGENT_TASK_KEY_PREFIX
+        ):
             return
         async with self._snapshot_lock:
-            # A document event is historical: the durable document may already
+            # A document event is historical: the durable records may already
             # contain a terminal state from a later write.
-            document = await asyncio.to_thread(
-                self._store_getter().get_document,
-                PROGENA_STATE_PREFIX,
-                _ASYNC_TASKS_DOCUMENT,
-                [],
-            )
-            by_thread = _tasks_by_thread(document.payload if document is not None else [])
+            by_thread = await asyncio.to_thread(_all_tasks_by_thread, self._store_getter())
             watched = {thread_id for threads in self.interests.values() for thread_id in threads}
             revisions = {
                 thread_id: max(self.revisions[thread_id] + 1, int(getattr(event, "seq", 0) or 0))
@@ -118,9 +113,13 @@ def _tasks_by_thread(payload: Any) -> dict[str, list[dict[str, Any]]]:
     return grouped
 
 
+def _all_tasks_by_thread(store: BackendDocumentStore) -> dict[str, list[dict[str, Any]]]:
+    rows = store.list_documents(PROGENA_STATE_PREFIX, ASYNC_SUBAGENT_TASK_KEY_PREFIX)
+    return _tasks_by_thread([document.payload for _key, document in rows])
+
+
 def _tasks_for_thread(store: BackendDocumentStore, thread_id: str) -> list[dict[str, Any]]:
-    document = store.get_document(PROGENA_STATE_PREFIX, _ASYNC_TASKS_DOCUMENT, [])
-    return _tasks_by_thread(document.payload if document is not None else []).get(thread_id, [])
+    return _all_tasks_by_thread(store).get(thread_id, [])
 
 
 def _require_stream(client_id: str) -> None:

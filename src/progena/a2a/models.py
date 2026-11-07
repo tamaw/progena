@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.progena.persistence.task_evidence import TaskEvidenceReference
 from src.progena.security.redaction import logger
 from src.progena.utils import normalize_utc_datetime, utcnow
 
@@ -55,6 +56,10 @@ class A2ATaskRecord(BaseModel):
     latest_message: str | None = None
     last_error: str | None = None
     latest_task: dict[str, Any] | None = None
+    # Oversized immutable values (especially ``latest_task``) are archived
+    # outside the evented state namespace. List and polling readers keep only
+    # these compact references; single-task reads hydrate them on demand.
+    evidence_refs: dict[str, TaskEvidenceReference] = Field(default_factory=dict)
     # Compact {state, message_text, agent_name} triples, one per intermediate
     # status update seen while the task ran -- lets a reloaded chat
     # reconstruct the same progress chain a live viewer saw, instead of only

@@ -24,11 +24,13 @@ from typing import Any
 
 from src.backend.storage.documents import (
     DOCUMENT_EVENT_CHANNEL,
+    DOCUMENT_EVENT_REPLAY_MAX_BYTES,
     EVENT_LOG_START,
     PROGENA_STATE_PREFIX,
     BackendDocumentStore,
     DocumentEvent,
     DocumentEventPosition,
+    DocumentEventTooLargeError,
     InMemoryDocumentStore,
     StoreChangeListener,
     store_database_url,
@@ -102,6 +104,7 @@ class DocumentEventDispatcher:
         self._memory_store: InMemoryDocumentStore | None = None
         self._last_prune = 0.0
         self._stopped = False
+        self._failure: Exception | None = None
 
     def add_handler(self, handler: DocumentEventHandler) -> None:
         self._handlers.append(handler)
@@ -120,7 +123,7 @@ class DocumentEventDispatcher:
             return
         self._loop = asyncio.get_running_loop()
         self._stopped = False
-        # Bind the wake signal to this loop; a dispatcher restarted under a new
+        self._failure = None
         # loop (tests, app reload) must not await an Event from the old one.
         self._wake = asyncio.Event()
         store = self._store_getter()
@@ -179,6 +182,12 @@ class DocumentEventDispatcher:
 
         return self._stopped
 
+    @property
+    def failure(self) -> Exception | None:
+        """The unacknowledged replay fault that stopped this dispatcher, if any."""
+
+        return self._failure
+
     async def _run(self) -> None:
         deferred = False
         while True:
@@ -192,9 +201,25 @@ class DocumentEventDispatcher:
             self._wake.clear()
             try:
                 deferred = await self.drain()
-            except Exception:
+            except DocumentEventTooLargeError as exc:
+                # Never acknowledge an event whose snapshots could not be safely
+                # hydrated. Its key and position aid remediation; no payload is logged.
+                self._failure = exc
+                logger.exception(
+                    "Document event replay stopped at %s/%s for key %r: %d encoded bytes "
+                    "exceed the %d-byte replay limit",
+                    exc.position.txid,
+                    exc.position.seq,
+                    exc.key,
+                    exc.encoded_bytes,
+                    exc.max_encoded_bytes,
+                )
+                self._stopped = True
+                return
+            except Exception as exc:
                 # Fail fast: the failing event stays unacknowledged and nothing
                 # after it is dispatched until the backend is fixed/restarted.
+                self._failure = exc
                 logger.exception("Document event dispatch failed; dispatcher stopped")
                 self._stopped = True
                 return
@@ -212,7 +237,11 @@ class DocumentEventDispatcher:
             store = self._store_getter()
             cursor = store.get_document_event_cursor(self._consumer) or EVENT_LOG_START
             while True:
-                events = store.read_document_events(cursor, _BATCH_SIZE)
+                events = store.read_document_events(
+                    cursor,
+                    _BATCH_SIZE,
+                    max_encoded_bytes=DOCUMENT_EVENT_REPLAY_MAX_BYTES,
+                )
                 if not events:
                     break
                 for event in events:

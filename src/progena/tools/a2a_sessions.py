@@ -149,7 +149,7 @@ class A2AStatusTool(BaseSystemTool):
         task_id = str(args.get("task_id") or "").strip()
         if not task_id:
             return ToolResult.fail("Missing 'task_id'")
-        record = await context.state_manager.get_a2a_task(task_id)
+        record = await context.state_manager.get_a2a_task(task_id, hydrate_evidence=False)
         if record is None:
             return ToolResult.fail(f"Unknown tracked A2A task: {task_id}")
 
