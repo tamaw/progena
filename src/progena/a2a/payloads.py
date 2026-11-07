@@ -174,7 +174,7 @@ def extract_message_text(message_payload: Any) -> str | None:
 # Keeping the most recent entries preserves what a viewer actually cares
 # about (what's happening now) over what's least likely to still matter
 # (the earliest updates from a long-since-passed phase).
-_MAX_PROGRESS_LOG_ENTRIES = 50
+_MAX_PROGRESS_LOG_ENTRIES = 20
 _MAX_PROGRESS_MESSAGE_TEXT_LENGTH = 500
 
 

@@ -9,6 +9,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import PoolClosed
 
 from src.backend.storage.documents import (
+    PROGENA_STATE_PREFIX,
     STORE_CHANGE_CHANNEL,
     InMemoryDocumentStore,
     PostgresDocumentStore,
@@ -104,6 +105,33 @@ def test_in_memory_list_documents_filters_by_prefix_and_key_prefix():
 
     assert [key for key, _doc in rows] == ["inbox_message:a", "inbox_message:b"]
     assert [doc.payload["id"] for _key, doc in rows] == ["a", "b"]
+
+
+def test_in_memory_recovery_workflow_run_page_is_status_filtered_and_keyset_paged():
+    store = InMemoryDocumentStore()
+    store.save_document(PROGENA_STATE_PREFIX, "workflow_run:a", {"status": "queued"})
+    store.save_document(PROGENA_STATE_PREFIX, "workflow_run:b", {"status": "running"})
+    store.save_document(PROGENA_STATE_PREFIX, "workflow_run:c", {"status": "completed"})
+
+    [(first_key, first)] = store.list_recoverable_workflow_runs(limit=1)
+    [(second_key, second)] = store.list_recoverable_workflow_runs(after_key=first_key, limit=1)
+
+    assert (first_key, first.payload["status"]) == ("workflow_run:a", "queued")
+    assert (second_key, second.payload["status"]) == ("workflow_run:b", "running")
+
+
+def test_in_memory_recovery_queue_page_filters_empty_queues_and_keyset_pages():
+    store = InMemoryDocumentStore()
+    store.save_document(PROGENA_STATE_PREFIX, "workflow_queue:a", {"items": []})
+    store.save_document(PROGENA_STATE_PREFIX, "workflow_queue:b", {"items": [{"event": "one"}]})
+    store.save_document(PROGENA_STATE_PREFIX, "workflow_queue:c", {"items": [{"event": "two"}]})
+    store.save_document(PROGENA_STATE_PREFIX, "workflow_queue:d", {"items": "not an array"})
+
+    [first] = store.list_recoverable_workflow_queue_keys(limit=1)
+    [second] = store.list_recoverable_workflow_queue_keys(after_key=first, limit=1)
+
+    assert first == "workflow_queue:b"
+    assert second == "workflow_queue:c"
 
 
 def test_escape_like_escapes_wildcards():

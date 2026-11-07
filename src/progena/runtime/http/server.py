@@ -247,7 +247,7 @@ class ProgenaHTTPServer:
             )
 
         task_id = str(cast(dict[str, Any], task_payload).get("id") or "").strip()
-        existing = await self.state_manager.get_a2a_task(task_id)
+        existing = await self.state_manager.get_a2a_task(task_id, hydrate_evidence=False)
         agent_name = self._resolve_callback_agent_name(request, payload, existing)
         if not agent_name:
             return web.json_response(

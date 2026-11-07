@@ -34,6 +34,7 @@ from src.backend.storage.documents import (
     get_default_document_store,
     store_database_url,
 )
+from src.progena.a2a.store import A2A_TASK_KEY_PREFIX
 from src.progena.config import default_mcp_config_payload
 from src.progena.documents.content import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
 from src.progena.documents.kinds import (
@@ -597,15 +598,16 @@ class StateReader:
         return self._registry_tools(agents)
 
     def get_a2a_tasks(self) -> list[dict[str, Any]]:
-        """Read Progena's tracked A2A task records (read-through).
-
-        Progena owns the A2A task lifecycle and persists the records to its
-        ``("progena","state","a2a_tasks")`` document; the backend just reads
-        them so the Agents page can show per-agent task history.
-        """
-        document = self.document_store.get_document(PROGENA_STATE_PREFIX, "a2a_tasks", [])
-        doc = document.payload if document is not None else []
-        return [task for task in doc if isinstance(task, dict)] if isinstance(doc, list) else []
+        """Read compact per-record A2A task documents for the Agents page."""
+        rows = self.document_store.list_documents(PROGENA_STATE_PREFIX, A2A_TASK_KEY_PREFIX)
+        tasks: list[dict[str, Any]] = []
+        for key, document in rows:
+            if not isinstance(document.payload, dict):
+                continue
+            task = dict(document.payload)
+            task.setdefault("task_id", key.removeprefix(A2A_TASK_KEY_PREFIX))
+            tasks.append(task)
+        return tasks
 
     def get_acp_tasks(self) -> list[dict[str, Any]]:
         """Read the per-record ACP task documents for the Agents page."""

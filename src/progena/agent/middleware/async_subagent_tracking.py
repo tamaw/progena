@@ -106,7 +106,9 @@ class AsyncSubagentTrackingMiddleware(AgentMiddleware):
 
         result_payload = _extract_check_result_payload(result)
         for task_id, task in tasks.items():
-            existing = await self._state_manager.get_async_subagent_task(task_id)
+            existing = await self._state_manager.get_async_subagent_task(
+                task_id, hydrate_evidence=False
+            )
             if existing is None:
                 continue
             updates: dict[str, Any] = {

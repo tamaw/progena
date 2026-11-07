@@ -22,7 +22,9 @@ class _StateManager:
     async def get_current_state(self) -> dict:
         return {"thread_id": "thread-test", "cycle_count": 3}
 
-    async def get_a2a_task(self, task_id: str) -> A2ATaskRecord | None:
+    async def get_a2a_task(
+        self, task_id: str, *, hydrate_evidence: bool = True
+    ) -> A2ATaskRecord | None:
         return self.tasks.get(task_id)
 
     async def upsert_a2a_task(self, record: A2ATaskRecord) -> None:

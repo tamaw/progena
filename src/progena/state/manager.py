@@ -51,8 +51,6 @@ class StateManager:
 
     CORE_FILES: dict[str, str] = {
         "current_state": "current_state.json",
-        "a2a_tasks": "a2a_tasks.json",
-        "async_subagent_tasks": "async_subagent_tasks.json",
         BACKGROUND_TASKS_DOCUMENT_KEY: f"{BACKGROUND_TASKS_DOCUMENT_KEY}.json",
         "registry": "agents.json",
     }
@@ -149,6 +147,7 @@ class StateManager:
         )
 
         conversation_thread_id = utcnow_isoformat()
+
         defaults = {
             "current_state": {
                 "thread_id": conversation_thread_id,
@@ -162,8 +161,6 @@ class StateManager:
                 "current_input": None,
                 "pending_response": None,
             },
-            "a2a_tasks": [],
-            "async_subagent_tasks": [],
             BACKGROUND_TASKS_DOCUMENT_KEY: [],
             "schedule_runs": [],
             "registry": {},
@@ -186,6 +183,10 @@ class StateManager:
             if name not in self.READ_THROUGH_DOCUMENTS:
                 self._state_cache[name] = payload
         await self._seed_document_types()
+        # Retire legacy task singletons during application initialization so
+        # synchronous backend readers only ever consume compact per-task rows.
+        await self.a2a.get_a2a_tasks()
+        await self.async_subagents.get_async_subagent_tasks()
 
     async def _get_runtime_document(self, name: str) -> Any:
         return await self._document_access.get(name)
@@ -605,8 +606,14 @@ class StateManager:
     async def get_active_a2a_tasks(self) -> list[A2ATaskRecord]:
         return await self.a2a.get_active_a2a_tasks()
 
-    async def get_a2a_task(self, task_id: str) -> A2ATaskRecord | None:
-        return await self.a2a.get_a2a_task(task_id)
+    async def get_a2a_task(
+        self, task_id: str, *, hydrate_evidence: bool = True
+    ) -> A2ATaskRecord | None:
+        return await self.a2a.get_a2a_task(task_id, hydrate_evidence=hydrate_evidence)
+
+    async def get_a2a_task_evidence(self, task_id: str) -> dict[str, Any] | None:
+        """Return a task's full raw A2A payload, including terminal archives."""
+        return await self.a2a.get_a2a_task_evidence(task_id)
 
     async def upsert_a2a_task(self, task: A2ATaskRecord) -> None:
         return await self.a2a.upsert_a2a_task(task)
@@ -646,8 +653,16 @@ class StateManager:
     async def save_async_subagent_tasks(self, tasks: list[AsyncSubagentTaskRecord]) -> None:
         return await self.async_subagents.save_async_subagent_tasks(tasks)
 
-    async def get_async_subagent_task(self, task_id: str) -> AsyncSubagentTaskRecord | None:
-        return await self.async_subagents.get_async_subagent_task(task_id)
+    async def get_async_subagent_task(
+        self, task_id: str, *, hydrate_evidence: bool = True
+    ) -> AsyncSubagentTaskRecord | None:
+        return await self.async_subagents.get_async_subagent_task(
+            task_id, hydrate_evidence=hydrate_evidence
+        )
+
+    async def get_async_subagent_task_evidence(self, task_id: str) -> dict[str, Any] | None:
+        """Return a task's full raw async-subagent run, including archives."""
+        return await self.async_subagents.get_async_subagent_task_evidence(task_id)
 
     async def upsert_async_subagent_task(self, task: AsyncSubagentTaskRecord) -> None:
         return await self.async_subagents.upsert_async_subagent_task(task)

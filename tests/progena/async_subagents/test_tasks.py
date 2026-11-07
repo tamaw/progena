@@ -39,7 +39,7 @@ class FakeStateManager:
     def __init__(self, tasks):
         self._tasks = dict(tasks)
 
-    async def get_async_subagent_task(self, task_id):
+    async def get_async_subagent_task(self, task_id, *, hydrate_evidence=True):
         return self._tasks.get(task_id)
 
     async def update_async_subagent_task(self, task_id, updates):

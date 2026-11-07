@@ -25,6 +25,7 @@ from src.backend.workflows.routine_runs import enqueue_routine_run
 from src.progena.artifacts.contracts import ArtifactValidationError, validate_artifact
 from src.progena.cron import timezone_name
 from src.progena.documents.content import content_document_key
+from src.progena.documents.kinds import WORKFLOW_QUEUE_KEY_PREFIX
 from src.progena.documents.types import DocumentType
 from src.progena.instructions.templates import (
     instruction_relative_path,
@@ -91,6 +92,7 @@ logger = logging.getLogger(__name__)
 # Keep persisted workflow state and every individual node invocation bounded.
 MAX_WORKFLOW_CONTEXT_CHARS = 32_000
 MAX_WORKFLOW_AUDIT_OUTPUT_CHARS = 4_096
+WORKFLOW_STARTUP_RECOVERY_PAGE_SIZE = 50
 
 
 def _bounded_external_value(value: Any, *, limit: int = MAX_WORKFLOW_CONTEXT_CHARS) -> Any:
@@ -1075,32 +1077,91 @@ class WorkflowExecutor:
         self._subscriptions = None
 
     async def recover_startup_runs(self) -> None:
-        """Fail interrupted synchronous runs and resume queued runs after a restart."""
-        store = self._store_getter()
-        by_workflow: dict[str, list[WorkflowRun]] = {}
-        for run in list_workflow_runs(store):
-            by_workflow.setdefault(run.workflow_id, []).append(run)
-        for workflow_id, runs in by_workflow.items():
-            try:
-                await self._recover_workflow_runs(store, workflow_id, runs)
-            except Exception:
-                # One unreadable workflow must not stop the backend from starting.
-                logger.exception("Could not recover runs of workflow %r", workflow_id)
+        """Fail interrupted runs and resume one queued run per workflow after a restart."""
 
-    async def _recover_workflow_runs(
-        self, store: BackendDocumentStore, workflow_id: str, runs: list[WorkflowRun]
-    ) -> None:
-        for run in runs:
-            if run.status == "running" and run.pending_routine is None:
-                self._mark_failed(store, run, error="interrupted by backend restart")
-        refreshed = list_workflow_runs(store, workflow_id=workflow_id)
-        if any(run.status in {"running", "paused"} for run in refreshed):
-            return
-        queued = next((run for run in reversed(refreshed) if run.status == "queued"), None)
-        if queued is not None:
-            self._start_task(workflow_id, queued.run_id)
-        else:
-            await self._maybe_start_next_run_locked(store, workflow_id)
+        store = self._store_getter()
+        after_key: str | None = None
+        active_workflows: set[str] = set()
+        failed_workflows: set[str] = set()
+        queued_runs: dict[str, tuple[tuple[str, str, str], str]] = {}
+        recovered_workflows: dict[str, None] = {}
+
+        while True:
+            rows = await asyncio.to_thread(
+                store.list_recoverable_workflow_runs,
+                after_key=after_key,
+                limit=WORKFLOW_STARTUP_RECOVERY_PAGE_SIZE,
+            )
+            if not rows:
+                break
+
+            for _key, document in rows:
+                try:
+                    run = coerce_workflow_run(_document_payload(document, {}))
+                except Exception:
+                    logger.warning(
+                        "Skipping invalid recoverable workflow run document", exc_info=True
+                    )
+                    continue
+
+                recovered_workflows.setdefault(run.workflow_id, None)
+                if run.status == "running":
+                    if run.pending_routine is not None:
+                        active_workflows.add(run.workflow_id)
+                        continue
+                    try:
+                        failed = await asyncio.to_thread(
+                            self._mark_failed,
+                            store,
+                            run,
+                            error="interrupted by backend restart",
+                            emit_event=False,
+                        )
+                        self._emit_event(
+                            events_contracts.UiEvent.WORKFLOW_RUN_FAILED,
+                            failed.model_dump(mode="json"),
+                        )
+                    except Exception:
+                        failed_workflows.add(run.workflow_id)
+                        # One unreadable workflow must not stop the backend from starting.
+                        logger.exception("Could not recover runs of workflow %r", run.workflow_id)
+                    continue
+
+                if run.status == "queued":
+                    order = (run.updated_at, run.queued_at, run.run_id)
+                    existing = queued_runs.get(run.workflow_id)
+                    if existing is None or order < existing[0]:
+                        queued_runs[run.workflow_id] = (order, run.run_id)
+
+            after_key = rows[-1][0]
+
+        queue_after_key: str | None = None
+        while True:
+            queue_keys = await asyncio.to_thread(
+                store.list_recoverable_workflow_queue_keys,
+                after_key=queue_after_key,
+                limit=WORKFLOW_STARTUP_RECOVERY_PAGE_SIZE,
+            )
+            if not queue_keys:
+                break
+            for queue_key in queue_keys:
+                workflow_id = queue_key.removeprefix(WORKFLOW_QUEUE_KEY_PREFIX)
+                if workflow_id:
+                    recovered_workflows.setdefault(workflow_id, None)
+            queue_after_key = queue_keys[-1]
+
+        for workflow_id in recovered_workflows:
+            try:
+                if workflow_id in failed_workflows or workflow_id in active_workflows:
+                    continue
+                queued = queued_runs.get(workflow_id)
+                if queued is not None:
+                    self._start_task(workflow_id, queued[1])
+                else:
+                    await self._maybe_start_next_run_locked(store, workflow_id)
+            except Exception:
+                # One malformed workflow must not stop the backend from starting.
+                logger.exception("Could not recover runs of workflow %r", workflow_id)
 
     def _subscriptions_for(self, document_type: str) -> list[tuple[str, str, WorkflowNodeEvent]]:
         if self._subscriptions is None:
@@ -2096,22 +2157,31 @@ class WorkflowExecutor:
         workflow_id: str,
     ) -> None:
         async with self._lock_for(workflow_id):
-            definition = get_workflow_definition(store, workflow_id)
-            if definition is None or not definition.enabled or definition.paused:
+            next_run = await asyncio.to_thread(self._claim_next_workflow_run, store, workflow_id)
+            if next_run is None:
                 return
-            queue = get_workflow_queue(store, workflow_id)
-            if not queue:
-                save_workflow_queue(store, workflow_id, [])
-                return
-            now = utcnow_isoformat()
-            next_run = _build_queued_run(workflow_id, queue.pop(0), now=now)
-            save_workflow_run(store, next_run)
-            save_workflow_queue(store, workflow_id, queue)
             # Hand the slot over to the queued run now; otherwise `_start_task()`
             # can see the finishing task still registered and refuse to launch the
             # successor even though this current run is done.
             self._tasks.pop(workflow_id, None)
             asyncio.get_running_loop().call_soon(self._start_task, workflow_id, next_run.run_id)
+
+    def _claim_next_workflow_run(
+        self, store: BackendDocumentStore, workflow_id: str
+    ) -> WorkflowRun | None:
+        """Persist and return the next queued trigger, if this workflow may run."""
+
+        definition = get_workflow_definition(store, workflow_id)
+        if definition is None or not definition.enabled or definition.paused:
+            return None
+        queue = get_workflow_queue(store, workflow_id)
+        if not queue:
+            save_workflow_queue(store, workflow_id, [])
+            return None
+        next_run = _build_queued_run(workflow_id, queue.pop(0), now=utcnow_isoformat())
+        save_workflow_run(store, next_run)
+        save_workflow_queue(store, workflow_id, queue)
+        return next_run
 
     def _mark_failed(
         self,
@@ -2123,6 +2193,7 @@ class WorkflowExecutor:
         audit_status: Literal["failed", "cancelled"] = "failed",
         audit_thread_id: str | None = None,
         clear_pending_routine: bool = False,
+        emit_event: bool = True,
     ) -> WorkflowRun:
         """Fail a run while retaining concurrent lifecycle and audit updates."""
 
@@ -2150,9 +2221,10 @@ class WorkflowExecutor:
             updates["pending_routine"] = None
         failed = persisted.model_copy(update=updates)
         save_workflow_run(store, failed)
-        self._emit_event(
-            events_contracts.UiEvent.WORKFLOW_RUN_FAILED, failed.model_dump(mode="json")
-        )
+        if emit_event:
+            self._emit_event(
+                events_contracts.UiEvent.WORKFLOW_RUN_FAILED, failed.model_dump(mode="json")
+            )
         return failed
 
 

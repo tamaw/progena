@@ -116,7 +116,7 @@ async def refresh_tracked_async_subagent_task(
     task_id: str,
 ) -> AsyncSubagentTaskRecord:
     """Fetch the latest task snapshot from the async-subagent server and persist it."""
-    record = await state_manager.get_async_subagent_task(task_id)
+    record = await state_manager.get_async_subagent_task(task_id, hydrate_evidence=False)
     if record is None:
         raise LookupError(f"Unknown tracked async subagent task: {task_id}")
 
@@ -165,7 +165,7 @@ async def refresh_tracked_async_subagent_task(
             "completed_at": completed_at,
         },
     )
-    refreshed = await state_manager.get_async_subagent_task(task_id)
+    refreshed = await state_manager.get_async_subagent_task(task_id, hydrate_evidence=False)
     if refreshed is None:
         raise LookupError(f"Tracked async subagent task disappeared: {task_id}")
     return cast(AsyncSubagentTaskRecord, refreshed)

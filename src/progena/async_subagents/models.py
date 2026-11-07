@@ -8,8 +8,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.progena.persistence.task_evidence import TaskEvidenceReference
 from src.progena.security.redaction import logger
-from src.progena.utils import utcnow
+from src.progena.utils import normalize_utc_datetime, utcnow
 
 
 class AsyncSubagentTaskStatus(StrEnum):
@@ -50,11 +51,19 @@ class AsyncSubagentTaskRecord(BaseModel):
     latest_message: str | None = None
     last_error: str | None = None
     latest_run: dict[str, Any] | None = None
+    # List and polling readers retain compact immutable-evidence references.
+    # ``get_async_subagent_task`` restores a referenced latest run on demand.
+    evidence_refs: dict[str, TaskEvidenceReference] = Field(default_factory=dict)
     notify_on_completion: bool = True
     notification_sent_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     completed_at: datetime | None = None
+
+    @field_validator("notification_sent_at", "created_at", "updated_at", "completed_at")
+    @classmethod
+    def normalize_timestamps(cls, value: datetime | None) -> datetime | None:
+        return normalize_utc_datetime(value)
 
     @field_validator("status", mode="before")
     @classmethod

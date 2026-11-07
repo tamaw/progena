@@ -104,7 +104,10 @@ async def upsert_tracked_task_from_payload(
     if not task_id:
         raise ValueError("A2A task payload missing id")
 
-    record = cast(A2ATaskRecord | None, await state_manager.get_a2a_task(task_id))
+    record = cast(
+        A2ATaskRecord | None,
+        await state_manager.get_a2a_task(task_id, hydrate_evidence=False),
+    )
     if record is None:
         record = _build_task_record(
             task_id=task_id,
@@ -159,7 +162,8 @@ async def upsert_tracked_task_from_payload(
     if record.is_terminal and record.completed_at is None:
         record.completed_at = record.updated_at
     await state_manager.upsert_a2a_task(record)
-    return cast(A2ATaskRecord, record)
+    persisted = await state_manager.get_a2a_task(task_id, hydrate_evidence=False)
+    return cast(A2ATaskRecord, persisted or record)
 
 
 async def dispatch_tracked_a2a_task(
@@ -271,7 +275,7 @@ async def refresh_tracked_a2a_task(
     timeout: float = 15.0,
 ) -> A2ATaskRecord:
     """Fetch the latest task snapshot from the agent and persist it."""
-    record = await state_manager.get_a2a_task(task_id)
+    record = await state_manager.get_a2a_task(task_id, hydrate_evidence=False)
     if record is None:
         raise LookupError(f"Unknown tracked A2A task: {task_id}")
 
@@ -314,7 +318,7 @@ async def cancel_tracked_a2a_task(
     timeout: float = 15.0,
 ) -> A2ATaskRecord:
     """Cancel a tracked A2A task and persist the returned task snapshot."""
-    record = await state_manager.get_a2a_task(task_id)
+    record = await state_manager.get_a2a_task(task_id, hydrate_evidence=False)
     if record is None:
         raise LookupError(f"Unknown tracked A2A task: {task_id}")
 

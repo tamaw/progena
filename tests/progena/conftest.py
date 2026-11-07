@@ -13,6 +13,7 @@ class _FakeRuntimeStore:
 
     def __init__(self) -> None:
         self._documents: dict[str, Any] = {}
+        self._native_documents: dict[tuple[tuple[str, ...], str], dict[str, Any]] = {}
 
     async def open(self) -> None:
         pass
@@ -33,6 +34,51 @@ class _FakeRuntimeStore:
 
     async def delete_document(self, name: str) -> None:
         self._documents.pop(name, None)
+
+    async def delete_document_if(self, name: str, predicate) -> bool:
+        payload = self._documents.get(name)
+        if payload is None or not predicate(payload):
+            return False
+        del self._documents[name]
+        return True
+
+    async def mutate_document_if_changed(self, name: str, mutation):
+        payload, result = mutation(self._documents.get(name))
+        if payload == self._documents.get(name):
+            return result, False
+        self._documents[name] = payload
+        return result, True
+
+    async def peek_native_document(self, namespace: tuple[str, ...], key: str) -> Any | None:
+        document = self._native_documents.get((namespace, key))
+        return document.get("payload") if document is not None else None
+
+    async def save_immutable_native_document(
+        self,
+        namespace: tuple[str, ...],
+        key: str,
+        payload: Any,
+        *,
+        index: dict[str, Any] | None = None,
+    ) -> None:
+        existing = self._native_documents.get((namespace, key))
+        if existing is not None:
+            if existing.get("payload") != payload:
+                raise ValueError("Immutable native document collision")
+            return
+        self._native_documents[(namespace, key)] = {"payload": payload, **(index or {})}
+
+    async def list_native_documents(
+        self, namespace: tuple[str, ...], *, filter: dict[str, Any] | None = None
+    ) -> list[tuple[str, Any]]:
+        return [
+            (key, document["payload"])
+            for (candidate_namespace, key), document in self._native_documents.items()
+            if candidate_namespace == namespace
+            and (
+                filter is None or all(document.get(name) == value for name, value in filter.items())
+            )
+        ]
 
     async def list_documents(
         self,

@@ -101,6 +101,111 @@ class LangGraphRuntimeStore:
         """Persist one runtime document."""
         await self._store.aput(STATE_NAMESPACE, name, {"payload": payload})
 
+    async def peek_native_document(self, namespace: tuple[str, ...], key: str) -> Any | None:
+        """Read one non-state payload without creating a document."""
+        item = await self._store.aget(namespace, key)
+        return _item_value(item).get("payload") if item is not None else None
+
+    async def save_immutable_native_document(
+        self,
+        namespace: tuple[str, ...],
+        key: str,
+        payload: Any,
+        *,
+        index: dict[str, Any] | None = None,
+    ) -> None:
+        """Create an immutable native payload, accepting only an identical retry."""
+        existing = await self._store.aget(namespace, key)
+        if existing is not None:
+            if _item_value(existing).get("payload") != payload:
+                raise ValueError(f"Immutable native document collision for {namespace!r}/{key!r}")
+            return
+        value = {"payload": payload}
+        if index:
+            value.update(index)
+        await self._store.aput(namespace, key, value)
+
+    async def list_native_documents(
+        self,
+        namespace: tuple[str, ...],
+        *,
+        filter: dict[str, Any] | None = None,
+    ) -> list[tuple[str, Any]]:
+        """List a small native namespace without materializing state documents."""
+        page_size = 100
+        offset = 0
+        rows: list[tuple[str, Any]] = []
+        while True:
+            items = await self._store.asearch(
+                namespace,
+                filter=filter,
+                limit=page_size,
+                offset=offset,
+            )
+            rows.extend(
+                (str(getattr(item, "key", "")), _item_value(item).get("payload")) for item in items
+            )
+            if len(items) < page_size:
+                return rows
+            offset += page_size
+
+    async def mutate_document_if_changed(
+        self,
+        name: str,
+        mutation: Callable[[Any | None], tuple[Any, _T]],
+    ) -> tuple[_T, bool]:
+        """Atomically mutate one state document without rewriting equal payloads."""
+        if getattr(self._store, "conn", None) is None:
+            lock = self._document_locks.get(name)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._document_locks[name] = lock
+            async with lock:
+                current = await self.peek_document(name)
+                payload, result = mutation(current)
+                if payload == current:
+                    return result, False
+                await self.save_document(name, payload)
+                return result, True
+
+        async with (
+            self._native_connection() as connection,
+            connection.transaction(),
+            connection.cursor() as cur,
+        ):
+            await cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (name,),
+            )
+            await cur.execute(
+                """
+                SELECT value->'payload' AS payload
+                FROM store
+                WHERE prefix = 'progena.state' AND key = %s
+                FOR UPDATE
+                """,
+                (name,),
+            )
+            row = await cur.fetchone()
+            current = (
+                row["payload"] if isinstance(row, Mapping) else row[0] if row is not None else None
+            )
+            if isinstance(current, str):
+                current = json.loads(current)
+            payload, result = mutation(current)
+            if payload == current:
+                return result, False
+            await cur.execute(
+                """
+                INSERT INTO store (prefix, key, value)
+                VALUES ('progena.state', %s, jsonb_build_object('payload', %s::jsonb))
+                ON CONFLICT (prefix, key) DO UPDATE
+                SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (name, json.dumps(payload)),
+            )
+            return result, True
+
     async def mutate_document(
         self,
         name: str,
@@ -273,8 +378,54 @@ class LangGraphRuntimeStore:
         return row is not None
 
     async def delete_document(self, name: str) -> None:
-        """Remove one runtime document (no-op if it was never written)."""
+        """Remove one runtime document."""
         await self._store.adelete(STATE_NAMESPACE, name)
+
+    async def delete_document_if(self, name: str, predicate: Callable[[Any], bool]) -> bool:
+        """Delete a state document only while its current payload still matches."""
+        if getattr(self._store, "conn", None) is None:
+            lock = self._document_locks.get(name)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._document_locks[name] = lock
+            async with lock:
+                current = await self.peek_document(name)
+                if current is None or not predicate(current):
+                    return False
+                await self._store.adelete(STATE_NAMESPACE, name)
+                return True
+
+        async with (
+            self._native_connection() as connection,
+            connection.transaction(),
+            connection.cursor() as cur,
+        ):
+            await cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (name,),
+            )
+            await cur.execute(
+                """
+                SELECT value->'payload' AS payload
+                FROM store
+                WHERE prefix = 'progena.state' AND key = %s
+                FOR UPDATE
+                """,
+                (name,),
+            )
+            row = await cur.fetchone()
+            current = (
+                row["payload"] if isinstance(row, Mapping) else row[0] if row is not None else None
+            )
+            if isinstance(current, str):
+                current = json.loads(current)
+            if current is None or not predicate(current):
+                return False
+            await cur.execute(
+                "DELETE FROM store WHERE prefix = 'progena.state' AND key = %s",
+                (name,),
+            )
+            return True
 
     async def list_documents(
         self,
