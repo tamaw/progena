@@ -10,7 +10,7 @@
  *   inFlightRequests  {requestId: {offset, rangeVersion}}
  *   rangeVersion      number; a response from an older version is discarded
  *   loading           boolean
- *   rowDelta          {sequence, index, amount} | null, for scroll compensation
+ *   rowDelta          {sequence, index, amount, end?} | null, for scroll compensation
  * The operations mutate it in place, so call them from reducers (immer drafts).
  */
 
@@ -51,12 +51,18 @@ export function createPositionalListOps(pageSize) {
     cache.rangeVersion += 1;
   }
 
-  /** Record a row insertion/removal so a scrolled pane can keep its place. */
-  function noteRowDelta(cache, index, amount) {
+  /**
+   * Record a positional change so a scrolled pane can keep its place: rows
+   * after `index` (up to and including `end`, when given) moved by `amount`.
+   * An insertion or removal has no `end`; a move from one index to another
+   * shifts only the rows between them.
+   */
+  function noteRowDelta(cache, index, amount, end = null) {
     cache.rowDelta = {
       sequence: (cache.rowDelta?.sequence ?? 0) + 1,
       index,
       amount,
+      end,
     };
   }
 

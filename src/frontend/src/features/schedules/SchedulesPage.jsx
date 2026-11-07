@@ -47,7 +47,7 @@ import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { selectRealtimeConnected } from '../../realtime/realtimeSlice';
 import { selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
 import { selectAgentName, selectPreferences } from '../settings/state/preferences';
-import { fetchChatSessions, selectChatLookupResults, selectChatRowsById } from '../chat/state/chats';
+import { fetchChatSessions, selectChatLookupResults, selectChatPicker, selectChatRowsById } from '../chat/state/chats';
 
 const SCHEDULE_FILTERS = ['All', 'Active', 'Paused', 'Completed'];
 const SCHEDULE_SORTS = ['Type', 'Next', 'Status'];
@@ -304,6 +304,42 @@ function ScheduleRow({ schedule, selected, onSelect, timeZone, chatsById, chatLo
   );
 }
 
+const CHAT_PICKER_LIMIT = 50;
+
+// Destination picker over the server-ordered active chats. It shows one page of
+// the latest search, so it never loads the whole chat list; the search reaches
+// any other chat. The chosen chat stays listed even when outside that page.
+function ChatDestinationField({ value, onChange, disabled, query, onQueryChange, pickerChats, pickerTotal, chatsById }) {
+  const chosen = value && !pickerChats.some((chat) => chat.thread_id === value)
+    ? chatsById.get(value) || { thread_id: value, title: 'Selected chat' }
+    : null;
+  const hidden = Math.max(0, pickerTotal - pickerChats.length);
+  return (
+    <>
+      <input
+        aria-label="Search chat destinations"
+        placeholder="Search chats"
+        value={query}
+        disabled={disabled}
+        onChange={(event) => onQueryChange(event.target.value)}
+      />
+      <select
+        aria-label="Schedule destination"
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">Standalone</option>
+        {chosen ? <option value={chosen.thread_id}>{chosen.title || 'Untitled chat'}</option> : null}
+        {pickerChats.map((chat) => (
+          <option key={chat.thread_id} value={chat.thread_id}>{chat.title || 'Untitled chat'}</option>
+        ))}
+        {hidden ? <option disabled value="__more">{`${hidden} more: search to find them`}</option> : null}
+      </select>
+    </>
+  );
+}
+
 function SchedulesPage() {
   const navigate = useNavigate();
   const dispatch = useDispatch();
@@ -334,9 +370,11 @@ function SchedulesPage() {
   useStreamTopic('schedules');
   const chatRowsById = useSelector(selectChatRowsById);
   const chatLookupResults = useSelector(selectChatLookupResults);
-  const availableChats = useMemo(
-    () => Object.values(chatRowsById).filter((session) => !session.archived),
-    [chatRowsById],
+  const chatPicker = useSelector(selectChatPicker);
+  const [chatPickerQuery, setChatPickerQuery] = useState('');
+  const pickerChats = useMemo(
+    () => chatPicker.ids.map((id) => chatRowsById[id]).filter((chat) => chat && !chat.archived),
+    [chatPicker.ids, chatRowsById],
   );
   const chatsById = useMemo(
     () => new Map(Object.values(chatRowsById).map((session) => [session.thread_id, session])),
@@ -516,17 +554,22 @@ function SchedulesPage() {
   const editingIntent = Boolean(intentDraft.editing);
   const editingTrigger = Boolean(triggerDraft.editing);
   const editingDestination = Boolean(destinationDraft.editing);
-  // The destination picker lists recent chats, fetched only once it is shown.
+  // The destination picker shows one page of recent chats matching its search,
+  // fetched only while it is shown.
   const chatPickerOpen = createOpen || editingDestination;
   useEffect(() => {
-    if (!realtimeConnected || !chatPickerOpen) return;
-    dispatch(fetchChatSessions({
-      chatsUrl: getApiUrl('chats'),
-      view: { q: '', sort: 'recent', filter: 'active' },
-      limit: 200,
-      lookup: true,
-    }));
-  }, [chatPickerOpen, dispatch, getApiUrl, realtimeConnected]);
+    if (!realtimeConnected || !chatPickerOpen) return undefined;
+    const timer = window.setTimeout(() => {
+      dispatch(fetchChatSessions({
+        chatsUrl: getApiUrl('chats'),
+        view: { q: chatPickerQuery.trim(), sort: 'recent', filter: 'active' },
+        limit: CHAT_PICKER_LIMIT,
+        lookup: true,
+        picker: true,
+      }));
+    }, chatPickerQuery ? 250 : 0);
+    return () => window.clearTimeout(timer);
+  }, [chatPickerOpen, chatPickerQuery, dispatch, getApiUrl, realtimeConnected]);
 
   const reportActionFailure = useCallback((operation, result) => {
     if (!result?.ok && result?.error) {
@@ -1121,20 +1164,16 @@ function SchedulesPage() {
                 {editingDestination ? (
                   <label className="sidebar-modal__field">
                     Chat destination
-                    <select
-                      aria-label="Schedule destination"
+                    <ChatDestinationField
                       value={destinationDraft.conversationId}
                       disabled={destinationSaving}
-                      onChange={(event) => setDestinationDraft((current) => ({
-                        ...current,
-                        conversationId: event.target.value,
-                      }))}
-                    >
-                      <option value="">Standalone</option>
-                      {availableChats.map((chat) => (
-                        <option key={chat.thread_id} value={chat.thread_id}>{chat.title || 'Untitled chat'}</option>
-                      ))}
-                    </select>
+                      onChange={(conversationId) => setDestinationDraft((current) => ({ ...current, conversationId }))}
+                      query={chatPickerQuery}
+                      onQueryChange={setChatPickerQuery}
+                      pickerChats={pickerChats}
+                      pickerTotal={chatPicker.total}
+                      chatsById={chatsById}
+                    />
                   </label>
                 ) : (
                   <div className="agents-connection-list">
@@ -1286,17 +1325,16 @@ function SchedulesPage() {
             </label>
             <label className="sidebar-modal__field">
               Chat destination
-              <select
-                aria-label="Schedule destination"
+              <ChatDestinationField
                 value={createDraft.conversationId}
                 disabled={createBusy}
-                onChange={(event) => setCreateDraft((current) => ({ ...current, conversationId: event.target.value }))}
-              >
-                <option value="">Standalone</option>
-                {availableChats.map((chat) => (
-                  <option key={chat.thread_id} value={chat.thread_id}>{chat.title || 'Untitled chat'}</option>
-                ))}
-              </select>
+                onChange={(conversationId) => setCreateDraft((current) => ({ ...current, conversationId }))}
+                query={chatPickerQuery}
+                onQueryChange={setChatPickerQuery}
+                pickerChats={pickerChats}
+                pickerTotal={chatPicker.total}
+                chatsById={chatsById}
+              />
             </label>
             {createFailure ? <InlineFailure failure={createFailure} operation="Create schedule" /> : null}
             <footer className="sidebar-modal__foot">

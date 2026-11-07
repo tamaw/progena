@@ -69,6 +69,17 @@ describe('usePositionalListRange', () => {
     expect(offsets()).toEqual([0]);
   });
 
+  it('asks only for page zero of a new view, not the old scroll position', async () => {
+    await render({ list: freshList({ loadedPages: { 0: true, 50: true } }), streamReady: true });
+    fetchPage.mockClear();
+
+    await render({ list: freshList({ loadedPages: { 0: true, 50: true } }), view: { q: '', sort: 'name' }, streamReady: true });
+    act(() => api(50, 70));
+    expect(offsets()).toEqual([]);
+    act(() => vi.advanceTimersByTime(300));
+    expect(offsets()).toEqual([0]);
+  });
+
   it('requests only the pages a scroll range needs that are neither loaded nor in flight', async () => {
     const list = freshList({
       loadedPages: { 0: true, 10: true },

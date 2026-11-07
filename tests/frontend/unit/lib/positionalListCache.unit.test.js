@@ -56,7 +56,7 @@ describe('positional list cache', () => {
     ops.removeRowAt(list, 0);
 
     expect(list.rowsByIndex).toEqual({ 0: 'c' });
-    expect(list.rowDelta).toEqual({ sequence: 2, index: 0, amount: -1 });
+    expect(list.rowDelta).toEqual({ sequence: 2, index: 0, amount: -1, end: null });
     expect(list.loadedPages).toEqual({});
   });
 

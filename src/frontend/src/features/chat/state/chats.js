@@ -81,6 +81,10 @@ export const initialState = {
     lookupRequestIds: {},
     lookupResults: {},
     sourceTotals: {},
+    // The latest chat-picker search: ordered ids of one server page and the
+    // number of matches, so a picker lists rows in server order without
+    // loading the whole chat list.
+    picker: { requestId: null, ids: [], total: 0 },
     requestedAt: null,
     active: emptyActive(),
     reconciliation: emptyReconciliation(),
@@ -145,6 +149,7 @@ const {
   indexOfRow,
   shiftRows,
   invalidatePagesFrom,
+  noteRowDelta,
   removeRowAt,
   insertRowAt,
   settleInFlightRequest,
@@ -162,10 +167,21 @@ function adjustGroupCount(chats, key, amount) {
   if (group) group.count = Math.max(0, group.count + amount);
 }
 
+// Recent order is pinned first, then newest activity first. Place the row after
+// the last loaded row of its section with newer activity; a row whose true
+// place lies in an unloaded gap lands at the gap's start, which still puts it
+// on the correct side of every loaded (visible) row.
 function insertionIndex(chats, row) {
-  return row.pinned
-    ? 0
-    : (chats.groups.find((group) => group.key === 'pinned')?.count ?? 0);
+  const threadId = threadIdFor(row);
+  const pinned = Boolean(row.pinned);
+  const activity = row.last_activity ?? '';
+  let target = pinned ? 0 : (chats.groups.find((group) => group.key === 'pinned')?.count ?? 0);
+  for (const [key, id] of Object.entries(chats.rowsByIndex)) {
+    const other = chats.byId[id];
+    if (id === threadId || !other || Boolean(other.pinned) !== pinned) continue;
+    if ((other.last_activity ?? '') > activity) target = Math.max(target, Number(key) + 1);
+  }
+  return target;
 }
 
 export function applyChatRowDelta(chats, row) {
@@ -228,6 +244,9 @@ export function applyChatRowDelta(chats, row) {
   shiftRows(chats, target, 1);
   chats.rowsByIndex[target] = threadId;
   invalidatePagesFrom(chats, Math.min(index, target));
+  // Only the rows between the old and new position shift, by one.
+  if (target < index) noteRowDelta(chats, target, 1, index);
+  else if (target > index) noteRowDelta(chats, index, -1, target);
 }
 
 export function deleteChatFromList(chats, threadId) {
@@ -614,6 +633,10 @@ export const eventHandlers = {
         state.chats.lookupResults[threadId] = rows.some((row) => row?.thread_id === threadId);
       }
       if (lookup.source) state.chats.sourceTotals[lookup.source] = Number.isInteger(payload?.total) ? payload.total : 0;
+      if (lookup.picker && state.chats.picker.requestId === requestId) {
+        state.chats.picker.ids = rows.map((row) => row?.thread_id).filter(Boolean);
+        state.chats.picker.total = Number.isInteger(payload?.total) ? payload.total : rows.length;
+      }
       delete state.chats.lookupRequestIds[requestId];
       return;
     }
@@ -698,12 +721,14 @@ export function buildExtraReducers(builder) {
       const {
         offset = 0,
         lookup = false,
+        picker = false,
         threadIds = [],
         source = null,
         view,
       } = action.meta.arg;
       if (lookup) {
-        state.chats.lookupRequestIds[action.meta.requestId] = { threadIds, source };
+        state.chats.lookupRequestIds[action.meta.requestId] = { threadIds, source, picker };
+        if (picker) state.chats.picker.requestId = action.meta.requestId;
         return;
       }
       const nextView = normalizeView(view);
@@ -775,6 +800,7 @@ export const selectChatSessions = createSelector(
 export const selectChatSessionsState = (state) => state.uiData.chats;
 export const selectChatRowsById = (state) => state.uiData.chats.byId;
 export const selectChatLookupResults = (state) => state.uiData.chats.lookupResults;
+export const selectChatPicker = (state) => state.uiData.chats.picker;
 export const selectChatSourceTotals = (state) => state.uiData.chats.sourceTotals;
 export const selectUnreadChatIds = (state) => state.uiData.chatRuntime.unreadChatIds;
 export const selectGeneratingChatIds = (state) => state.uiData.chatRuntime.generatingChatIds;

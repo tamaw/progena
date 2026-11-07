@@ -50,5 +50,6 @@ export function shouldCompensateVirtualScroll({ rowDelta, lastSequence, scrollTo
     && rowDelta.sequence !== lastSequence
     && scrollTop > 0
     && rowDelta.index < rangeStart
+    && (rowDelta.end == null || rangeStart <= rowDelta.end)
   );
 }

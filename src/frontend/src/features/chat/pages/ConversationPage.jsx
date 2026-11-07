@@ -1426,6 +1426,9 @@ function ConversationPage() {
         ? {
           ...backendChatSessionsState.rowDelta,
           index: backendChatSessionsState.rowDelta.index + localCount,
+          end: backendChatSessionsState.rowDelta.end == null
+            ? null
+            : backendChatSessionsState.rowDelta.end + localCount,
         }
         : null,
     };

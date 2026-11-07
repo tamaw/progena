@@ -41,6 +41,9 @@ export default function usePositionalListRange({
     for (let offset = first; offset <= last; offset += pageSize) {
       const inFlight = hasInFlightPage(inFlightRequests, rangeVersion, offset);
       const stale = stalePagesRef.current.has(offset);
+      // A new view (filter, search, sort) starts at page 0; deeper ranges are
+      // the old view's scroll position and wait for the new total.
+      if (!sameListView && offset !== 0) continue;
       if (sameListView && (inFlight || (!force && !stale && loadedPages[offset]))) continue;
       stalePagesRef.current.delete(offset);
       fetchPage({ view, offset, limit: pageSize });

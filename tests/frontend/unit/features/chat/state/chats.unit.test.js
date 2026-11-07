@@ -67,6 +67,26 @@ describe('chat list row updates', () => {
   });
 });
 
+describe('chat picker lookups', () => {
+  it('keeps the latest picker page in server order and ignores an older one', () => {
+    const state = structuredClone(initialState);
+    state.chats.lookupRequestIds = {
+      old: { threadIds: [], source: null, picker: true },
+      latest: { threadIds: [], source: null, picker: true },
+    };
+    state.chats.picker.requestId = 'latest';
+    const loaded = (requestId, ids, total) => eventHandlers[UI_EVENT.CHAT_LIST_LOADED](state, {
+      request_id: requestId, total, rows: ids.map((id) => ({ thread_id: id, title: id })),
+    });
+
+    loaded('latest', ['b', 'a'], 120);
+    loaded('old', ['z'], 1);
+
+    expect(state.chats.picker).toMatchObject({ ids: ['b', 'a'], total: 120 });
+    expect(state.chats.byId.a.title).toBe('a');
+  });
+});
+
 describe('positional chat cache deltas', () => {
   // Row fixtures are dated 2026-11-05 and "today" is read from the clock.
   beforeEach(() => {
@@ -120,6 +140,17 @@ describe('positional chat cache deltas', () => {
 
     expect(chats.rowsByIndex).toEqual({ 0: 'pinned', 1: 'second', 2: 'first' });
     expect(chats.total).toBe(3);
+    // Only the row between the old and new position shifted down by one.
+    expect(chats.rowDelta).toMatchObject({ index: 1, amount: 1, end: 2 });
+  });
+
+  it('places an unpinned row by its activity and records the rows it passed', () => {
+    const chats = cache();
+    chats.byId.pinned.last_activity = '2026-11-05T08:00:00Z';
+    applyChatRowDelta(chats, { ...chats.byId.pinned, pinned: false });
+
+    expect(chats.rowsByIndex).toEqual({ 0: 'first', 1: 'second', 2: 'pinned' });
+    expect(chats.rowDelta).toMatchObject({ index: 0, amount: -1, end: 2 });
   });
 
   it('inserts a recent row at its section boundary and deletes a loaded row without resurrecting it', () => {

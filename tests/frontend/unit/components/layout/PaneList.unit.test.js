@@ -42,4 +42,15 @@ describe('virtual pane layout', () => {
       rowDelta: delta, lastSequence: 4, scrollTop: 200, rangeStart: 10,
     })).toBe(false);
   });
+
+  it('compensates a move only when the viewport starts between its ends', () => {
+    // A row moved from position 40 up to position 2: rows 2..40 shifted down.
+    const move = { sequence: 1, index: 2, amount: 1, end: 40 };
+    const at = (rangeStart) => shouldCompensateVirtualScroll({
+      rowDelta: move, lastSequence: 0, scrollTop: 200, rangeStart,
+    });
+    expect(at(10)).toBe(true);
+    expect(at(40)).toBe(true);
+    expect(at(60)).toBe(false);
+  });
 });
