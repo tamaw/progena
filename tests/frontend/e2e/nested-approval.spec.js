@@ -60,7 +60,7 @@ for (const { answer, firstAnswer } of [{ answer: 'approve' }, { answer: 'decline
       await observeRoutineEvents(page);
       await page.goto(`/routines/${parent.id}`);
       await expect(page.locator('.canvas-node[data-node-id="child_call"]')).toBeVisible({ timeout: 30_000 });
-      const posted = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith(`/${parent.id}/run`));
+      const posted = page.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith(`/${parent.id}/run`));
       await page.getByRole('button', { name: 'Run routine', exact: true }).click();
       const paused = await terminal((await posted).headers()['x-operation-id']);
       expect(paused.status, paused.error).toBe('paused');
@@ -76,7 +76,7 @@ for (const { answer, firstAnswer } of [{ answer: 'approve' }, { answer: 'decline
       await expect(approval).toContainText('Approve the child before the parent continues?');
       let firstDecision;
       if (firstAnswer) {
-        const firstPost = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith(`/${parent.id}/approval`));
+        const firstPost = page.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith(`/${parent.id}/approval`));
         await approval.getByRole('button', { name: 'Approve', exact: true }).click();
         const request = await firstPost;
         firstDecision = request.postDataJSON();
@@ -84,7 +84,7 @@ for (const { answer, firstAnswer } of [{ answer: 'approve' }, { answer: 'decline
         expect(parentRunHistory(paused.thread_id).after_child).toBeUndefined();
         await expect(approval).toContainText('Confirm the second child approval?');
       }
-      const answered = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith(`/${parent.id}/approval`));
+      const answered = page.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith(`/${parent.id}/approval`));
       await approval.getByRole('button', { name: answer === 'approve' ? 'Approve' : 'Decline', exact: true }).click();
       const answerRequest = await answered;
       if (firstDecision) expect(answerRequest.postDataJSON().interrupt_id).not.toBe(firstDecision.interrupt_id);

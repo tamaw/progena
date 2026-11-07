@@ -12,7 +12,7 @@ async function selectNode(page, id) {
   await page.locator(`.canvas-node[data-node-id="${id}"]`).click();
 }
 async function run(page, expected) {
-  const posted = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith(`/${fixture.graph.id}/run`));
+  const posted = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith(`/${fixture.graph.id}/run`));
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
   const requestId = (await posted).headers()['x-operation-id'];
   await expect.poll(() => page.evaluate((id) => window.__routineEvents.find((event) =>

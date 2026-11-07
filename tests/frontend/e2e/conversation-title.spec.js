@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { test, expect } from '@playwright/test';
+import { openApiClient } from '../helpers/apiClient.mjs';
 
 /**
  * A user's first message in a new chat creates its `session` document (Postgres,
@@ -84,6 +85,10 @@ async function sidebarSessionTitle(page, threadId) {
   return sessionsPane.locator(`.chat-session-card[data-thread-id="${threadId}"] .chat-session-card__title`);
 }
 
+let api;
+test.beforeAll(async () => { api = await openApiClient(); });
+test.afterAll(() => api.close());
+
 test.afterEach(async ({ request }) => {
   try {
     await expect.poll(workflowStopped, { timeout: 180_000, intervals: [2000] }).toBe(true);
@@ -92,8 +97,8 @@ test.afterEach(async ({ request }) => {
     const runThreads = runsOf(WORKFLOW_ID).map((run) => run.thread_id).filter(Boolean);
     const threads = [...new Set([session?.thread_id, ...runThreads].filter(Boolean))];
 
-    await request.delete(`/api/ui/workflows/${WORKFLOW_ID}`);
-    if (session) await request.delete(`/api/ui/chats/${session.thread_id}`);
+    await request.delete(api.url(`/api/ui/workflows/${WORKFLOW_ID}`));
+    if (session) await request.delete(api.url(`/api/ui/chats/${session.thread_id}`));
     sql(`delete from store where key like 'workflow_run:%' and value->'payload'->>'workflow_id' = '${WORKFLOW_ID}'`);
     if (threads.length) {
       const list = threads.map((thread) => `'${thread}'`).join(',');
@@ -108,7 +113,7 @@ test('the first message of a new chat triggers a workflow that renames the chat'
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
 
-  const saved = await request.put('/api/ui/workflows/content', { data: { workflow: titleWorkflow() } });
+  const saved = await request.put(api.url('/api/ui/workflows/content'), { data: { workflow: titleWorkflow() } });
   expect(saved.status(), await saved.text()).toBe(202);
   await expect.poll(() => sql(`select count(*) from store where key = 'workflow:${WORKFLOW_ID}'`)).toBe('1');
 

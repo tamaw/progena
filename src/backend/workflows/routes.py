@@ -335,14 +335,24 @@ async def resume_workflow(
 async def get_workflow_runs(
     request: Request,
     client_id: str = Query(min_length=1, max_length=64),
+    workflow_id: str | None = Query(default=None, min_length=1, max_length=200),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=workflows_service.DEFAULT_WORKFLOW_RUN_PAGE, ge=1, le=100),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
-    """Return active and recent workflow runs."""
+    """Return recent workflow runs, or one page of a workflow's run history.
+
+    Without ``workflow_id``: runs from the last hour, every open run, and each
+    workflow's latest run. With it: ``limit`` runs from ``offset``, newest first.
+    """
     events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
-    items = workflows_service.list_workflow_runs(storage_documents.get_default_document_store())
     workflows_runtime.broadcast_workflow_runs_snapshot(
-        items, request_id=request_id, client_id=client_id
+        request_id=request_id,
+        client_id=client_id,
+        workflow_id=workflow_id,
+        offset=offset,
+        limit=limit,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.WORKFLOW_RUNS_SNAPSHOT]

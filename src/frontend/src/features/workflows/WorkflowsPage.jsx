@@ -10,7 +10,7 @@ import { addEdge, applyEdgeChanges, applyNodeChanges, Background, Controls, Mini
 import { useConfig } from '../../context/ConfigContext';
 import { useNotifications } from '../../context/NotificationContext';
 import { selectPreferences } from '../settings/state/preferences';
-import { deleteWorkflow, fetchWorkflowContent, fetchWorkflows, fetchWorkflowRuns, pauseWorkflow, resumeWorkflow, saveWorkflow, selectWorkflowDetailRequest, selectWorkflowDetailByPath, selectWorkflowLatestRunById, selectWorkflowRuns, selectWorkflows, selectWorkflowsState, triggerWorkflow } from './state/workflows';
+import { deleteWorkflow, fetchWorkflowContent, fetchWorkflowRunHistory, fetchWorkflows, fetchWorkflowRuns, pauseWorkflow, resumeWorkflow, saveWorkflow, selectWorkflowDetailRequest, selectWorkflowDetailByPath, selectWorkflowLatestRunById, selectWorkflowRunHistory, selectWorkflowRunHistoryRequest, selectWorkflowRuns, selectWorkflows, selectWorkflowsState, triggerWorkflow } from './state/workflows';
 import { fetchAgentProfiles } from '../agents/state/agents';
 import { fetchDocumentTypes, selectDocumentTypes } from '../documents/state';
 import { fetchInstructions } from '../instructions/state';
@@ -215,10 +215,28 @@ function WorkflowsInner() {
     });
   }, [filter, query, sortMode, workflows]);
 
-  const visibleRuns = useMemo(() => {
-    const workflowId = selectedDetail?.workflow?.id;
-    return workflowRuns.filter((run) => !workflowId || run.workflow_id === workflowId);
-  }, [selectedDetail, workflowRuns]);
+  const runHistory = useSelector((state) => selectWorkflowRunHistory(state, selectedWorkflowId));
+  const runHistoryRequest = useSelector((state) => selectWorkflowRunHistoryRequest(state, selectedWorkflowId));
+  const loadRunHistory = useCallback((offset) => {
+    if (!selectedWorkflowId || runHistoryRequest.loading) return;
+    dispatch(fetchWorkflowRunHistory({ workflowRunsUrl, workflowId: selectedWorkflowId, offset }));
+  }, [dispatch, runHistoryRequest.loading, selectedWorkflowId, workflowRunsUrl]);
+  const loadMoreRuns = useCallback(
+    () => loadRunHistory(runHistory?.items.length || 0),
+    [loadRunHistory, runHistory],
+  );
+  // Run history is paged on demand: only the open Run history panel asks for it,
+  // and it asks again from the top after every reconnect.
+  useEffect(() => {
+    if (activeSidePanel === 'runs' && realtime.streamReady && !runHistory && !runHistoryRequest.error) {
+      loadRunHistory(0);
+    }
+  }, [activeSidePanel, loadRunHistory, realtime.streamReady, runHistory, runHistoryRequest.error]);
+  useStreamResync(() => {
+    if (activeSidePanel === 'runs' && selectedWorkflowId) {
+      dispatch(fetchWorkflowRunHistory({ workflowRunsUrl, workflowId: selectedWorkflowId, offset: 0 }));
+    }
+  });
 
   const updateEditorDraft = useCallback((field, nextValue) => {
     setEditorDraft((current) => {
@@ -1130,8 +1148,12 @@ function WorkflowsInner() {
 
                     {activeSidePanel === 'runs' ? (
                       <WorkflowRunsList
-                        runs={visibleRuns}
-                        loading={workflowsState.runsLoading && !workflowsState.runsLoaded}
+                        runs={runHistory?.items || []}
+                        total={runHistory?.total ?? 0}
+                        loading={!runHistory && runHistoryRequest.loading}
+                        loadingMore={Boolean(runHistory) && runHistoryRequest.loading}
+                        error={runHistoryRequest.error}
+                        onLoadMore={loadMoreRuns}
                         workflowId={selectedDetail?.workflow?.id}
                       />
                     ) : null}

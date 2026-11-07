@@ -5,7 +5,7 @@ import { answerWorkflowRunApproval } from '../state/workflows';
 import { PaneEmptyState } from '../../../components/layout/PaneList';
 import { formatRelativeTime } from './runModel';
 
-export function WorkflowRunsList({ runs, loading, workflowId }) {
+export function WorkflowRunsList({ runs, total = runs.length, loading, loadingMore = false, error = null, onLoadMore, workflowId }) {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const [approvalError, setApprovalError] = useState('');
@@ -66,6 +66,12 @@ export function WorkflowRunsList({ runs, loading, workflowId }) {
           </article>
         );
       })}
+      {error ? <p className="workflow-run-card__error">{error.message || String(error)}</p> : null}
+      {runs.length < total ? (
+        <button type="button" className="node-action-btn" disabled={loadingMore} onClick={onLoadMore}>
+          {loadingMore ? 'Loading…' : `Show more (${runs.length} of ${total})`}
+        </button>
+      ) : null}
     </div>
   );
 }

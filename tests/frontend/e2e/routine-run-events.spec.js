@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { observeRoutineEvents, removeRoutine, seedRoutine } from '../helpers/routineFixture.mjs';
+import { openApiClient } from '../helpers/apiClient.mjs';
 
 // Resume and repair scenarios enqueue two executions. Each can wait behind
 // other live journeys before its millisecond-scale graph execution starts.
@@ -25,15 +26,15 @@ async function lifecycle(page, routineId, status, requestId) {
   { routineId, status, requestId });
 }
 
-test('full run pushes output and global completion without discovery/state polling', async ({ page, context }) => {
+test('full run pushes output and completion to other tabs on Routines without discovery/state polling', async ({ page, context }) => {
   fixture = seedRoutine();
   const background = await context.newPage();
   await observeRoutineEvents(background);
-  await background.goto('/dashboard');
+  await background.goto('/routines');
   await openRoutine(page, fixture);
   const requests = [];
   page.on('request', (request) => { if (/\/(runs|run-state)(\?|$)/.test(request.url())) requests.push(request.url()); });
-  const posted = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith(`/${fixture.id}/run`));
+  const posted = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith(`/${fixture.id}/run`));
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
   const requestId = (await posted).headers()['x-operation-id'];
   await lifecycle(page, fixture.id, 'started', requestId);
@@ -49,7 +50,7 @@ test('full run pushes output and global completion without discovery/state polli
   await background.close();
 });
 
-test('Run to here pauses, leaving unsubscribes, global resume completes, reopening/reconnecting hydrates output', async ({ page }) => {
+test('Run to here pauses, leaving unsubscribes, resume completes on the Routines topic, reopening/reconnecting hydrates output', async ({ page, browser, baseURL }) => {
   await page.clock.install();
   fixture = seedRoutine();
   await openRoutine(page, fixture);
@@ -58,16 +59,24 @@ test('Run to here pauses, leaving unsubscribes, global resume completes, reopeni
   const paused = await lifecycle(page, fixture.id, 'paused');
   await expect(page.locator('.routine-node-inspector__run-output pre')).toHaveText('9', { timeout: 20_000 });
   await expect(page.getByRole('button', { name: 'Run to here', exact: true })).toBeEnabled();
-  const unsubscribe = page.waitForRequest((request) => request.url().endsWith('/run-subscription') && request.postDataJSON()?.subscribed === false);
+  // Another tab on Routines watches the `routines` topic, which the Dashboard does not.
+  const watcherContext = await browser.newContext({ baseURL });
+  const watcher = await watcherContext.newPage();
+  await observeRoutineEvents(watcher);
+  await watcher.goto('/routines');
+  const unsubscribe = page.waitForRequest((request) => new URL(request.url()).pathname.endsWith('/run-subscription') && request.postDataJSON()?.subscribed === false);
   await page.getByRole('link', { name: 'Dashboard', exact: true }).click();
   await unsubscribe;
   await page.evaluate(() => { window.__routineEvents = []; });
   const requestId = crypto.randomUUID();
-  const response = await page.request.post(`/api/ui/agent-profiles/${fixture.id}/run`, {
+  const api = await openApiClient();
+  const response = await page.request.post(api.url(`/api/ui/agent-profiles/${fixture.id}/run`), {
     headers: { 'X-Operation-Id': requestId }, data: { session_id: paused.session_id, parameters: {} },
   });
+  api.close();
   expect(response.status()).toBe(202);
-  await lifecycle(page, fixture.id, 'completed', requestId);
+  await lifecycle(watcher, fixture.id, 'completed', requestId);
+  await watcherContext.close();
   expect(await page.evaluate((id) => window.__routineEvents.filter((e) =>
     e.type === 'agent.routine.run_state.loaded' && e.payload.agent_id === id), fixture.id)).toEqual([]);
   await page.goto(`/routines/${fixture.id}`);
@@ -92,11 +101,11 @@ test('Run to here pauses, leaving unsubscribes, global resume completes, reopeni
   await expect(page.locator('.routine-node-inspector__run-output pre')).toHaveText('10', { timeout: 30_000 });
 });
 
-test('execution error broadcasts globally, clears the indicator, and a repaired retry succeeds', async ({ page, context }) => {
+test('execution error reaches other tabs on Routines, clears the indicator, and a repaired retry succeeds', async ({ page, context }) => {
   fixture = seedRoutine({ failing: true });
   const background = await context.newPage();
   await observeRoutineEvents(background);
-  await background.goto('/dashboard');
+  await background.goto('/routines');
   await openRoutine(page, fixture);
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
   const failed = await lifecycle(page, fixture.id, 'failed');
@@ -113,7 +122,7 @@ test('execution error broadcasts globally, clears the indicator, and a repaired 
   await page.getByRole('button', { name: 'Apply changes' }).click();
   await expect(page.locator('.agents-graph-editor__saved')).toHaveText('Graph saved.', { timeout: 30_000 });
   await page.getByRole('button', { name: 'Collapse JSON editor' }).click();
-  const retryPosted = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith(`/${fixture.id}/run`));
+  const retryPosted = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith(`/${fixture.id}/run`));
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
   const retryId = (await retryPosted).headers()['x-operation-id'];
   expect(retryId).not.toBe(failed.request_id);

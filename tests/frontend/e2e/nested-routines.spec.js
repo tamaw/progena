@@ -13,7 +13,7 @@ async function attachEvidence(testInfo, name, evidence) {
 }
 async function open(page, graph) { await page.goto(`/routines/${graph.id}`); await expect(page.locator(`.canvas-node[data-node-id="${graph.entry}"]`)).toBeVisible({ timeout: 30_000 }); }
 async function run(page, graph, status = 'completed', target) {
-  const posted = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith(`/${graph.id}/run`));
+  const posted = page.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith(`/${graph.id}/run`));
   if (target) { const close = page.getByRole('button', { name: 'Close node details' }); if (await close.isVisible()) await close.click(); await page.locator(`.canvas-node[data-node-id="${target}"]`).click(); await page.getByRole('button', { name: 'Run to here', exact: true }).click(); await page.getByRole('dialog').getByRole('button', { name: 'Run', exact: true }).click(); }
   else await page.getByRole('button', { name: 'Run routine', exact: true }).click();
   const requestId = (await posted).headers()['x-operation-id'];

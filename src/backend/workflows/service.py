@@ -10,7 +10,7 @@ import re
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol
 
 from src.backend.alerts.service import create_alert
@@ -473,6 +473,87 @@ def list_workflow_runs(
         reverse=True,
     )
     return runs
+
+
+# Runs still in flight stay in every recent list however old they are: a run
+# paused for approval days ago must still reach the dashboard's review queue.
+_WORKFLOW_RUN_OPEN_STATUSES = frozenset({"queued", "running", "paused"})
+# Fields no list view reads; ``node_outputs`` alone is most of a run's size.
+WORKFLOW_RUN_LIST_EXCLUDE: dict[str, bool] = {"node_outputs": True, "trigger_event": True}
+DEFAULT_WORKFLOW_RUN_PAGE = 20
+DEFAULT_WORKFLOW_RUN_WINDOW = timedelta(hours=1)
+
+
+def _workflow_run_heads(store: BackendDocumentStore) -> list[dict[str, Any]]:
+    """Stored run payloads newest first, without validating or copying them."""
+
+    rows = store.list_documents(PROGENA_STATE_PREFIX, "workflow_run:")
+    heads = [
+        payload
+        for _key, document in rows
+        if isinstance(payload := _document_payload(document, {}), dict)
+        and payload.get("run_id")
+        and payload.get("workflow_id")
+    ]
+    heads.sort(
+        key=lambda item: (
+            str(item.get("updated_at", "")),
+            str(item.get("queued_at", "")),
+            str(item.get("run_id", "")),
+        ),
+        reverse=True,
+    )
+    return heads
+
+
+def _coerce_workflow_run_heads(heads: list[dict[str, Any]]) -> list[WorkflowRun]:
+    runs: list[WorkflowRun] = []
+    for head in heads:
+        try:
+            runs.append(coerce_workflow_run(head))
+        except Exception:
+            logger.warning("Skipping invalid workflow run document", exc_info=True)
+    return runs
+
+
+def list_recent_workflow_runs(
+    store: BackendDocumentStore,
+    *,
+    window: timedelta = DEFAULT_WORKFLOW_RUN_WINDOW,
+) -> list[WorkflowRun]:
+    """Runs updated within ``window``, every open run, and each workflow's latest run.
+
+    The latest run keeps a quiet workflow's last status visible in the list.
+    Older history is read page by page through ``list_workflow_run_history``.
+    """
+
+    cutoff = utcnow() - window
+    selected: list[dict[str, Any]] = []
+    seen_workflows: set[str] = set()
+    for head in _workflow_run_heads(store):
+        workflow_id = str(head["workflow_id"])
+        first_of_workflow = workflow_id not in seen_workflows
+        seen_workflows.add(workflow_id)
+        try:
+            recent = datetime.fromisoformat(str(head.get("updated_at"))) >= cutoff
+        except ValueError:
+            recent = False
+        if first_of_workflow or recent or head.get("status") in _WORKFLOW_RUN_OPEN_STATUSES:
+            selected.append(head)
+    return _coerce_workflow_run_heads(selected)
+
+
+def list_workflow_run_history(
+    store: BackendDocumentStore,
+    workflow_id: str,
+    *,
+    offset: int = 0,
+    limit: int = 20,
+) -> tuple[list[WorkflowRun], int]:
+    """One page of a workflow's runs, newest first, and the workflow's total."""
+
+    heads = [head for head in _workflow_run_heads(store) if head["workflow_id"] == workflow_id]
+    return _coerce_workflow_run_heads(heads[offset : offset + limit]), len(heads)
 
 
 def get_workflow_run(store: BackendDocumentStore, run_id: str) -> WorkflowRun | None:

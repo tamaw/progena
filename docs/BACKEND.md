@@ -112,6 +112,14 @@ run state, `loops`, `backlog`), and tabs watching the `dashboard` topic then rec
 metrics tick and a full snapshot on each store change. Nothing is computed or sent while no tab is
 on the Dashboard.
 
+Workflow runs are bounded the same way. `GET /api/ui/workflow-runs?client_id=` replies with
+`workflow_runs.snapshot` holding the runs updated in the last hour, every queued, running or paused
+run however old, and each workflow's latest run (so a quiet workflow keeps its last status). With
+`workflow_id=&offset=&limit=` (default 20, at most 100) it replies with one page of that workflow's
+history, newest first, carrying `workflow_id`, `offset` and the workflow's `total`; the Run history
+panel asks for the next page with "Show more". List items omit `node_outputs` and `trigger_event`,
+which no list reads and which were most of a run's size.
+
 ## Canonical replay, reconnect, and resync
 
 The backend retains the most recent **200 broadcast application envelopes** in

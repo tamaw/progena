@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { seedDelegatedRoutine, delegatedCheckpoint } from '../helpers/delegatedRoutineFixture.mjs';
 import { attachJsonEvidence, observeRoutineEvents, removeRoutine } from '../helpers/routineFixture.mjs';
+import { openApiClient } from '../helpers/apiClient.mjs';
 
 test.setTimeout(600_000);
 test.beforeEach(async ({ page }) => { page.setDefaultTimeout(30_000); });
@@ -57,7 +58,7 @@ async function submit(page, graph, token, pause = false) {
     await form.getByRole('button', { name: 'Cancel', exact: true }).click();
   }
   await page.locator('.canvas-node[data-node-id="delegate"]').click();
-  const posted = page.waitForRequest((req) => req.method() === 'POST' && req.url().endsWith(`/${graph.id}/run`));
+  const posted = page.waitForRequest((req) => req.method() === 'POST' && new URL(req.url()).pathname.endsWith(`/${graph.id}/run`));
   await page.getByRole('button', { name: pause ? 'Run to here' : 'Run routine', exact: true }).click();
   if (pause) {
     const confirmation = page.getByRole('dialog', { name: 'This will call a live agent', exact: true });
@@ -82,7 +83,9 @@ async function assertOutput(page, token, version) {
 }
 async function cleanup(page, name, graphs) {
   for (const graph of graphs) removeRoutine(graph.id);
-  await page.request.delete(`/api/ui/agent-profiles/object-${name}`);
+  const api = await openApiClient();
+  await page.request.delete(api.url(`/api/ui/agent-profiles/object-${name}`));
+  api.close();
 }
 
 test('15: new restricted object agent executes, live prompt edit changes rerun output without restart', async ({ page }, testInfo) => {
@@ -130,7 +133,9 @@ test('16: independent delegated conversations isolate private input and same-run
     expect(JSON.stringify(checkpointB.messages)).toContain('PRIVATE-B');
     expect(JSON.stringify(checkpointB.messages)).not.toContain('PRIVATE-A');
     const resumed = randomUUID();
-    const response = await page.request.post(`/api/ui/agent-profiles/${graph.id}/run`, { headers: { 'X-Operation-Id': resumed }, data: { session_id: pausedA.session_id, parameters: { token: 'PRIVATE-A' } } });
+    const api = await openApiClient();
+    const response = await page.request.post(api.url(`/api/ui/agent-profiles/${graph.id}/run`), { headers: { 'X-Operation-Id': resumed }, data: { session_id: pausedA.session_id, parameters: { token: 'PRIVATE-A' } } });
+    api.close();
     expect(response.status(), await response.text()).toBe(202);
     const completedA = await lifecycle(page, graph.id, 'completed', resumed);
     expect(completedA.thread_id).toBe(pausedA.thread_id);

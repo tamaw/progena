@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { observeRoutineEvents, removeRoutine, attachJsonEvidence } from '../helpers/routineFixture.mjs';
+import { openApiClient } from '../helpers/apiClient.mjs';
 import { queryNestedEvidence, parentRunHistory } from '../helpers/nestedRoutineFixture.mjs';
 
 const quote = (value) => `'${value.replaceAll("'", "''")}'`;
@@ -42,7 +43,7 @@ for (const answer of ['approve', 'decline']) {
       await observeRoutineEvents(page);
       await page.goto(`/routines/${id}`);
       await expect(page.locator('.canvas-node[data-node-id="prepare"]')).toBeVisible({ timeout: 30_000 });
-      const runPost = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith(`/${id}/run`));
+      const runPost = page.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith(`/${id}/run`));
       await page.getByRole('button', { name: 'Run routine', exact: true }).click();
       const originalRequest = (await runPost).headers()['x-operation-id'];
       const paused = await lifecycle('paused', originalRequest);
@@ -61,7 +62,7 @@ for (const answer of ['approve', 'decline']) {
       expect(pending?.node_id).toBe('decision');
       const polling = [];
       page.on('request', (r) => { if (/\/(runs|run-state)(\?|$)/.test(r.url())) polling.push(r.url()); });
-      const responsePromise = page.waitForResponse((r) => r.request().method() === 'POST' && r.url().endsWith(`/${id}/approval`));
+      const responsePromise = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith(`/${id}/approval`));
       await approval.getByRole('button', { name: answer === 'approve' ? 'Approve' : 'Decline', exact: true }).click();
       const response = await responsePromise;
       expect(response.status()).toBe(202);
@@ -76,7 +77,9 @@ for (const answer of ['approve', 'decline']) {
       expect(completed.revision_id).toBe(paused.revision_id);
       await expect(approval).toHaveCount(0, { timeout: 30_000 });
       await expect(page.getByRole('button', { name: 'Run routine', exact: true })).toBeEnabled();
-      const stale = await page.request.post(`/api/ui/agent-profiles/${id}/approval`, { data: body });
+      const api = await openApiClient();
+      const stale = await page.request.post(api.url(`/api/ui/agent-profiles/${id}/approval`), { data: body });
+      api.close();
       expect(stale.status()).toBe(409);
       const history = parentRunHistory(paused.thread_id);
       expect(history.prepare).toHaveLength(1);

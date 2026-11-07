@@ -36,6 +36,8 @@ export const initialState = {
     runsLoading: false,
     runsError: null,
     runsRequestId: null,
+    runHistoryById: {},
+    runHistoryRequestById: {},
   },
 };
 
@@ -99,6 +101,8 @@ function removeWorkflow(state, workflowId) {
   state.workflows.items = state.workflows.items.filter((item) => item.id !== workflowId);
   delete state.workflows.detailByPath[workflowPathForId(workflowId)];
   state.workflows.runs = state.workflows.runs.filter((run) => run.workflow_id !== workflowId);
+  delete state.workflows.runHistoryById[workflowId];
+  delete state.workflows.runHistoryRequestById[workflowId];
 }
 
 function sortRuns(runs) {
@@ -112,9 +116,49 @@ function sortRuns(runs) {
   });
 }
 
+// A window snapshot only knows recent runs, so a loaded history keeps its
+// older rows and takes just the runs that are newer than its head.
+function mergeRunIntoHistory(history, run) {
+  const index = history.items.findIndex((item) => item.run_id === run.run_id);
+  if (index >= 0) {
+    history.items[index] = run;
+    return;
+  }
+  const head = history.items[0];
+  const runTime = Date.parse(run.updated_at || run.queued_at || '') || 0;
+  const headTime = head ? Date.parse(head.updated_at || head.queued_at || '') || 0 : 0;
+  if (!head || runTime >= headTime) {
+    history.items.unshift(run);
+    history.total += 1;
+    sortRuns(history.items);
+  }
+}
+
+function applyWorkflowRunHistory(state, payload) {
+  const workflowId = payload.workflow_id;
+  const incoming = Array.isArray(payload.items) ? payload.items : [];
+  const offset = Number.isFinite(payload.offset) ? payload.offset : 0;
+  const current = state.workflows.runHistoryById[workflowId];
+  const kept = offset > 0 && current ? current.items.slice(0, offset) : [];
+  const seen = new Set(kept.map((run) => run.run_id));
+  state.workflows.runHistoryById[workflowId] = {
+    items: [...kept, ...incoming.filter((run) => !seen.has(run.run_id))],
+    total: Number.isFinite(payload.total) ? payload.total : incoming.length,
+  };
+  completeKeyedRequest(state.workflows.runHistoryRequestById, workflowId, payload.request_id);
+}
+
 function applyWorkflowRuns(state, payload) {
+  if (payload.workflow_id) {
+    applyWorkflowRunHistory(state, payload);
+    return;
+  }
   state.workflows.runs = Array.isArray(payload.items) ? [...payload.items] : [];
   sortRuns(state.workflows.runs);
+  for (const run of state.workflows.runs) {
+    const history = state.workflows.runHistoryById[run.workflow_id];
+    if (history) mergeRunIntoHistory(history, run);
+  }
   state.workflows.runsLoaded = true;
   if (!state.workflows.runsLoading || payload.request_id === state.workflows.runsRequestId) {
     state.workflows.runsLoading = false;
@@ -134,6 +178,8 @@ function upsertWorkflowRun(state, run) {
     state.workflows.runs.unshift(run);
   }
   sortRuns(state.workflows.runs);
+  const history = state.workflows.runHistoryById[run.workflow_id];
+  if (history) mergeRunIntoHistory(history, run);
 }
 
 export const fetchWorkflows = createAcknowledgedThunk('uiData/fetchWorkflows', async ({ workflowsUrl }, { requestId }) => (
@@ -176,6 +222,10 @@ export const triggerWorkflow = createAcknowledgedThunk('uiData/triggerWorkflow',
 
 export const fetchWorkflowRuns = createAcknowledgedThunk('uiData/fetchWorkflowRuns', async ({ workflowRunsUrl }, { requestId }) => (
   requestForWorkflow(workflowRunsUrl, {}, requestId)
+));
+// One page of a single workflow's history, newest first. Offset 0 starts over.
+export const fetchWorkflowRunHistory = createAcknowledgedThunk('uiData/fetchWorkflowRunHistory', async ({ workflowRunsUrl, workflowId, offset = 0 }, { requestId }) => (
+  requestForWorkflow(workflowRunsUrl, {}, requestId, { workflow_id: workflowId, offset })
 ));
 export const answerWorkflowRunApproval = createAcknowledgedThunk('uiData/answerWorkflowRunApproval', async ({ workflowsUrl, workflowId, runId, approved }, { requestId }) => (
   requestForWorkflow(
@@ -222,6 +272,11 @@ export function buildExtraReducers(builder) {
     keyFromArgs: ({ path } = {}) => path,
     errorMessage: 'Failed to load workflow detail',
   });
+  addKeyedRequestLifecycle(builder, fetchWorkflowRunHistory, {
+    selectRequests: (state) => state.workflows.runHistoryRequestById,
+    keyFromArgs: ({ workflowId } = {}) => workflowId,
+    errorMessage: 'Failed to load workflow run history',
+  });
   return addRequestLifecycle(builder, fetchWorkflowRuns, {
     select: (state) => state.workflows,
     loadingKey: 'runsLoading',
@@ -234,6 +289,12 @@ export function buildExtraReducers(builder) {
 export const selectWorkflows = (state) => state.uiData.workflows.items;
 export const selectWorkflowsState = (state) => state.uiData.workflows;
 export const selectWorkflowRuns = (state) => state.uiData.workflows.runs;
+export const selectWorkflowRunHistory = (state, workflowId) => (
+  workflowId ? state.uiData.workflows.runHistoryById[workflowId] || null : null
+);
+export const selectWorkflowRunHistoryRequest = (state, workflowId) => (
+  selectKeyedRequest(state.uiData.workflows.runHistoryRequestById, workflowId)
+);
 export const selectWorkflowDetailByPath = (state, path) => (
   path ? state.uiData.workflows.detailByPath[path] || null : null
 );

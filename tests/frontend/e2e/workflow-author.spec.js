@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { test, expect } from '@playwright/test';
+import { openApiClient } from '../helpers/apiClient.mjs';
 
 /**
  * Progena authors workflows from quick chat, then they run end to end:
@@ -88,9 +89,11 @@ function sqlRows(query) {
 // Remove everything the tests created: the quick chats that asked Progena,
 // each workflow with its runs and run threads, and the kanban card (through the
 // card route, so board bookkeeping such as card_order is updated too).
+let api;
+test.beforeAll(async () => { api = await openApiClient(); });
 test.afterAll(async ({ request }) => {
   for (const threadId of quickChatThreadIds) {
-    await request.delete(`/api/ui/chats/${threadId}`);
+    await request.delete(api.url(`/api/ui/chats/${threadId}`));
   }
   const threads = [...quickChatThreadIds];
   // A turn that outlives its test still creates the workflow, after `created`
@@ -102,7 +105,7 @@ test.afterAll(async ({ request }) => {
   }
   for (const id of workflowIds) {
     threads.push(...runsOf(id).map((run) => run.thread_id).filter(Boolean));
-    await request.delete(`/api/ui/workflows/${id}`);
+    await request.delete(api.url(`/api/ui/workflows/${id}`));
     sql(`delete from store where key like 'workflow_run:%' and value->'payload'->>'workflow_id' = '${id}'`);
   }
   if (threads.length) {
@@ -112,8 +115,9 @@ test.afterAll(async ({ request }) => {
     }
   }
   for (const cardId of sqlRows(`select value->'payload'->>'id' from store where key like 'kanban_card:%' and value->'payload'->>'title' like 'pw-card-${RUN}%'`)) {
-    await request.delete(`/api/ui/kanban/cards/${cardId}`);
+    await request.delete(api.url(`/api/ui/kanban/cards/${cardId}`));
   }
+  api.close();
 });
 
 test('Progena builds a cron workflow that runs on demand and on schedule', async ({ page, request }) => {
@@ -144,7 +148,7 @@ test('Progena builds a cron workflow that runs on demand and on schedule', async
   await expect.poll(() => runsOf(workflow.id).some((run) => run.source === 'cron' && run.status === 'completed'),
     { timeout: 240_000, intervals: [3000] }).toBe(true);
   // Stop the every-minute schedule before inspecting.
-  await request.post(`/api/ui/workflows/${workflow.id}/pause`);
+  await request.post(api.url(`/api/ui/workflows/${workflow.id}/pause`));
 
   const scheduled = runsOf(workflow.id).find((run) => run.source === 'cron' && run.status === 'completed');
   // A clock fire is due on a whole minute, and the template saw that exact time.
@@ -174,7 +178,7 @@ test('Progena builds an event workflow that extracts and reports on a new card',
   expect(kinds, JSON.stringify(workflow.graph)).toEqual(expect.arrayContaining(['agent', 'event', 'extract']));
 
   await closeQuickChat(page);
-  const response = await request.post('/api/ui/kanban/cards', { data: { title: CARD_TITLE } });
+  const response = await request.post(api.url('/api/ui/kanban/cards'), { data: { title: CARD_TITLE } });
   expect(response.status()).toBeLessThan(300);
 
   // Only this test's card can trigger the workflow (match on after.title);

@@ -73,7 +73,7 @@ test('J20: approved delegated author persists a classifier; user edits and execu
     stage = 'approval pause'; console.log('J20 setup persisted; running to real human approval');
     await page.goto(`/routines/${parentId}`);
     await expect(page.locator('.canvas-node[data-node-id="approval"]')).toBeVisible();
-    const posted = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith(`/${parentId}/run`));
+    const posted = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith(`/${parentId}/run`));
     await page.getByRole('button', { name: 'Run routine', exact: true }).click();
     const confirmation = page.getByRole('dialog');
     if (await confirmation.isVisible()) await confirmation.getByRole('button', { name: 'Run', exact: true }).click();
@@ -100,7 +100,7 @@ test('J20: approved delegated author persists a classifier; user edits and execu
     await page.getByRole('button', { name: 'Apply changes' }).click();
     await expect(page.locator('.agents-graph-editor__saved')).toHaveText('Graph saved.');
     await page.getByRole('button', { name: 'Collapse JSON editor' }).click();
-    const runPosted = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith(`/${childId}/run`));
+    const runPosted = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith(`/${childId}/run`));
     await page.getByRole('button', { name: 'Run routine', exact: true }).click();
     await page.getByRole('dialog').locator('textarea').fill(JSON.stringify(['What is 2 plus 2?', 'Please open the window.', 'Could you open the window?']));
     await page.getByRole('dialog').getByRole('button', { name: 'Run', exact: true }).click();

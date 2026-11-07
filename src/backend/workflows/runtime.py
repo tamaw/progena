@@ -419,22 +419,46 @@ def broadcast_workflow_runs_snapshot(
     *,
     request_id: str | None = None,
     client_id: str | None = None,
+    workflow_id: str | None = None,
+    offset: int = 0,
+    limit: int = workflows_service.DEFAULT_WORKFLOW_RUN_PAGE,
 ) -> events_contracts.UiEventEnvelope:
-    """Publish the workflow runs list to one requester or watching tabs."""
+    """Publish workflow runs to one requester or the watching tabs.
 
-    if runs is None:
-        runs = workflows_service.list_workflow_runs(storage_documents.get_default_document_store())
-    payload = [item.model_dump(mode="json") for item in runs]
+    Without ``workflow_id`` the snapshot is the recent set (see
+    ``list_recent_workflow_runs``). With it, the snapshot is one page of that
+    workflow's history starting at ``offset``, with the workflow's ``total``.
+    """
+
+    store = storage_documents.get_default_document_store()
+    extra: dict[str, Any] = {}
+    if workflow_id is not None:
+        if runs is None:
+            runs, total = workflows_service.list_workflow_run_history(
+                store, workflow_id, offset=offset, limit=limit
+            )
+        else:
+            total = len(runs)
+        extra = {"workflow_id": workflow_id, "offset": offset, "total": total}
+    elif runs is None:
+        runs = workflows_service.list_recent_workflow_runs(store)
+    payload = {
+        "items": [
+            item.model_dump(mode="json", exclude=workflows_service.WORKFLOW_RUN_LIST_EXCLUDE)
+            for item in runs
+        ],
+        **extra,
+    }
     if client_id:
         return events_stream.broadcast_ui_event(
             events_contracts.UiEvent.WORKFLOW_RUNS_SNAPSHOT,
-            {"items": payload},
+            payload,
             request_id=request_id,
             client_id=client_id,
         )
     return events_stream.broadcast_ui_event(
         events_contracts.UiEvent.WORKFLOW_RUNS_SNAPSHOT,
-        {"items": payload},
+        payload,
         request_id=request_id,
         topic=WORKFLOWS_TOPIC,
     )

@@ -15,7 +15,7 @@ async function lifecycle(page, requestId, status) {
   return event.payload;
 }
 async function run(page, status) {
-  const posted = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith(`/${fixture.id}/run`));
+  const posted = page.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith(`/${fixture.id}/run`));
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
   return lifecycle(page, (await posted).headers()['x-operation-id'], status);
 }
@@ -66,7 +66,7 @@ test('Approval resume retains the recorded policy after the shared policy change
   await page.locator('.canvas-node[data-node-id="decision"]').click();
   const approval = page.getByRole('region', { name: 'Pending approval' });
   await expect(approval.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled();
-  const posted = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith(`/${fixture.id}/approval`));
+  const posted = page.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith(`/${fixture.id}/approval`));
   await approval.getByRole('button', { name: 'Approve', exact: true }).click();
   const completed = await lifecycle(page, (await posted).headers()['x-operation-id'], 'completed');
   expect(completed.policy.revision_id).toBe(paused.policy.revision_id); expect(completed.policy.values.graph_step_limit).toBe(20);

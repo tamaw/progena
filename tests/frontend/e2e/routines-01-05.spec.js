@@ -241,7 +241,7 @@ test('03 creates and edits the three-input classifier rubric', async ({ page }, 
     const dialog = page.getByRole('dialog', { name: 'Set parameters' });
     await expect(dialog).toBeVisible();
     await dialog.locator('textarea').fill(JSON.stringify(texts));
-    const posted = page.waitForRequest((request) => request.method() === 'POST' && /\/agent-profiles\/[^/]+\/run$/.test(request.url()));
+    const posted = page.waitForRequest((request) => request.method() === 'POST' && /\/agent-profiles\/[^/]+\/run$/.test(new URL(request.url()).pathname));
     await dialog.getByRole('button', { name: 'Run', exact: true }).click();
     const requestId = (await posted).headers()['x-operation-id'];
     let terminal;

@@ -180,9 +180,11 @@ curl http://127.0.0.1:8000/healthz
 curl http://127.0.0.1:5173/
 ```
 
-Check the Vite-to-backend proxy with
-`curl http://127.0.0.1:5173/api/ui/agent-profiles` (HTTP `202` acknowledgement),
-and `curl -N http://127.0.0.1:5173/api/ui/stream` (`connection.ready` event).
+Check the Vite-to-backend proxy by opening a stream with
+`curl -N "http://127.0.0.1:5173/api/ui/stream?client_id=probe"` (`connection.ready`
+event), then in another shell `curl "http://127.0.0.1:5173/api/ui/agent-profiles?client_id=probe"`
+(HTTP `202` acknowledgement; the reply arrives on that stream). Finite routes need a
+`client_id` with an open stream: `422` without one, `409` without a stream.
 The old `/v1/session` endpoint is not a current startup probe.
 
 Bundled object agents are read-only files under `data/agents/objects/`, not

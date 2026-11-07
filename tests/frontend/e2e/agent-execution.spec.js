@@ -18,7 +18,7 @@ async function lifecycle(page, status, requestId) {
   { status, requestId });
 }
 async function run(page) {
-  const posted = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith(`/${fixture.graph.id}/run`));
+  const posted = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith(`/${fixture.graph.id}/run`));
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
   return (await posted).headers()['x-operation-id'];
 }

@@ -32,7 +32,7 @@ async function chat(page, text) {
   return reply;
 }
 async function run(page, graph, status) {
-  const posted = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith(`/${graph.id}/run`));
+  const posted = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith(`/${graph.id}/run`));
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
   const dialog = page.getByRole('dialog'); if (await dialog.isVisible()) await dialog.getByRole('button', { name: 'Run', exact: true }).click();
   const requestId = (await posted).headers()['x-operation-id'];
