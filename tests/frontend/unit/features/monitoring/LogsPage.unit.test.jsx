@@ -5,7 +5,7 @@ import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import realtimeReducer, { realtimeConnected } from '@frontend/realtime/realtimeSlice';
+import realtimeReducer, { realtimeConnected, realtimeStreamReady } from '@frontend/realtime/realtimeSlice';
 import uiDataReducer from '@frontend/store/uiDataSlice';
 import LogsPage from '@frontend/features/monitoring/LogsPage';
 
@@ -46,6 +46,7 @@ afterEach(async () => {
 async function renderLogs(url) {
   const store = configureStore({ reducer: { realtime: realtimeReducer, uiData: uiDataReducer } });
   store.dispatch(realtimeConnected());
+  store.dispatch(realtimeStreamReady());
   await act(async () => root.render(
     <Provider store={store}>
       <MemoryRouter initialEntries={[url]}>
@@ -56,6 +57,11 @@ async function renderLogs(url) {
   ));
   return api.getLogs.mock.calls.at(-1)[0];
 }
+
+it('sends the selected level to the backend query', async () => {
+  const query = await renderLogs('/logs?level=error');
+  expect(query.level).toBe('error');
+});
 
 it.each([[2026, 10, 4], [2026, 4, 5], [2028, 2, 29], [2026, 12, 31]])(
   'queries the whole browser-local day %i-%i-%i, including DST boundaries',

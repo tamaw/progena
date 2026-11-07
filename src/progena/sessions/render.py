@@ -1,4 +1,4 @@
-"""Render a thread's transcript and merge it into the session document."""
+"""Render a thread's transcript and preview and merge them into the session document."""
 
 from __future__ import annotations
 
@@ -8,23 +8,38 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from langchain_core.messages import AIMessage, HumanMessage
+
 from src.progena.settings.preferences import agent_display_name
 
-from .history import load_conversation
-from .titles import DEFAULT_USER_NICK, display_title
+from .history import Conversation, load_conversation
+from .messages import extract_message_text
+from .status import SessionTurnStatus
+from .titles import DEFAULT_USER_NICK, display_title, session_preview
 from .transcript import format_log, render_transcript
 
 logger = logging.getLogger(__name__)
 
 
-async def render_session_content(
+def latest_message_preview(conversation: Conversation) -> str:
+    """The newest non-empty user or assistant message of the root thread, as ``preview``."""
+    for message in reversed(conversation.root.messages):
+        if not isinstance(message, HumanMessage | AIMessage):
+            continue
+        preview = session_preview(extract_message_text(message) or "")
+        if preview:
+            return preview
+    return ""
+
+
+async def render_session_fields(
     checkpointer: Any,
     thread_id: str,
     *,
     title: str,
     preferences: dict[str, Any],
-) -> str | None:
-    """The thread's IRC-style transcript as stored in ``content``; ``None`` if it has no lines."""
+) -> dict[str, str] | None:
+    """The thread's IRC-style ``content`` and list ``preview``; ``None`` if it has no lines."""
     conversation = await load_conversation(checkpointer, thread_id)
     if conversation is None:
         return None
@@ -44,7 +59,7 @@ async def render_session_content(
     )
     if not transcript.lines:
         return None
-    return format_log(
+    content = format_log(
         transcript,
         channel=channel,
         user_nick=nick,
@@ -53,6 +68,30 @@ async def render_session_content(
         tz=tz,
         tz_name=tz_name,
     )
+    return {"content": content, "preview": latest_message_preview(conversation)}
+
+
+async def record_session_turn_terminal(
+    thread_id: str, state_manager: Any, status: SessionTurnStatus
+) -> None:
+    """Persist terminal flags without loading stale session fields into a merge."""
+    try:
+        merged = await state_manager.record_session_turn_terminal(thread_id, status)
+        if not merged:
+            logger.debug("Session %s not found for terminal status", thread_id)
+    except Exception:
+        logger.warning("Session status merge failed for %s", thread_id, exc_info=True)
+
+
+async def finalize_session_turn(
+    thread_id: str,
+    status: SessionTurnStatus,
+    checkpointer: Any,
+    state_manager: Any,
+) -> None:
+    """Persist terminal flags before publishing the re-rendered session document."""
+    await record_session_turn_terminal(thread_id, state_manager, status)
+    await merge_session_after_turn(thread_id, checkpointer, state_manager)
 
 
 async def merge_session_after_turn(
@@ -60,7 +99,7 @@ async def merge_session_after_turn(
     checkpointer: Any,
     state_manager: Any,
 ) -> None:
-    """Re-render the thread and atomically merge ``content``/``last_activity`` into the session row.
+    """Re-render the thread and atomically merge ``content``/``preview``/``last_activity``.
 
     Fire-and-forget: exceptions are logged, never raised.
     """
@@ -68,17 +107,17 @@ async def merge_session_after_turn(
         session = await state_manager.get_session(thread_id)
         if session is None:
             return
-        content = await render_session_content(
+        fields = await render_session_fields(
             checkpointer,
             thread_id,
             title=session["title"],
             preferences=await state_manager.get_preferences_config(),
         )
-        if content is None:
+        if fields is None:
             return
         merged = await state_manager.merge_session(
             thread_id,
-            {"content": content, "last_activity": datetime.now(UTC).isoformat()},
+            {**fields, "last_activity": datetime.now(UTC).isoformat()},
         )
         if not merged:
             logger.debug("Session %s not found for merge", thread_id)

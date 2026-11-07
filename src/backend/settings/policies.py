@@ -6,10 +6,11 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 import src.backend.http.contracts as http_contracts
 from src.backend.events import contracts as events_contracts
+from src.backend.events.stream import require_ui_stream_client
 from src.backend.http.requests import BroadcastUiEvent, request_correlation_id
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
 from src.progena.settings.policies import POLICY_KEY_PREFIX, validate_policy
@@ -28,18 +29,30 @@ def create_policy_router(
     router = APIRouter()
 
     @router.get("/policies", status_code=202)
-    async def list_policies(request: Request):
+    async def list_policies(
+        request: Request,
+        client_id: str = Query(..., min_length=1, max_length=64),
+    ):
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         items = await asyncio.to_thread(policy_catalog, get_store())
         broadcast(
-            events_contracts.UiEvent.POLICIES_SNAPSHOT, {"items": items}, request_id=request_id
+            events_contracts.UiEvent.POLICIES_SNAPSHOT,
+            {"items": items},
+            request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.POLICIES_SNAPSHOT]
         )
 
     @router.put("/policies/{policy_id}", status_code=202)
-    async def save_policy(policy_id: str, request: Request):
+    async def save_policy(
+        policy_id: str,
+        request: Request,
+        client_id: str = Query(..., min_length=1, max_length=64),
+    ):
+        require_ui_stream_client(client_id)
         try:
             policy = validate_policy(await request.json())
             if policy.id != policy_id:
@@ -58,6 +71,7 @@ def create_policy_router(
             events_contracts.UiEvent.POLICIES_SNAPSHOT,
             {"items": await asyncio.to_thread(policy_catalog, store)},
             request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.POLICIES_SNAPSHOT]

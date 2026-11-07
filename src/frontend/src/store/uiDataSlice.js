@@ -55,48 +55,14 @@ const domainReducers = domains.reduce(
   {},
 );
 
-// Nav "unseen activity" tracking: cross-cutting (spans every domain's events),
-// so it lives here rather than in one domain module - a domain-owned entry
-// here would collide with that event type's real handler in the merged
-// `eventHandlers` map above. Maps a realtime event type to the nav route that
-// owns it; only pages with a real live-update signal are tracked (Chat/Inbox
-// already have their own precise unread tracking).
-const NAV_ACTIVITY_EVENT_ROUTES = {
-  [UI_EVENT.WIDGETS_UPDATED]: '/dashboard',
-  [UI_EVENT.KANBAN_SNAPSHOT]: '/tasks',
-  [UI_EVENT.TASK_CONTENT_UPDATED]: '/tasks',
-  [UI_EVENT.TASK_ACTIVITY_UPDATED]: '/tasks',
-  [UI_EVENT.AGENTS_SNAPSHOT]: '/agents',
-  [UI_EVENT.INSTRUCTIONS_SNAPSHOT]: '/instructions',
-  [UI_EVENT.AGENT_UPSERTED]: '/agents',
-  'agent.routine.run.started': '/routines',
-  'agent.routine.run.completed': '/routines',
-  'agent.routine.run.failed': '/routines',
-  [UI_EVENT.PLUGINS_SNAPSHOT]: '/plugins',
-  [UI_EVENT.MCP_SNAPSHOT]: '/tools',
-  [UI_EVENT.KNOWLEDGE_SNAPSHOT]: '/knowledge',
-  [UI_EVENT.SCHEDULE_SNAPSHOT]: '/schedules',
-  [UI_EVENT.WORKFLOWS_SNAPSHOT]: '/workflows',
-  [UI_EVENT.WORKFLOW_UPDATED]: '/workflows',
-  [UI_EVENT.WORKFLOW_DELETED]: '/workflows',
-  [UI_EVENT.WORKFLOW_RUNS_SNAPSHOT]: '/workflows',
-  [UI_EVENT.WORKFLOW_RUN_STARTED]: '/workflows',
-  [UI_EVENT.WORKFLOW_RUN_UPDATED]: '/workflows',
-  [UI_EVENT.WORKFLOW_RUN_COMPLETED]: '/workflows',
-  [UI_EVENT.WORKFLOW_RUN_FAILED]: '/workflows',
-  [UI_EVENT.REPOSITORIES_SNAPSHOT]: '/repositories',
-  [UI_EVENT.PROFILES_SNAPSHOT]: '/profiles',
-  [UI_EVENT.CANVASES_SNAPSHOT]: '/canvases',
-  [UI_EVENT.RUN_UPDATED]: '/runs',
-  [UI_EVENT.RUN_DELETED]: '/runs',
-};
+// Nav "unseen activity" tracking: the backend emits a global, route-only
+// `nav.activity` when a domain event that is not a reply to one tab occurs
+// (backend `NAV_ACTIVITY_ROUTES`). The domain event itself reaches only the
+// tabs on that page. Chat and Inbox have their own precise unread tracking.
 
 const navActivityInitialState = {
   navActivity: {
     activeRoute: null,
-    // A route's first-ever event this session is its baseline (e.g. the
-    // initial snapshot burst on connect, or a page's own first fetch) rather
-    // than "new" activity; only later events light the dot.
     seenBaselineRoutes: {},
     unseenRoutes: {},
   },
@@ -109,19 +75,15 @@ const uiDataSlice = createSlice({
     ...domainReducers,
     applyUiEvent(state, action) {
       const event = action.payload;
-      // Reconnect and other tabs hydrate this shared catalogue globally.
-      // Identical snapshots are not new profile activity.
-      const profileChanged = event?.type !== UI_EVENT.PROFILES_SNAPSHOT
-        || JSON.stringify(state.modelProfiles.profiles) !== JSON.stringify(event?.payload?.profiles || []);
       for (const handler of eventHandlers.get(event?.type) || []) {
         handler(state, event?.payload || {}, event);
       }
-      const route = NAV_ACTIVITY_EVENT_ROUTES[event?.type];
-      if (route) {
-        if (!state.navActivity.seenBaselineRoutes[route]) {
-          state.navActivity.seenBaselineRoutes[route] = true;
-        } else if (state.navActivity.activeRoute !== route && profileChanged) {
-          state.navActivity.unseenRoutes[route] = true;
+      if (event?.type === UI_EVENT.NAV_ACTIVITY) {
+        const route = event.payload?.route;
+        if (route) {
+          if (state.navActivity.activeRoute !== route) {
+            state.navActivity.unseenRoutes[route] = true;
+          }
         }
       }
     },

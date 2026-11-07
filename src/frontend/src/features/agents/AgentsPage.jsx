@@ -8,15 +8,14 @@ import PopupModal from '../../components/PopupModal';
 import Modal from '../../components/Modal';
 import useEntityDraft from '../../hooks/useEntityDraft';
 import useAgentCatalogue from './useAgentCatalogue';
+import useStreamTopic from '../../hooks/useStreamTopic';
 import useConfirmAction from '../../hooks/useConfirmAction';
-import { createUuid } from '../../lib/uuid';
-import { requestAcknowledged } from '../../store/http';
+import { createObjectAgentProfile, deleteAgentProfile, updateObjectAgentProfile } from './state/agents';
 import {
   draftChanged,
   draftDiscarded,
   entityDraftKey,
 } from '../../store/editorDraftsSlice';
-import { deleteAgentProfile, updateObjectAgentProfile } from './state/agents';
 import {
   PaneEmptyState,
   PaneList,
@@ -226,6 +225,7 @@ export default function AgentsPage() {
         (event) => event.type === UI_EVENT.AGENTS_SNAPSHOT,
       )
   ));
+  useStreamTopic('agents');
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const deleteAction = useConfirmAction(effectiveAgentId);
@@ -287,25 +287,24 @@ export default function AgentsPage() {
     const ticket = beginCreateDraftSave();
     if (!ticket) return;
     const list = (value) => value.split(',').map((item) => item.trim()).filter(Boolean);
-    const requestId = createUuid();
+    const action = dispatch(createObjectAgentProfile({
+      agentsUrl,
+      manifest: {
+        name: draftAgent.name,
+        description: draftAgent.summary,
+        version: draftAgent.version,
+        model: draftAgent.model || null,
+        system_prompt: draftAgent.prompt,
+        tools: list(draftAgent.tools),
+        skills: list(draftAgent.skills),
+      },
+    }));
     trackCreateDraftSave(ticket, {
-      requestId,
+      requestId: action.requestId,
       events: [UI_EVENT.AGENTS_SNAPSHOT],
     });
     try {
-      await requestAcknowledged(`${agentsUrl}/object`, {
-        method: 'POST',
-        body: {
-          name: draftAgent.name,
-          description: draftAgent.summary,
-          version: draftAgent.version,
-          model: draftAgent.model || null,
-          system_prompt: draftAgent.prompt,
-          tools: list(draftAgent.tools),
-          skills: list(draftAgent.skills),
-        },
-        requestId,
-      });
+      await action.unwrap();
     } catch (error) {
       failCreateDraftSave(ticket, error);
     }
@@ -313,6 +312,7 @@ export default function AgentsPage() {
     agentsUrl,
     beginCreateDraftSave,
     createDraftSaving,
+    dispatch,
     draftAgent,
     failCreateDraftSave,
     trackCreateDraftSave,

@@ -3,7 +3,8 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useConfig } from '../../context/ConfigContext';
 import { failureMessage } from '../../lib/failures';
-import { selectRealtimeConnected, selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
+import useStreamResync from '../../hooks/useStreamResync';
+import { selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
 import { fetchAgentProfiles, requestAgentDetail, selectActiveAgentProfile, selectActiveAgentProfileState, selectAgentProfiles, selectAgentProfilesState } from './state/agents';
 
 const CATALOGUE_KIND = {
@@ -21,13 +22,13 @@ export default function useAgentCatalogue({ kind, routeBase, detailSuffix = '' }
   const { agentId: routeAgentId } = useParams();
   const { getApiUrl } = useConfig();
   const agentsUrl = getApiUrl('agentProfiles');
-  const realtimeConnected = useSelector(selectRealtimeConnected);
   const streamReady = useSelector(selectRealtimeStreamReady);
   const fetchedAgents = useSelector(selectAgentProfiles);
   const agentsState = useSelector(selectAgentProfilesState);
   const activeAgent = useSelector(selectActiveAgentProfile);
   const activeAgentState = useSelector(selectActiveAgentProfileState);
   const requestedListRef = useRef(null);
+  const selectedRowMarkerRef = useRef(null);
 
   const agents = useMemo(() => fetchedAgents.filter(CATALOGUE_KIND[kind]), [fetchedAgents, kind]);
   const selectedAgentId = routeAgentId ?? null;
@@ -35,19 +36,22 @@ export default function useAgentCatalogue({ kind, routeBase, detailSuffix = '' }
   const makePath = useCallback((id) => `${routeBase}/${encodeURIComponent(id)}${detailSuffix}`, [detailSuffix, routeBase]);
 
   const loadRoster = useCallback((retry = false) => {
-    if (!realtimeConnected) return;
+    if (!streamReady) return;
     if (!retry && requestedListRef.current === agentsUrl) return;
     requestedListRef.current = agentsUrl;
     dispatch(fetchAgentProfiles({ agentsUrl }));
-  }, [agentsUrl, dispatch, realtimeConnected]);
+  }, [agentsUrl, dispatch, streamReady]);
 
   useEffect(() => {
-    if (!realtimeConnected) {
+    if (!streamReady) {
       requestedListRef.current = null;
       return;
     }
+    // Topic snapshots are tab-scoped and not replayed. Every catalogue mount
+    // therefore requests the current roster, while the URL ref deduplicates
+    // renders during this live-stream session.
     loadRoster();
-  }, [loadRoster, realtimeConnected]);
+  }, [agentsUrl, loadRoster, streamReady]);
 
   const selectAgent = useCallback((id, { replace = false } = {}) => {
     navigate(makePath(id), { replace });
@@ -64,6 +68,12 @@ export default function useAgentCatalogue({ kind, routeBase, detailSuffix = '' }
     dispatch(requestAgentDetail({ agentsUrl, agentId: effectiveAgentId }));
   }, [agentsUrl, dispatch, effectiveAgentId, streamReady]);
 
+  // The stream is ready when this runs, but this render's `streamReady` may
+  // still be false, so the resync does not go through `loadDetail`'s gate.
+  useStreamResync(() => {
+    if (effectiveAgentId) dispatch(requestAgentDetail({ agentsUrl, agentId: effectiveAgentId }));
+  });
+
   useEffect(() => {
     if (!effectiveAgentId || !streamReady || activeAgent?.id === effectiveAgentId) return;
     loadDetail();
@@ -73,6 +83,16 @@ export default function useAgentCatalogue({ kind, routeBase, detailSuffix = '' }
     () => agents.find((agent) => agent.id === effectiveAgentId) || null,
     [agents, effectiveAgentId],
   );
+
+  // Roster snapshots only carry summary fields. When the selected row's
+  // durable update marker changes, refresh its rich detail as well.
+  useEffect(() => {
+    const marker = listAgent?.updated ?? null;
+    if (marker && selectedRowMarkerRef.current && marker !== selectedRowMarkerRef.current) {
+      loadDetail();
+    }
+    selectedRowMarkerRef.current = marker;
+  }, [listAgent?.updated, loadDetail]);
   // A detail failure belongs only to the requested route identity. The roster
   // remains usable, and callers can render the cached row beside the retry.
   const detailFailure = activeAgentState.error && activeAgentState.agentId === effectiveAgentId

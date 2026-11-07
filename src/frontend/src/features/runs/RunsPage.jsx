@@ -14,6 +14,7 @@ import { runSummarySource, traceBounds } from './timelineModel';
 import RunTooltip from './RunTooltip';
 import { appendOlderPageRows, mergeRunPages } from './pageModel';
 import { subscribeUiEvent } from '../../realtime/realtimeEvents';
+import useStreamTopic from '../../hooks/useStreamTopic';
 import VirtualizedRunRows from './VirtualizedRunRows';
 
 const STATUS_OPTIONS = [{ value: '', label: 'All statuses' }, ...RUN_STATUSES.map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1) }))];
@@ -101,6 +102,7 @@ function SortHeader({ label, active, ascending, onClick }) {
 }
 
 export default function RunsPage() {
+  useStreamTopic('runs');
   const { getApiUrl } = useConfig();
   const [searchParams, setSearchParams] = useSearchParams();
   const rootRef = useRef(null);

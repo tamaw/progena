@@ -8,6 +8,7 @@ import useEntityDraft from '../../hooks/useEntityDraft';
 import InlineFailure from '../../components/InlineFailure';
 import PopupModal from '../../components/PopupModal';
 import useAgentCatalogue from '../agents/useAgentCatalogue';
+import useStreamTopic from '../../hooks/useStreamTopic';
 import useConfirmAction from '../../hooks/useConfirmAction';
 import { deleteAgentProfile, selectRoutineLatestRunStatusByAgentId, updateAgentGraph } from '../agents/state/agents';
 import {
@@ -63,6 +64,8 @@ function RoutineRow({ routine, selected, onSelect, runStatus }) {
 }
 
 export default function RoutinesPage() {
+  useStreamTopic('agents');
+  useStreamTopic('routines');
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const {

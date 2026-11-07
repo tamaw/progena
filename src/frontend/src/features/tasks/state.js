@@ -1,10 +1,21 @@
 import { UI_EVENT } from '../../realtime/eventVocabulary';
 /**
  * Tasks domain: the kanban board plus per-card brief content and activity logs,
- * kept live by `kanban.snapshot` / `task.content.updated` / `task.activity.updated`
+ * kept live by `tasks.snapshot` / `task.content.updated` / `task.activity.updated`
  * events on /api/ui/stream.
  */
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle, addKeyedRequestLifecycle, completeKeyedRequest, selectKeyedRequest } from '../../store/async';
+import { withQuery } from '../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
+
+async function requestForTasks(url, options, requestId) {
+  await waitForRealtimeClient();
+  return requestAcknowledged(
+    withQuery(url, { client_id: realtimeClientId }),
+    { ...options, requestId },
+  );
+}
+
 
 export const initialState = {
   tasks: {
@@ -23,30 +34,24 @@ function cardIdOf(payload) {
   return typeof payload?.card_id === 'string' ? payload.card_id : null;
 }
 
-export const fetchKanbanBoard = createAcknowledgedThunk('uiData/fetchKanbanBoard', async ({ kanbanUrl }, { requestId }) => {
-  return requestAcknowledged(kanbanUrl, { requestId });
-});
-
-export const fetchTaskActivity = createAcknowledgedThunk('uiData/fetchTaskActivity', async ({ taskActivityUrl, cardId }, { requestId }) => {
-  return requestAcknowledged(
-    `${taskActivityUrl}/${encodeURIComponent(cardId)}/activity`,
-    { requestId },
-  );
-});
-
-export const updateKanbanCard = createAcknowledgedThunk('uiData/updateKanbanCard', ({ kanbanUrl, cardId, payload }, { requestId }) => requestAcknowledged(
-  `${kanbanUrl}/cards/${encodeURIComponent(cardId)}`,
-  { method: 'PATCH', body: payload, requestId },
+export const fetchKanbanBoard = createAcknowledgedThunk('uiData/fetchKanbanBoard', async ({ kanbanUrl }, { requestId }) => (
+  requestForTasks(kanbanUrl, {}, requestId)
 ));
 
-export const deleteKanbanCard = createAcknowledgedThunk('uiData/deleteKanbanCard', ({ kanbanUrl, cardId }, { requestId }) => requestAcknowledged(
-  `${kanbanUrl}/cards/${encodeURIComponent(cardId)}`,
-  { method: 'DELETE', requestId },
+export const fetchTaskActivity = createAcknowledgedThunk('uiData/fetchTaskActivity', async ({ taskActivityUrl, cardId }, { requestId }) => (
+  requestForTasks(`${taskActivityUrl}/${encodeURIComponent(cardId)}/activity`, {}, requestId)
 ));
 
-export const createTaskActivity = createAcknowledgedThunk('uiData/createTaskActivity', ({ tasksUrl, cardId, payload }, { requestId }) => requestAcknowledged(
-  `${tasksUrl}/${encodeURIComponent(cardId)}/activity`,
-  { method: 'POST', body: payload, requestId },
+export const updateKanbanCard = createAcknowledgedThunk('uiData/updateKanbanCard', async ({ kanbanUrl, cardId, payload }, { requestId }) => (
+  requestForTasks(`${kanbanUrl}/cards/${encodeURIComponent(cardId)}`, { method: 'PATCH', body: payload }, requestId)
+));
+
+export const deleteKanbanCard = createAcknowledgedThunk('uiData/deleteKanbanCard', async ({ kanbanUrl, cardId }, { requestId }) => (
+  requestForTasks(`${kanbanUrl}/cards/${encodeURIComponent(cardId)}`, { method: 'DELETE' }, requestId)
+));
+
+export const createTaskActivity = createAcknowledgedThunk('uiData/createTaskActivity', async ({ tasksUrl, cardId, payload }, { requestId }) => (
+  requestForTasks(`${tasksUrl}/${encodeURIComponent(cardId)}/activity`, { method: 'POST', body: payload }, requestId)
 ));
 
 export const reducers = {
@@ -71,7 +76,7 @@ export const reducers = {
 };
 
 export const eventHandlers = {
-  [UI_EVENT.KANBAN_SNAPSHOT]: (state, payload) => {
+  [UI_EVENT.TASKS_SNAPSHOT]: (state, payload) => {
     state.tasks.board = payload || null;
     state.tasks.loaded = true;
     if (!state.tasks.loading || payload.request_id === state.tasks.requestId) {

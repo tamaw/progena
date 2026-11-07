@@ -93,7 +93,7 @@ def _live_pages(base_id: str) -> dict[str, str]:
 
 def _default_publish(event_type: str, payload: dict[str, Any]) -> None:
 
-    events_stream.broadcast_ui_event(event_type, payload)
+    events_stream.broadcast_ui_event(event_type, payload, topic="knowledge")
 
 
 class KnowledgeIndexer:

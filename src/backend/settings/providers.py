@@ -8,11 +8,12 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from psycopg.errors import UniqueViolation
 
 import src.backend.http.contracts as http_contracts
 from src.backend.events import contracts as events_contracts
+from src.backend.events.stream import require_ui_stream_client
 from src.backend.http.requests import BroadcastUiEvent, request_correlation_id
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
 from src.progena.settings.chatgpt_oauth import ChatGPTOAuthError
@@ -72,10 +73,25 @@ async def broadcast_provider_snapshot(
     repository: ProviderRepository,
     broadcast: BroadcastUiEvent,
     *,
-    request_id: str | None = None,
+    request_id: str,
+    client_id: str,
+    fan_out: bool = False,
 ) -> None:
+    """Reply to the requester and optionally refresh other provider watchers."""
     payload = await _snapshot(repository)
-    broadcast(events_contracts.UiEvent.PROVIDERS_SNAPSHOT, payload, request_id=request_id)
+    broadcast(
+        events_contracts.UiEvent.PROVIDERS_SNAPSHOT,
+        payload,
+        request_id=request_id,
+        client_id=client_id,
+    )
+    if fan_out:
+        broadcast(
+            events_contracts.UiEvent.PROVIDERS_SNAPSHOT,
+            payload,
+            topic="providers",
+            exclude_client_id=client_id,
+        )
 
 
 def _profile_references_provider(store: BackendDocumentStore, provider_id: str) -> bool:
@@ -143,11 +159,17 @@ def create_provider_router(
     @router.get(
         "/providers", status_code=202, response_model=http_contracts.UiRequestAcknowledgement
     )
-    async def list_providers(request: Request) -> http_contracts.UiRequestAcknowledgement:
+    async def list_providers(
+        request: Request,
+        client_id: str = Query(..., min_length=1, max_length=64),
+    ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
-            await broadcast_provider_snapshot(repository, broadcast, request_id=request_id)
+            await broadcast_provider_snapshot(
+                repository, broadcast, request_id=request_id, client_id=client_id
+            )
         except Exception as exc:  # database outages should not leak connection details
             raise HTTPException(
                 status_code=503, detail="Provider settings are unavailable"
@@ -160,13 +182,18 @@ def create_provider_router(
         "/providers", status_code=202, response_model=http_contracts.UiRequestAcknowledgement
     )
     async def create_provider(
-        body: dict[str, Any], request: Request
+        body: dict[str, Any],
+        request: Request,
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
             await asyncio.to_thread(repository.create, body)
-            await broadcast_provider_snapshot(repository, broadcast, request_id=request_id)
+            await broadcast_provider_snapshot(
+                repository, broadcast, request_id=request_id, client_id=client_id, fan_out=True
+            )
         except Exception as exc:
             raise _repository_error(exc) from exc
         return http_contracts.acknowledgement_response(
@@ -179,8 +206,12 @@ def create_provider_router(
         response_model=http_contracts.UiRequestAcknowledgement,
     )
     async def update_provider(
-        provider_id: str, body: dict[str, Any], request: Request
+        provider_id: str,
+        body: dict[str, Any],
+        request: Request,
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
@@ -203,7 +234,9 @@ def create_provider_router(
                     await update_chatgpt_provider(provider_id, patch, default_model)
             else:
                 await asyncio.to_thread(repository.update, provider_id, body)
-            await broadcast_provider_snapshot(repository, broadcast, request_id=request_id)
+            await broadcast_provider_snapshot(
+                repository, broadcast, request_id=request_id, client_id=client_id, fan_out=True
+            )
         except Exception as exc:
             raise _repository_error(exc) from exc
         return http_contracts.acknowledgement_response(
@@ -216,15 +249,20 @@ def create_provider_router(
         response_model=http_contracts.UiRequestAcknowledgement,
     )
     async def delete_provider(
-        provider_id: str, request: Request
+        provider_id: str,
+        request: Request,
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         if await asyncio.to_thread(_profile_references_provider, get_store(), provider_id):
             raise HTTPException(status_code=409, detail="Provider is referenced by a model profile")
         try:
             await asyncio.to_thread(repository.delete, provider_id)
-            await broadcast_provider_snapshot(repository, broadcast, request_id=request_id)
+            await broadcast_provider_snapshot(
+                repository, broadcast, request_id=request_id, client_id=client_id, fan_out=True
+            )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail="Provider not found") from exc
         except ValueError as exc:
@@ -243,8 +281,11 @@ def create_provider_router(
         response_model=http_contracts.UiRequestAcknowledgement,
     )
     async def test_provider(
-        provider_id: str, request: Request
+        provider_id: str,
+        request: Request,
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
@@ -261,7 +302,12 @@ def create_provider_router(
         payload: dict[str, Any] = {"provider_id": provider_id, "ok": ok}
         if error is not None:
             payload["error"] = error
-        broadcast(events_contracts.UiEvent.PROVIDERS_TESTED, payload, request_id=request_id)
+        broadcast(
+            events_contracts.UiEvent.PROVIDERS_TESTED,
+            payload,
+            request_id=request_id,
+            client_id=client_id,
+        )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.PROVIDERS_TESTED]
         )
@@ -272,8 +318,11 @@ def create_provider_router(
         response_model=http_contracts.UiRequestAcknowledgement,
     )
     async def disconnect_chatgpt_provider(
-        provider_id: str, request: Request
+        provider_id: str,
+        request: Request,
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
@@ -288,7 +337,9 @@ def create_provider_router(
             raise HTTPException(status_code=422, detail="Provider is not a ChatGPT plan connection")
         try:
             await asyncio.to_thread(repository.disconnect_chatgpt, provider_id)
-            await broadcast_provider_snapshot(repository, broadcast, request_id=request_id)
+            await broadcast_provider_snapshot(
+                repository, broadcast, request_id=request_id, client_id=client_id, fan_out=True
+            )
         except Exception as exc:
             raise _repository_error(exc) from exc
         return http_contracts.acknowledgement_response(

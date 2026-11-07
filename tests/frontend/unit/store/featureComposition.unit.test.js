@@ -3,9 +3,14 @@ import { configureStore } from '@reduxjs/toolkit';
 import uiData from '@frontend/store/uiDataSlice';
 import { applyUiEvent } from '@frontend/store/uiEvents';
 import realtime, { uiEventReceived } from '@frontend/realtime/realtimeSlice';
-import { realtimeListenerMiddleware, stopRealtimeStream } from '@frontend/realtime/realtimeListener';
+import { realtimeListenerMiddleware } from '@frontend/realtime/realtimeListener';
 import { updateKanbanCard } from '@frontend/features/tasks/state';
 import { updateWidget } from '@frontend/features/schedules/widgetsState';
+vi.mock('@frontend/realtime/realtimeClient', () => ({
+  realtimeClientId: 'composition-tab',
+  waitForRealtimeClient: () => Promise.resolve(),
+}));
+
 
 const requestId = 'f0e1d2c3-b4a5-4678-9abc-def012345678';
 let store;
@@ -26,31 +31,31 @@ function acknowledgement(eventType) {
 }
 
 afterEach(() => {
-  store?.dispatch(stopRealtimeStream());
+  store = undefined;
   vi.unstubAllGlobals();
 });
 
 describe('feature composition', () => {
-  it('hydrates status, alerts and widgets from the same connection envelope', () => {
+  it('hydrates alerts from the connection envelope, which no longer carries runtime status', () => {
     const alerts = [{ id: 'alert-1', message: 'Ready' }];
-    const widgets = [{ id: 'schedule:daily', enabled: true }];
     const state = uiData(undefined, applyUiEvent({
       type: 'connection.ready',
-      payload: { status: { status: 'healthy', widgets }, alerts: { alerts } },
+      payload: { stream: 'ui', alerts: { alerts } },
     }));
-    expect(state.status.status).toBe('healthy');
     expect(state.alerts).toEqual(alerts);
-    expect(state.widgets).toEqual(widgets);
+    expect(state.status).toBeNull();
   });
 
-  it('fans out status changes and retains feature data on metric-only ticks', () => {
+  it('merges a runtime-status snapshot with metric-only ticks and leaves alerts and widgets alone', () => {
     const alerts = [{ id: 'alert-2' }];
     const widgets = [{ id: 'schedule:weekly' }];
-    let state = uiData(undefined, applyUiEvent({
-      type: 'status.updated', payload: { cycle_count: 4, alerts, widgets },
+    let state = uiData(undefined, applyUiEvent({ type: 'alerts.updated', payload: { alerts } }));
+    state = uiData(state, applyUiEvent({ type: 'widgets.updated', payload: { widgets } }));
+    state = uiData(state, applyUiEvent({
+      type: 'status.updated', payload: { cycle_count: 4, loops: [{ name: 'main' }] },
     }));
     state = uiData(state, applyUiEvent({ type: 'status.updated', payload: { memory_mb: 120 } }));
-    expect(state.status).toMatchObject({ cycle_count: 4, memory_mb: 120 });
+    expect(state.status).toMatchObject({ cycle_count: 4, memory_mb: 120, loops: [{ name: 'main' }] });
     expect(state.alerts).toEqual(alerts);
     expect(state.widgets).toEqual(widgets);
   });
@@ -64,13 +69,16 @@ describe('feature composition', () => {
       kanbanUrl: '/w/example/api/ui/kanban', cardId: 'card/1', payload: { title: 'Updated' }, requestId,
     }));
     expect(operation.requestId).toBe(requestId);
-    expect(fetch).toHaveBeenCalledWith('/w/example/api/ui/kanban/cards/card%2F1', expect.objectContaining({
-      method: 'PATCH',
-      headers: expect.objectContaining({ 'X-Operation-Id': requestId }),
-    }));
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      '/w/example/api/ui/kanban/cards/card%2F1?client_id=composition-tab',
+      expect.objectContaining({
+        method: 'PATCH',
+        headers: expect.objectContaining({ 'X-Operation-Id': requestId }),
+      }),
+    ));
     expect(store.getState().realtime.pendingOps[requestId].status).toBe('awaiting_acknowledgement');
     const event = {
-      id: 'ui-test-1', type: 'kanban.snapshot',
+      id: 'ui-test-1', type: 'tasks.snapshot',
       payload: { cards: [{ id: 'card/1', title: 'Updated' }], request_id: requestId },
     };
     store.dispatch(applyUiEvent(event));
@@ -81,7 +89,7 @@ describe('feature composition', () => {
     expect(store.getState().realtime.pendingOps[requestId]).toBeUndefined();
   });
 
-  it('keeps acknowledged widget changes pending until their stream event or disconnect', async () => {
+  it('keeps acknowledged widget changes pending until their causal stream event', async () => {
     createStore();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(acknowledgement('widgets.updated')));
     await store.dispatch(updateWidget({
@@ -89,8 +97,9 @@ describe('feature composition', () => {
     })).unwrap();
     expect(store.getState().realtime.pendingOps[requestId].status).toBe('pending');
     expect(store.getState().uiData.widgets).toEqual([]);
-    store.dispatch(stopRealtimeStream());
+    store.dispatch(uiEventReceived({
+      id: 'widget-change', type: 'widgets.updated', payload: { request_id: requestId },
+    }));
     expect(store.getState().realtime.pendingOps[requestId]).toBeUndefined();
-    expect(store.getState().realtime.error).toBe('Stream disconnected');
   });
 });

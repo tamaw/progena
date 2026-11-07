@@ -202,11 +202,11 @@ class TestRequestIdInLogs:
 class TestRequestIdHandlerIntegration:
     """Finite application acknowledgements preserve client operation IDs."""
 
-    def test_finite_handler_echoes_supplied_request_id(self, app):
+    def test_finite_handler_echoes_supplied_request_id(self, app, ui_stream):
         request_id = "finite-operation-id"
         with TestClient(app) as client:
             response = client.get(
-                "/api/ui/widgets",
+                "/api/ui/widgets?client_id=tab-1",
                 headers={"X-Operation-Id": request_id},
             )
 

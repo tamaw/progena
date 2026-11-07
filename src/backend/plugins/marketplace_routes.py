@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 
 import src.backend.events.contracts as events_contracts
 import src.backend.events.stream as events_stream
@@ -51,12 +51,14 @@ def _plugin_fetch_status(error: PluginFetchError, default: int) -> int:
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_marketplaces(
     request: Request,
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Acknowledge a read and publish the marketplaces snapshot on the UI stream."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     snapshot = await asyncio.to_thread(load_marketplaces)
-    broadcast_marketplaces_snapshot(snapshot, request_id=request_id)
+    broadcast_marketplaces_snapshot(snapshot, request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.MARKETPLACES_SNAPSHOT]
     )
@@ -66,9 +68,11 @@ async def get_marketplaces(
 async def replace_marketplaces(
     payload: dict[str, Any],
     request: Request,
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Validate and persist the full marketplaces document."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
     try:
         normalized = validate_marketplaces_payload(payload)
@@ -76,7 +80,7 @@ async def replace_marketplaces(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     saved = await asyncio.to_thread(save_marketplaces, normalized["marketplaces"])
-    broadcast_marketplaces_snapshot(saved, request_id=request_id)
+    broadcast_marketplaces_snapshot(saved, request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.MARKETPLACES_SNAPSHOT]
     )
@@ -88,9 +92,11 @@ async def replace_marketplaces(
 async def browse_marketplace_plugins(
     name: str,
     request: Request,
+    client_id: str = Query(..., min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Fetch the named marketplace's catalog and broadcast it."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
 
     # Resolve the registered source URL.
@@ -112,7 +118,9 @@ async def browse_marketplace_plugins(
             ) from exc
         set_cached_catalog(name, catalog)
 
-    broadcast_plugin_catalog_snapshot(name, _catalog_to_dict(catalog), request_id=request_id)
+    broadcast_plugin_catalog_snapshot(
+        name, _catalog_to_dict(catalog), request_id=request_id, client_id=client_id
+    )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.PLUGIN_CATALOG_SNAPSHOT]
     )
@@ -122,6 +130,7 @@ def broadcast_marketplaces_snapshot(
     marketplaces: dict[str, Any] | None = None,
     *,
     request_id: str | None = None,
+    client_id: str | None = None,
 ) -> events_contracts.UiEventEnvelope:
     """Broadcast the current marketplace source list to /api/ui/stream subscribers.
 
@@ -133,7 +142,10 @@ def broadcast_marketplaces_snapshot(
     """
     payload = plugins_marketplaces.load_marketplaces() if marketplaces is None else marketplaces
     return events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.MARKETPLACES_SNAPSHOT, payload, request_id=request_id
+        events_contracts.UiEvent.MARKETPLACES_SNAPSHOT,
+        payload,
+        request_id=request_id,
+        client_id=client_id,
     )
 
 
@@ -141,7 +153,8 @@ def broadcast_plugin_catalog_snapshot(
     name: str,
     catalog: dict[str, Any],
     *,
-    request_id: str | None = None,
+    request_id: str,
+    client_id: str,
 ) -> events_contracts.UiEventEnvelope:
     """Broadcast one marketplace's fetched catalog to /api/ui/stream subscribers.
 
@@ -152,4 +165,5 @@ def broadcast_plugin_catalog_snapshot(
         events_contracts.UiEvent.PLUGIN_CATALOG_SNAPSHOT,
         {"name": name, "catalog": catalog},
         request_id=request_id,
+        client_id=client_id,
     )

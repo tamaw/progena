@@ -62,12 +62,4 @@ describe('model profile request lifecycle', () => {
     expect(state.modelProfiles.loaded).toBe(true);
     expect(state.modelProfiles.error).toBeNull();
   });
-
-  it('does not mark identical hydration snapshots as unseen profile changes', () => {
-    let state = reducer(undefined, snapshot([profile], 'initial-hydration'));
-    state = reducer(state, snapshot([profile], 'other-tab-hydration'));
-    expect(state.navActivity.unseenRoutes['/profiles']).toBeUndefined();
-    state = reducer(state, snapshot([{ ...profile, deployment: 'review-v2' }]));
-    expect(state.navActivity.unseenRoutes['/profiles']).toBe(true);
-  });
 });

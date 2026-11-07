@@ -61,9 +61,11 @@ Preserve bounded replay, `Last-Event-ID`, and replay-before-`connection.ready`
 ordering. Keep connection-scoped interests and response content out of global
 replay where the contract requires isolation.
 
-Chat list requests emit `chat.sessions.snapshot`. Detail requests emit
-`chat.session.upserted` and `chat.session.selected` with the matching request ID;
-selection in one tab must not change another tab's selected chat. Frontend pages
+Chat list requests read `session:` documents only and emit `chat.list.loaded`
+to the requesting `client_id`; row changes go to every tab as
+`chat.list.row.upserted`/`chat.list.row.deleted`. Detail requests emit one
+tab-targeted `chat.session.selected` with the matching request ID, so selection
+in one tab never changes another tab's selected chat. Frontend pages
 consume feature state through Redux rather than opening additional app-lifetime
 streams.
 

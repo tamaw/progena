@@ -10,6 +10,14 @@ import { parsePromptPlaceholders, derivePromptInputSchema, deriveFormatInputSche
 import { WorkflowRunsList } from '@frontend/features/workflows/runs/WorkflowRunsList';
 import { canvasToolSettings } from '@frontend/features/workflows/canvas/workflowCanvasTools';
 
+vi.mock('react-redux', async (importOriginal) => ({
+  ...(await importOriginal()),
+  useDispatch: () => vi.fn(),
+}));
+vi.mock('@frontend/context/ConfigContext', () => ({
+  useConfig: () => ({ getApiUrl: () => '/api/ui/workflows' }),
+}));
+
 const AGENT_OUTPUT_SCHEMA = {
   type: 'object',
   required: ['title'],

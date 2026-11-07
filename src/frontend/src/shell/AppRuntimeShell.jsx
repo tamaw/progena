@@ -4,7 +4,7 @@ import { Outlet } from 'react-router-dom';
 import { fetchPreferences, savePreferences, selectPreferences, selectPreferencesSaveRequest } from '../features/settings/state/preferences';
 import { selectLastReceivedAlert } from '../features/alerts/state';
 import { selectLastRoutineRunNotification } from '../features/agents/state/agents';
-import { selectRealtime } from '../realtime/realtimeSlice';
+import { selectRealtimeStreamReady } from '../realtime/realtimeSlice';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
 import { playNotificationSound } from '../lib/notificationSound';
@@ -42,21 +42,21 @@ if (typeof window !== 'undefined') {
 
 export function AppRuntimeShell() {
   const dispatch = useDispatch();
-  const realtime = useSelector(selectRealtime);
+  const streamReady = useSelector(selectRealtimeStreamReady);
   const preferences = useSelector(selectPreferences);
   const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
   const { config, getApiUrl } = useConfig();
   const headerFieldMode = config.headerField.default;
   const preferencesUrl = getApiUrl('preferences');
 
-  // Seed the whole profile once per app load - theme (useTheme), nav-collapse,
+  // Seed the whole profile once per ready stream - theme (useTheme), nav-collapse,
   // and pinned-panel all read from this same fetch.
   useEffect(() => {
-    if (!realtime.connected) {
+    if (!streamReady) {
       return;
     }
     void dispatch(fetchPreferences({ preferencesUrl })).unwrap().catch(() => {});
-  }, [dispatch, preferencesUrl, realtime.connected]);
+  }, [dispatch, preferencesUrl, streamReady]);
 
   // Global alert toast: fires for every new backend alert on every page -
   // not just while Chat happens to be mounted. A chime plays alongside it

@@ -16,6 +16,8 @@ import { fetchDocumentTypes, selectDocumentTypes } from '../documents/state';
 import { fetchInstructions } from '../instructions/state';
 import { PaneCollapseSeam, PaneEmptyState, PaneExpandRail, PaneListFilters, PaneListFooter, PaneListSearch, PaneListSortButton, PaneListToolbar, PaneListRows, PaneSection } from '../../components/layout/PaneList';
 import { usePaneCollapse } from '../../hooks/usePaneCollapse';
+import useStreamTopic from '../../hooks/useStreamTopic';
+import useStreamResync from '../../hooks/useStreamResync';
 import PageShell from '../../components/layout/PageShell';
 import DetailPane from '../../components/layout/DetailPane';
 import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, PauseActionIcon, PlayActionIcon, SaveActionIcon } from '../../components/layout/DetailHeader';
@@ -64,6 +66,9 @@ function WorkflowsInner() {
   const agentsUrl = getApiUrl('agentProfiles');
   const instructionsUrl = getApiUrl('instructions');
   const realtime = useSelector(selectRealtime);
+  useStreamTopic('workflows');
+  useStreamTopic('agents');
+  useStreamTopic('instructions');
   const workflows = useSelector(selectWorkflows);
   const workflowsState = useSelector(selectWorkflowsState);
   const workflowRuns = useSelector(selectWorkflowRuns);
@@ -152,16 +157,24 @@ function WorkflowsInner() {
   }, [agentsUrl, dispatch, documentTypesUrl, instructionsUrl, show, workflowRunsUrl, workflowsUrl]);
 
   useEffect(() => {
-    if (realtime.connected) {
+    if (realtime.streamReady) {
       loadInitialData();
     }
-  }, [loadInitialData, realtime.connected]);
+  }, [loadInitialData, realtime.streamReady]);
 
   const loadWorkflowDetail = useCallback(() => {
-    if (realtime.connected && selectedPath && !detailRequest.loading) {
+    if (realtime.streamReady && selectedPath && !detailRequest.loading) {
       dispatch(fetchWorkflowContent({ workflowsUrl, path: selectedPath }));
     }
-  }, [detailRequest.loading, dispatch, realtime.connected, selectedPath, workflowsUrl]);
+  }, [detailRequest.loading, dispatch, realtime.streamReady, selectedPath, workflowsUrl]);
+
+  // Rich workflow detail is topic-fanned live but not replayed. Reload into
+  // the same cache as `workflow.updated` after every ready boundary so draft
+  // behavior remains identical to a live update. The stream is ready when this
+  // runs, but this render's `realtime.streamReady` may still be false.
+  useStreamResync(() => {
+    if (selectedPath) dispatch(fetchWorkflowContent({ workflowsUrl, path: selectedPath }));
+  });
 
   useEffect(() => {
     if (selectedPath && !selectedDetail && !detailRequest.loading && !detailRequest.error) {

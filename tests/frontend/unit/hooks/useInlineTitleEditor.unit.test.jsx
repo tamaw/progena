@@ -108,7 +108,7 @@ it('keeps a title save pending until its correlated canonical event arrives', as
   const onCommit = vi.fn((_title, { ticket, trackSave }) => {
     trackSave(ticket, {
       requestId: 'task-title-request',
-      events: ['kanban.snapshot'],
+      events: ['tasks.snapshot'],
     });
     return Promise.resolve({ request_id: 'task-title-request' });
   });
@@ -126,7 +126,7 @@ it('keeps a title save pending until its correlated canonical event arrives', as
   expect(current.draft).toBe('Renamed task');
 
   await act(async () => store.dispatch(applyUiEvent({
-    type: 'kanban.snapshot',
+    type: 'tasks.snapshot',
     payload: { request_id: 'task-title-request' },
   })));
   await render({ scopeKey: 'task-a', title: 'Renamed task', onCommit });
@@ -169,7 +169,7 @@ it('does not let a late task confirmation clear a newer draft for that task', as
   const onCommit = vi.fn((_title, { ticket, trackSave }) => {
     trackSave(ticket, {
       requestId: 'old-title-request',
-      events: ['kanban.snapshot'],
+      events: ['tasks.snapshot'],
     });
     return Promise.resolve({ request_id: 'old-title-request' });
   });
@@ -190,7 +190,7 @@ it('does not let a late task confirmation clear a newer draft for that task', as
     current.setDraft('Newer raw title');
   });
   await act(async () => store.dispatch(applyUiEvent({
-    type: 'kanban.snapshot',
+    type: 'tasks.snapshot',
     payload: { request_id: 'old-title-request' },
   })));
 

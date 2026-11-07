@@ -212,11 +212,13 @@ def _validate_pattern(pattern: str, types: dict[str, DocumentType]) -> str:
 
 @router.get("/canvases", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_canvases(
-    request: Request, x_request_id: str | None = _REQUEST_ID_HEADER
+    request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
+    x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
+    events_stream.require_ui_stream_client(client_id)
     request_id = _request_correlation_id(request, x_request_id)
-
-    broadcast_canvases_snapshot(request_id=request_id)
+    broadcast_canvases_snapshot(request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.CANVASES_SNAPSHOT]
     )
@@ -233,6 +235,7 @@ async def get_canvas_files(
     client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
+    events_stream.require_ui_stream_client(client_id)
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     files = await asyncio.to_thread(_canvas_files, store, name)
@@ -257,7 +260,7 @@ async def delete_canvas(
     client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
-    del client_id
+    events_stream.require_ui_stream_client(client_id)
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     files = await asyncio.to_thread(_canvas_files, store, name)
@@ -269,8 +272,18 @@ async def delete_canvas(
         for key, _document in store.list_documents(PROGENA_STATE_PREFIX, data_prefix):
             store.delete_document(PROGENA_STATE_PREFIX, key)
     request_id = _request_correlation_id(request, x_request_id)
+    payload = {"name": name}
     events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.CANVAS_DELETED, {"name": name}, request_id=request_id
+        events_contracts.UiEvent.CANVAS_DELETED,
+        payload,
+        request_id=request_id,
+        client_id=client_id,
+    )
+    events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.CANVAS_DELETED,
+        payload,
+        topic="canvases",
+        exclude_client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.CANVAS_DELETED]
@@ -288,6 +301,7 @@ async def save_canvas_status(
     request: Request,
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
+    events_stream.require_ui_stream_client(body.client_id)
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     payload = {
@@ -321,6 +335,7 @@ async def get_canvas_documents(
     request: Request,
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
+    events_stream.require_ui_stream_client(body.client_id)
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     types = await asyncio.to_thread(list_document_types, store)
@@ -374,6 +389,7 @@ async def canvas_data(
     request: Request,
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
+    events_stream.require_ui_stream_client(body.client_id)
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     key = body.key
@@ -451,6 +467,7 @@ async def update_canvas_subscription(
     request: Request,
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
+    events_stream.require_ui_stream_client(body.client_id)
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     types = await asyncio.to_thread(list_document_types, store)
@@ -479,6 +496,7 @@ async def delete_canvas_subscription(
     client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = _REQUEST_ID_HEADER,
 ) -> http_contracts.UiRequestAcknowledgement:
+    events_stream.require_ui_stream_client(client_id)
     store = get_default_document_store()
     name = await asyncio.to_thread(_require_canvas, store, name)
     canvas_events.clear_interest(client_id, name)
@@ -495,13 +513,23 @@ async def delete_canvas_subscription(
 
 
 def broadcast_canvases_snapshot(
-    *, request_id: str | None = None
+    *, request_id: str | None = None, client_id: str | None = None
 ) -> events_contracts.UiEventEnvelope:
-    """Broadcast the live summary of every agent-built canvas."""
+    """Publish the live summary of every agent-built canvas."""
 
     from src.backend.canvases.routes import canvas_summaries
 
     items = [summary.model_dump(mode="json") for summary in canvas_summaries()]
+    if client_id is not None:
+        return events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.CANVASES_SNAPSHOT,
+            {"items": items},
+            request_id=request_id,
+            client_id=client_id,
+        )
     return events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.CANVASES_SNAPSHOT, {"items": items}, request_id=request_id
+        events_contracts.UiEvent.CANVASES_SNAPSHOT,
+        {"items": items},
+        request_id=request_id,
+        topic="canvases",
     )

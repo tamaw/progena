@@ -7,12 +7,13 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Header, Query, Request
 from pydantic import BaseModel, Field
 
 from src.backend.events import contracts as events_contracts
 from src.backend.events import stream
 from src.backend.events.documents import TypedDocumentEvent
+from src.backend.events.stream import require_ui_stream_client as require_stream
 from src.backend.http import contracts as http_contracts
 from src.backend.http.requests import request_correlation_id
 from src.backend.storage.documents import (
@@ -123,11 +124,6 @@ def _tasks_for_thread(store: BackendDocumentStore, thread_id: str) -> list[dict[
     return _tasks_by_thread(document.payload if document is not None else []).get(thread_id, [])
 
 
-def _require_stream(client_id: str) -> None:
-    if client_id not in stream._ui_stream_clients.values():
-        raise HTTPException(status_code=409, detail="An active UI stream is required")
-
-
 router = APIRouter(prefix="/chats", tags=["chat"])
 
 
@@ -143,7 +139,7 @@ async def get_background_tasks(
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Publish the current durable async-task snapshot for one chat."""
-    _require_stream(client_id)
+    require_stream(client_id)
     request_id = request_correlation_id(request, x_request_id)
     tasks, revision = await background_task_events.snapshot(get_default_document_store(), thread_id)
     stream.broadcast_ui_event(
@@ -170,7 +166,7 @@ async def put_background_tasks_subscription(
     request: Request,
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
-    _require_stream(body.client_id)
+    require_stream(body.client_id)
     event_types: list[str]
     request_id = request_correlation_id(request, x_request_id)
     if body.subscribed:

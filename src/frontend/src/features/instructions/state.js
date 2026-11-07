@@ -6,6 +6,7 @@ import { UI_EVENT } from '../../realtime/eventVocabulary';
  */
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle, addKeyedRequestLifecycle, completeKeyedRequest, selectKeyedRequest } from '../../store/async';
 import { withQuery } from '../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
 
 export const initialState = {
   instructions: {
@@ -25,49 +26,56 @@ export const initialState = {
 
 const revisionKey = (path, revisionId) => `${path}@${revisionId}`;
 
+async function targeted(url, options = {}) {
+  await waitForRealtimeClient();
+  return requestAcknowledged(withQuery(url, { client_id: realtimeClientId }), options);
+}
+
 export const fetchInstructions = createAcknowledgedThunk(
   'uiData/fetchInstructions',
-  async ({ instructionsUrl }, { requestId }) => requestAcknowledged(instructionsUrl, { requestId }),
+  async ({ instructionsUrl }, { requestId }) => targeted(instructionsUrl, { requestId }),
 );
 
 export const fetchInstruction = createAcknowledgedThunk(
   'uiData/fetchInstruction',
-  async ({ instructionsUrl, path }, { requestId }) => requestAcknowledged(
-    withQuery(`${instructionsUrl}/content`, { path }),
-    { requestId },
-  ),
+  async ({ instructionsUrl, path }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(withQuery(`${instructionsUrl}/content`, { path, client_id: realtimeClientId }), { requestId });
+  },
 );
 
 export const saveInstruction = createAcknowledgedThunk(
   'uiData/saveInstruction',
-  async ({ instructionsUrl, path, content }, { requestId }) => requestAcknowledged(
-    `${instructionsUrl}/content`,
-    { method: 'PUT', body: { path, content }, requestId },
-  ),
+  async ({ instructionsUrl, path, content }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(withQuery(`${instructionsUrl}/content`, { client_id: realtimeClientId }), {
+      method: 'PUT', body: { path, content }, requestId,
+    });
+  },
 );
 
 export const fetchInstructionRevisions = createAcknowledgedThunk(
   'uiData/fetchInstructionRevisions',
-  async ({ instructionsUrl, path }, { requestId }) => requestAcknowledged(
-    withQuery(`${instructionsUrl}/revisions`, { path }),
-    { requestId },
-  ),
+  async ({ instructionsUrl, path }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(withQuery(`${instructionsUrl}/revisions`, { path, client_id: realtimeClientId }), { requestId });
+  },
 );
 
 export const fetchInstructionRevision = createAcknowledgedThunk(
   'uiData/fetchInstructionRevision',
-  async ({ instructionsUrl, path, revisionId }, { requestId }) => requestAcknowledged(
-    withQuery(`${instructionsUrl}/revisions/${encodeURIComponent(revisionId)}`, { path }),
-    { requestId },
-  ),
+  async ({ instructionsUrl, path, revisionId }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(withQuery(`${instructionsUrl}/revisions/${encodeURIComponent(revisionId)}`, { path, client_id: realtimeClientId }), { requestId });
+  },
 );
 
 export const restoreInstructionRevision = createAcknowledgedThunk(
   'uiData/restoreInstructionRevision',
-  async ({ instructionsUrl, path, revisionId }, { requestId }) => requestAcknowledged(
-    withQuery(`${instructionsUrl}/revisions/${encodeURIComponent(revisionId)}/restore`, { path }),
-    { method: 'POST', requestId },
-  ),
+  async ({ instructionsUrl, path, revisionId }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(withQuery(`${instructionsUrl}/revisions/${encodeURIComponent(revisionId)}/restore`, { path, client_id: realtimeClientId }), { method: 'POST', requestId });
+  },
 );
 
 export const eventHandlers = {

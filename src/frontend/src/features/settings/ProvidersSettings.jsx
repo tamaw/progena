@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import useStreamTopic from '../../hooks/useStreamTopic';
 import InlineFailure from '../../components/InlineFailure';
 import Select from '../../components/Select';
 import { useConfig } from '../../context/ConfigContext';
@@ -292,6 +293,7 @@ export default function ProvidersSettings() {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const providersUrl = getApiUrl('providers');
+  useStreamTopic('providers');
   const connected = useSelector(selectRealtimeStreamReady);
   const providers = useSelector(selectProviders);
   const state = useSelector(selectProvidersState);

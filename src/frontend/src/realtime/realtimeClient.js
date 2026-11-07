@@ -13,6 +13,10 @@ export function setRealtimeClientReady(value) {
   }
 }
 
+export function isRealtimeClientReady() {
+  return ready;
+}
+
 export function waitForRealtimeClient() {
   return ready ? Promise.resolve() : new Promise((resolve) => waiters.add(resolve));
 }

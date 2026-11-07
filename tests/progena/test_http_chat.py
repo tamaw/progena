@@ -114,6 +114,8 @@ def make_bridge_factory(script: Any) -> Callable[..., ScriptedBridge]:
 class FakeStateManager:
     def __init__(self) -> None:
         self.saved_checkpoints: list[dict[str, Any]] = []
+        self.terminal_session_statuses: list[tuple[str, str]] = []
+
         self._current_state: dict[str, Any] = {}
         self._runtime_store = LangGraphRuntimeStore(InMemoryStore())
 
@@ -133,6 +135,10 @@ class FakeStateManager:
 
     async def merge_session(self, thread_id: str, fields: dict[str, Any]) -> bool:
         return False
+
+    async def record_session_turn_terminal(self, thread_id: str, status: str) -> bool:
+        self.terminal_session_statuses.append((thread_id, status))
+        return True
 
     async def get_preferences_config(self) -> dict[str, Any]:
         return {"display_name": "user", "timezone": "UTC"}
@@ -771,6 +777,9 @@ async def test_responses_cancel_mid_stream_skips_checkpoint() -> None:
     assert frames[-1][0] == "response.incomplete"
     assert frames[-1][1]["response"]["status"] == "cancelled"
     assert loop_runner.state_manager.saved_checkpoints == []
+    assert [status for _, status in loop_runner.state_manager.terminal_session_statuses] == [
+        "cancelled"
+    ]
 
 
 async def test_responses_bridge_cancellation_does_not_synthesize_completed() -> None:
@@ -792,6 +801,9 @@ async def test_responses_bridge_cancellation_does_not_synthesize_completed() -> 
     assert event_names[2] == "response.output_item.added"
     assert not any(name == "response.completed" for name, _ in frames)
     assert loop_runner.state_manager.saved_checkpoints == []
+    assert [status for _, status in loop_runner.state_manager.terminal_session_statuses] == [
+        "cancelled"
+    ]
 
 
 async def test_responses_writes_keepalive_comments_during_a_silent_bridge_gap(
@@ -914,6 +926,9 @@ async def test_responses_happy_path_runs_checkpoint() -> None:
 
     assert frames[-1][0] == "response.completed"
     assert len(loop_runner.state_manager.saved_checkpoints) == 1
+    assert [status for _, status in loop_runner.state_manager.terminal_session_statuses] == [
+        "completed"
+    ]
 
 
 async def test_responses_checkpoint_failure_emits_failed_not_completed() -> None:
@@ -939,6 +954,9 @@ async def test_responses_checkpoint_failure_emits_failed_not_completed() -> None
     assert frames[-1][1]["response"]["error"]["code"] == "checkpoint_error"
     assert "disk full" in frames[-1][1]["response"]["error"]["message"]
     assert not any(name == "response.completed" for name, _ in frames)
+    assert [status for _, status in loop_runner.state_manager.terminal_session_statuses] == [
+        "failed"
+    ]
 
 
 async def test_responses_bridge_error_emits_failed_and_releases_lock() -> None:
@@ -959,6 +977,10 @@ async def test_responses_bridge_error_emits_failed_and_releases_lock() -> None:
 
             frames_ok = await _post_responses(client, server.base_url, "ok", "resp-ok")
             assert frames_ok[-1][0] == "response.completed"
+        assert [status for _, status in loop_runner.state_manager.terminal_session_statuses] == [
+            "failed",
+            "completed",
+        ]
     finally:
         await _stop_chat_server(server)
 
@@ -1379,18 +1401,35 @@ async def test_cancellation_persists_only_text_not_already_checkpointed(suffix: 
     graph = builder.compile(checkpointer=InMemorySaver())
     config = {"configurable": {"thread_id": "cancel-after-commentary"}}
     commentary = "Preferences inspected; checking the schema next."
-    await graph.aupdate_state(config, {"messages": [
-        HumanMessage(content="Earlier request", id="old-user"),
-        AIMessage(content="Earlier answer", id="old-assistant"),
-        HumanMessage(content="Check preferences and schemas", id="current-user"),
-        AIMessage(content=commentary, id="interim", tool_calls=[
-            {"id": "read-schema", "name": "read_file", "args": {"file_path": "/schemas/routine.json"}},
-        ]),
-    ]}, as_node="model")
+    await graph.aupdate_state(
+        config,
+        {
+            "messages": [
+                HumanMessage(content="Earlier request", id="old-user"),
+                AIMessage(content="Earlier answer", id="old-assistant"),
+                HumanMessage(content="Check preferences and schemas", id="current-user"),
+                AIMessage(
+                    content=commentary,
+                    id="interim",
+                    tool_calls=[
+                        {
+                            "id": "read-schema",
+                            "name": "read_file",
+                            "args": {"file_path": "/schemas/routine.json"},
+                        },
+                    ],
+                ),
+            ]
+        },
+        as_node="model",
+    )
     service = RuntimeChatService(FakeLoopRunner(graph=graph))
 
     await service._persist_cancelled_turn(
-        "cancel-after-commentary", "cancelled-reply", commentary + suffix, 2,
+        "cancel-after-commentary",
+        "cancelled-reply",
+        commentary + suffix,
+        2,
     )
 
     state = await graph.aget_state(config)

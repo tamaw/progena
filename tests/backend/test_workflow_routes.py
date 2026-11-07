@@ -39,11 +39,14 @@ def _drain(queue):
 def test_workflow_create_acknowledges_then_emits_canonical_state(workflow_env):
 
     queue = asyncio.Queue()
+    client_id = "workflow-tab"
     events_stream._ui_stream_subscribers[queue] = None
+    events_stream._ui_stream_clients[queue] = client_id
     try:
         with TestClient(app) as client:
             response = client.post(
                 "/api/ui/workflows",
+                params={"client_id": client_id},
                 json={"title": "Prompt workflow"},
                 headers={"X-Operation-Id": "workflow-create"},
             )
@@ -61,6 +64,7 @@ def test_workflow_create_acknowledges_then_emits_canonical_state(workflow_env):
         assert edge["from"]["port"] == edge["to"]["port"] == "key"
     finally:
         events_stream._ui_stream_subscribers.pop(queue, None)
+        events_stream._ui_stream_clients.pop(queue, None)
 
 
 def test_cron_preview_returns_utc_instants(workflow_env, monkeypatch):
@@ -132,11 +136,14 @@ def test_strict_manual_trigger_payload_keeps_request_correlation_in_lifecycle_ev
     save_workflow_definition(workflow_env, workflow)
 
     queue = asyncio.Queue()
+    client_id = "workflow-trigger-tab"
     events_stream._ui_stream_subscribers[queue] = None
+    events_stream._ui_stream_clients[queue] = client_id
     try:
         with TestClient(app) as client:
             response = client.post(
                 "/api/ui/workflows/strict-manual-trigger/trigger",
+                params={"client_id": client_id},
                 json={"payload": {"n": 3}},
                 headers={"X-Operation-Id": "strict-manual-request"},
             )
@@ -152,3 +159,4 @@ def test_strict_manual_trigger_payload_keeps_request_correlation_in_lifecycle_ev
         assert "request_id" not in event.payload["run"]["trigger_event"]
     finally:
         events_stream._ui_stream_subscribers.pop(queue, None)
+        events_stream._ui_stream_clients.pop(queue, None)

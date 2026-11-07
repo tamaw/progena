@@ -29,6 +29,7 @@ from src.progena.repositories.store import RepositoryStore
 from src.progena.routines.documents import RoutineStore
 from src.progena.schedules.models import ScheduleEntry, ScheduleRunRecord
 from src.progena.schedules.store import ScheduleStore
+from src.progena.sessions.status import SessionTurnStatus
 from src.progena.sessions.store import SessionStore
 from src.progena.settings.model_profiles import default_model_profiles_payload
 from src.progena.settings.preferences import default_preferences_payload
@@ -417,6 +418,9 @@ class StateManager:
     # ==========================================================================
     # Session documents
     # ==========================================================================
+    async def record_session_turn_terminal(self, thread_id: str, status: SessionTurnStatus) -> bool:
+        return await self.sessions.record_turn_terminal(thread_id, status)
+
     async def get_session(self, thread_id: str) -> dict[str, Any] | None:
         return await self.sessions.get_session(thread_id)
 

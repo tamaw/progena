@@ -150,3 +150,18 @@ def test_mutate_document_is_not_overwritten_by_a_concurrent_merge(store):
             merger.join(timeout=5)
             assert not merger.is_alive()
         store.delete_document(PROGENA_STATE_PREFIX, key)
+
+
+def test_session_turn_writes_log_no_event_but_edits_do(store):
+    """Each turn merges content/preview/last_activity; workflows must not fire on it."""
+    key = f"session:{uuid.uuid4().hex}"
+    cursor = store.latest_document_event_position()
+    store.save_document(PROGENA_STATE_PREFIX, key, {"title": "New chat", "content": ""})
+    store.merge_document(
+        PROGENA_STATE_PREFIX, key, {"content": "<user> hi", "preview": "hi", "last_activity": "t1"}
+    )
+    store.merge_document(PROGENA_STATE_PREFIX, key, {"title": "Hiking", "preview": "bye"})
+
+    events = [event for event in _settled_events(store, cursor) if event.key == key]
+    assert [event.op for event in events] == ["created", "updated"]
+    assert events[1].after["title"] == "Hiking"

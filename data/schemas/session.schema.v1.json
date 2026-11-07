@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Session",
-  "description": "One chat conversation. Postgres creates it ('session:<thread_id>') when the first user message of a ui/telegram/api thread is checkpointed; the runtime writes 'content' (the IRC-style transcript) and 'last_activity' after each turn. Progena reads and edits it as a file under /conversations/; only the type's writable fields can be changed.",
+  "description": "One chat conversation. Postgres creates it ('session:<thread_id>') when the first user message of a ui/telegram/api thread is checkpointed; the runtime writes 'content' (the IRC-style transcript), 'preview' and 'last_activity' after each turn. Progena reads and edits it as a file under /conversations/; only the type's writable fields can be changed.",
   "type": "object",
   "required": ["id", "thread_id", "source", "title", "first_message", "pinned", "archived", "created_at", "last_activity", "content"],
   "properties": {
@@ -47,6 +47,11 @@
       "format": "date-time",
       "readOnly": true,
       "description": "When the latest turn finished (created_at until then)."
+    },
+    "preview": {
+      "type": "string",
+      "readOnly": true,
+      "description": "The latest user or assistant message, secret-redacted, whitespace-collapsed and cut to 200 characters; the conversation list's second line. Written with 'content' after each turn, so it may be absent before the first turn finishes."
     },
     "content": {
       "type": "string",

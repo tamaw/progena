@@ -9,7 +9,9 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import PoolClosed
 
 from src.backend.storage.documents import (
+    PROGENA_STATE_PREFIX,
     STORE_CHANGE_CHANNEL,
+    InboxRowQuery,
     InMemoryDocumentStore,
     PostgresDocumentStore,
     StoreChangeListener,
@@ -354,3 +356,93 @@ async def test_listener_reconnects_after_connection_error(monkeypatch):
         await listener.stop()
 
     assert len(attempts) >= 2
+
+
+def test_inbox_row_query_postgres_matches_memory_and_excludes_bodies(postgres_url: str):
+    memory = InMemoryDocumentStore()
+    postgres = PostgresDocumentStore(postgres_url)
+    postgres.open()
+    payloads = [
+        {
+            "id": "new",
+            "title": "Zulu",
+            "created_at": "2026-07-03T00:00:00+00:00",
+            "body": "first preview\nneedle in full body",
+            "read": False,
+        },
+        {
+            "id": "old",
+            "title": "Alpha",
+            "created_at": "2026-07-01T00:00:00+00:00",
+            "body": "ordinary",
+            "read": True,
+        },
+        {
+            "id": "archived",
+            "title": "Archived",
+            "created_at": "2026-07-04T00:00:00+00:00",
+            "body": "needle archived",
+            "archived": True,
+        },
+    ]
+    try:
+        for payload in payloads:
+            key = f"inbox_message:{payload['id']}"
+            memory.save_document(PROGENA_STATE_PREFIX, key, payload)
+            postgres.save_document(PROGENA_STATE_PREFIX, key, payload)
+        for query in (
+            InboxRowQuery(),
+            InboxRowQuery(sort="name"),
+            InboxRowQuery(q="needle"),
+            InboxRowQuery(filter="unread"),
+            InboxRowQuery(filter="archived"),
+        ):
+            expected = memory.query_inbox_rows(query, offset=0, limit=50)
+            actual = postgres.query_inbox_rows(query, offset=0, limit=50)
+            assert actual == expected
+            assert all("body" not in row for row in actual.rows)
+        assert postgres.inbox_unread_count() == memory.inbox_unread_count() == 1
+    finally:
+        postgres.close()
+
+
+def test_inbox_row_pages_postgres_cover_every_row_once_and_match_memory(postgres_url: str):
+    """Positional paging is what the Inbox list scrolls over: no gaps, no repeats, no drift."""
+    memory = InMemoryDocumentStore()
+    postgres = PostgresDocumentStore(postgres_url)
+    postgres.open()
+    # Equal creation instants and equal titles force the id tiebreak on both orders.
+    payloads = [
+        {"id": f"m{index}", "title": title, "created_at": created, "body": f"body {index}"}
+        for index, (title, created) in enumerate(
+            [
+                ("beta", "2026-07-03T00:00:00+00:00"),
+                ("Alpha", "2026-07-03T00:00:00+00:00"),
+                ("alpha", "2026-07-02T00:00:00+00:00"),
+                ("delta", "2026-07-02T00:00:00+00:00"),
+                ("Gamma", "2026-07-01T00:00:00+00:00"),
+                ("echo", "2026-07-01T00:00:00+00:00"),
+                ("zulu", "2026-06-30T00:00:00+00:00"),
+            ]
+        )
+    ]
+    try:
+        for payload in payloads:
+            key = f"inbox_message:{payload['id']}"
+            memory.save_document(PROGENA_STATE_PREFIX, key, payload)
+            postgres.save_document(PROGENA_STATE_PREFIX, key, payload)
+        for sort in ("recent", "name"):
+            query = InboxRowQuery(sort=sort)
+            whole = [row["id"] for row in postgres.query_inbox_rows(query, offset=0, limit=50).rows]
+            paged: list[str] = []
+            for offset in range(0, len(payloads) + 2, 3):
+                page = postgres.query_inbox_rows(query, offset=offset, limit=3)
+                assert page == memory.query_inbox_rows(query, offset=offset, limit=3)
+                assert page.total == len(payloads)
+                paged.extend(row["id"] for row in page.rows)
+            assert paged == whole
+            assert sorted(paged) == sorted(payload["id"] for payload in payloads)
+        past_end = postgres.query_inbox_rows(InboxRowQuery(), offset=50, limit=3)
+        assert past_end.rows == [] and past_end.total == len(payloads)
+    finally:
+        postgres.close()

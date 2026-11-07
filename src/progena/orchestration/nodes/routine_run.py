@@ -27,6 +27,8 @@ from src.progena.orchestration.nodes.context import HeartbeatContext
 from src.progena.orchestration.state import ProgenaState
 from src.progena.routines.controls import RoutineRunCancelled, RoutineRunControlExit
 from src.progena.routines.events import persist_run_event
+from src.progena.sessions.render import record_session_turn_terminal
+from src.progena.sessions.status import SessionTurnStatus
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +56,18 @@ async def routine_run_node(
     metadata = state.get("current_input_metadata") or {}
     routine_id = str(metadata.get("routine_id") or "").strip()
 
+    async def record_terminal(status: SessionTurnStatus) -> None:
+        thread_id = str(
+            metadata.get("conversation_id")
+            or metadata.get("thread_id")
+            or state.get("requested_thread_id")
+            or ""
+        ).strip()
+        if thread_id:
+            await record_session_turn_terminal(thread_id, runtime.context.state_manager, status)
+
     async def failed(message: str, exc: Exception | None = None) -> dict[str, Any]:
+        await record_terminal("failed")
         if not getattr(exc, "routine_lifecycle_reported", False):
             await persist_run_event(
                 getattr(runtime.context, "state_manager", None),
@@ -95,12 +108,15 @@ async def routine_run_node(
             logger.info(
                 "routine_run resume ended by user control for %r: %s", routine_id, exc.status
             )
+            await record_terminal("cancelled")
             return {}
         except RoutineRunCancelled:
             logger.info("routine_run resume refused cancelled logical run for %r", routine_id)
+            await record_terminal("cancelled")
             return {}
         except Exception as exc:
             return await failed(str(exc), exc)
+        await record_terminal("completed")
         return {}
 
     routine_runner = runtime.context.routine_runner
@@ -126,14 +142,17 @@ async def routine_run_node(
         result = await routine_runner(routine_id, invoke_input)
     except RoutineRunControlExit as exc:
         logger.info("routine_run node ended by user control for %r: %s", routine_id, exc.status)
+        await record_terminal("cancelled")
         return {}
     except RoutineRunCancelled:
         logger.info("routine_run node refused cancelled logical run for %r", routine_id)
+        await record_terminal("cancelled")
         return {}
     except Exception as exc:  # noqa: BLE001 - convert to cycle_error like cycle_node does
         logger.warning("routine_run node failed for %r: %s", routine_id, exc)
         return await failed(f"routine '{routine_id}' failed: {exc}", exc)
 
+    await record_terminal("completed")
     messages = result.get("messages") if isinstance(result, dict) else None
     if messages:
         # subagent.py's _run already converts a human-node interrupt into an

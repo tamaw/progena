@@ -89,3 +89,38 @@ describe('background subscriptions after reconnect', () => {
     });
   }
 });
+
+describe('background task watch release', () => {
+  it('adopts the opened chat interest, survives a re-render gap, and asks again after a release', async () => {
+    vi.useFakeTimers();
+    try {
+      const { requestAcknowledged } = await import('@frontend/store/http');
+      requestAcknowledged.mockReset().mockResolvedValue({});
+      const { noteServerRegistration, watchBackgroundTasks } = await import('@frontend/features/chat/backgroundTaskSubscription');
+      const url = '/api/ui/chats/open/background-tasks';
+      const bodies = () => requestAcknowledged.mock.calls.map(([, { body }]) => body.subscribed);
+
+      // Opening the chat registered the interest server-side.
+      noteServerRegistration(url);
+      const stop = watchBackgroundTasks(url);
+      stop();
+      // The open chat reloads: its view drops the watch and takes it back.
+      const stopAgain = watchBackgroundTasks(url);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(bodies()).toEqual([]);
+
+      stopAgain();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(bodies()).toEqual([false]);
+
+      // Returning to the chat from its cached detail makes no detail request,
+      // so the released interest must be asked for again.
+      const stopRevisit = watchBackgroundTasks(url);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(bodies()).toEqual([false, true]);
+      stopRevisit();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

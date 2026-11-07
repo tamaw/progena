@@ -1,5 +1,6 @@
 import { UI_EVENT } from '../../../realtime/eventVocabulary';
 import { usePaneCollapse } from '../../../hooks/usePaneCollapse';
+import useStreamTopic from '../../../hooks/useStreamTopic';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -12,11 +13,12 @@ import useAiRename, { aiRenameBlockedReason, createAiRenameAction } from '../hoo
 import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
 import { reportFailure } from '../../../lib/failures';
 import { createUuid } from '../../../lib/uuid';
-import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession, reconcileChatPagination } from '../state/actions';
-import { deleteChatSession, fetchChatMessages, requestChatSessionDetail, requestChatSessionReconciliation, selectActiveChatSession, selectActiveChatSessionState, selectChatReconciliationState, selectChatSessions, selectChatSessionsState, updateChatSessionMetadata } from '../state/chats';
+import { clearChatGenerating, clearChatUnread, clearActiveChatSession, reconcileChatPagination } from '../state/actions';
+import { CHAT_LIST_PAGE_SIZE, deleteChatSession, fetchChatMessages, fetchChatSessions, requestChatSessionDetail, requestChatSessionReconciliation, selectActiveChatSession, selectActiveChatSessionState, selectChatReconciliationState, selectChatRowsById, selectChatSessions, selectChatSessionsState, updateChatSessionMetadata } from '../state/chats';
 import { savePreferences, selectPreferences, selectPreferencesSaveRequest } from '../../settings/state/preferences';
 import { selectModelProfiles } from '../../settings/state/modelProfiles';
 import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
+import { selectRealtimeStreamReady } from '../../../realtime/realtimeSlice';
 import ChatInput from '../components/ChatInput';
 import ChatQueue from '../components/ChatQueue';
 import { BackgroundActivity, BackgroundActivityHistory } from '../components/BackgroundActivity';
@@ -26,14 +28,16 @@ import QuickActions from '../components/QuickActions';
 import InlineFailure from '../../../components/InlineFailure';
 import PageShell from '../../../components/layout/PageShell';
 import DetailPane from '../../../components/layout/DetailPane';
-import { areChatTranscriptsEquivalent, mergeCanonicalMessages, excludeLiveOwnedMessage, shouldRetireLiveOwnerAfterCanonicalReconciliation, countTokens, countToolInvocations, deriveChatTitle, groupSessionItems, shouldShowChatContentLoading, getActiveRouteThreadId, shouldShowNewChatEmptyState, shouldDisableChatComposer, resolveInitialChatThreadId, shouldDeferInitialRosterSelection, shouldDeferRouteSelection, shouldDismissEmptySelection, shouldSkipRoutedMountOpen, isReopeningCurrentLocalDraft, shouldAdoptMaterializedDraft } from '../models/conversationModel';
-import { buildChatSessionItems, compareSessionItems, findAdjacentSessionItem, normalizeBackendChatMessage, shouldLoadSelectedBackendChat, sidebarEmptyMessage, visibleGroupsForFilter } from '../models/chatSessionsModel';
+import { areChatTranscriptsEquivalent, mergeCanonicalMessages, excludeLiveOwnedMessage, shouldRetireLiveOwnerAfterCanonicalReconciliation, countTokens, countToolInvocations, deriveChatTitle, groupSessionItems, getTimeBucketBoundaries, shouldShowChatContentLoading, getActiveRouteThreadId, shouldShowNewChatEmptyState, shouldDisableChatComposer, resolveInitialChatThreadId, shouldDeferInitialRosterSelection, shouldDeferRouteSelection, shouldDismissEmptySelection, shouldSkipRoutedMountOpen, isReopeningCurrentLocalDraft, shouldAdoptMaterializedDraft } from '../models/conversationModel';
+import { buildBackendSessionItem, buildChatSessionItems, findAdjacentSessionItem, normalizeBackendChatMessage, shouldLoadSelectedBackendChat, sidebarEmptyMessage, visibleGroupsForFilter } from '../models/chatSessionsModel';
 import { isEventVisible, loadStreamFilters } from '../models/streamFilters';
 import ChatMessages from '../components/ChatMessages';
 import { LiveConversationHeader } from '../components/ConversationHeader';
 import { ARCHIVED_CHAT_SESSIONS_KEY, loadQuickChatHandoff, persistPinnedSessionIds } from '../models/chatStorage';
 import { useEntityUrlSync } from '../../../lib/routes';
 import { getDailyWelcomeMessage, normalizeStoredMessage, stripEphemeralStreamEvents } from '../models/conversationPageModel';
+import usePositionalListRange from '../../../hooks/usePositionalListRange';
+import useStreamResync from '../../../hooks/useStreamResync';
 import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from '../models/transcriptScroll';
 import { ConversationSessionsPane } from '../components/ConversationSessionsPane';
 import { useConversationAttachments } from '../hooks/useConversationAttachments';
@@ -58,6 +62,21 @@ function alignSummaryMarkerAnchors(markers, canonicalMessages, renderedMessages)
       : marker;
   });
 }
+function sameSidebarView(left, right) {
+  return left?.q === right.q && left?.sort === right.sort && left?.filter === right.filter;
+}
+
+function browserGroupStarts() {
+  const boundaries = getTimeBucketBoundaries();
+  return {
+    today: new Date(boundaries.today).toISOString(),
+    yesterday: new Date(boundaries.yesterday).toISOString(),
+    thisWeek: new Date(boundaries.thisWeek).toISOString(),
+    lastWeek: new Date(boundaries.lastWeek).toISOString(),
+  };
+}
+// A row update this soon after the open chat was reloaded brings nothing new.
+const ROW_RELOAD_COALESCE_MS = 3000;
 
 function ConversationPage() {
   const dispatch = useDispatch();
@@ -68,8 +87,10 @@ function ConversationPage() {
   const { collapsed: sessionsCollapsed, setCollapsed: setSessionsCollapsed, paneClassName: sessionsPaneClassName } = usePaneCollapse('chat-sessions-pane');
   const { config, getApiUrl } = useConfig();
   const { connectionState, sendMessageStream, queueMessage, cancelStream, observeResponseStream } = useChatApi();
+  const streamReady = useSelector(selectRealtimeStreamReady);
   const { show } = useNotifications();
   const backendChatSessions = useSelector(selectChatSessions);
+  const chatRowsById = useSelector(selectChatRowsById);
   const backendChatSessionsState = useSelector(selectChatSessionsState);
   const activeBackendChat = useSelector(selectActiveChatSession);
   const activeBackendChatState = useSelector(selectActiveChatSessionState);
@@ -122,12 +143,14 @@ function ConversationPage() {
     createThreadId: createUuid,
   }));
   const derivedChatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
-  // The open thread's session document, once Postgres has created it. Its title
-  // is authoritative: anyone (the header, a workflow, Progena) may rename it.
-  const threadSession = useMemo(
-    () => backendChatSessions.find((session) => session.thread_id === threadId) ?? null,
-    [backendChatSessions, threadId],
-  );
+  useStreamTopic('chats');
+  useStreamTopic(threadId ? `chat:${threadId}` : null);
+  // A deep-linked chat may be outside the loaded sidebar window. Its selected
+  // detail remains the authoritative metadata until that window loads.
+  const threadSession = threadId
+    ? chatRowsById[threadId]
+      || (activeBackendChat?.thread_id === threadId ? activeBackendChat : null)
+    : null;
   const chatTitle = threadSession?.title || derivedChatTitle;
   const [selectedBackendChatId, setSelectedBackendChatId] = useState(() => urlThreadId || null);
   // Thread-scoped header actions (AI Rename, Open in Quick Chat) target only the
@@ -143,6 +166,29 @@ function ConversationPage() {
   const [sidebarFilter, setSidebarFilter] = useState('all');
   const [sidebarQuery, setSidebarQuery] = useState('');
   const [sidebarSort, setSidebarSort] = useState('Recent');
+  const sidebarView = useMemo(() => ({
+    q: sidebarQuery,
+    sort: sidebarSort === 'Name' ? 'name' : 'recent',
+    filter: ['archived', 'unread', 'error'].includes(sidebarFilter) ? sidebarFilter : 'active',
+  }), [sidebarFilter, sidebarQuery, sidebarSort]);
+  const fetchSidebarPage = useCallback(
+    ({ view, offset, limit }) => dispatch(fetchChatSessions({
+      chatsUrl: getApiUrl('chats'),
+      view,
+      offset,
+      limit,
+      groupStarts: browserGroupStarts(),
+    })),
+    [dispatch, getApiUrl],
+  );
+  const requestSidebarRange = usePositionalListRange({
+    list: backendChatSessionsState,
+    view: sidebarView,
+    sameView: sameSidebarView,
+    streamReady,
+    pageSize: CHAT_LIST_PAGE_SIZE,
+    fetchPage: fetchSidebarPage,
+  });
   // The no-route bootstrap creates a fresh draft session asynchronously. Keep
   // initial roster auto-selection behind that bootstrap; otherwise the two
   // mount effects race and the selected chat can oscillate between the draft
@@ -187,11 +233,17 @@ function ConversationPage() {
   // Current selection, mirrored into a ref so a stream that finishes in the
   // background can tell whether the user is now viewing its origin chat.
   const selectedBackendChatIdRef = useRef(null);
+  // The page's current thread id; while no backend chat is selected it is the
+  // local draft, which has no session document until its first message.
+  const localDraftThreadIdRef = useRef(threadId);
   // Mirrors `backendChatSessions` so the bootstrap effect and openBackendChat
   // can read the current roster without depending on the array itself (it
   // gets a new reference on every session snapshot, which would re-run them).
   const backendChatSessionsRef = useRef(backendChatSessions);
   const pendingOpenThreadIdRef = useRef(null);
+  // Ids whose detail request answered 404: unsent drafts, opened locally from
+  // then on so a routed draft URL does not request its detail again.
+  const missingThreadIdsRef = useRef(new Set());
   const selectionIntentRef = useRef(null);
   const foregroundOwnershipTokenRef = useRef(0);
   const reconciliationIntentRef = useRef(null);
@@ -203,7 +255,9 @@ function ConversationPage() {
   useEffect(() => {
     selectedBackendChatIdRef.current = selectedBackendChatId;
   }, [selectedBackendChatId]);
-
+  useEffect(() => {
+    localDraftThreadIdRef.current = threadId;
+  }, [threadId]);
   useEffect(() => {
     backendChatSessionsRef.current = backendChatSessions;
   }, [backendChatSessions]);
@@ -220,6 +274,12 @@ function ConversationPage() {
       requestId,
     }));
   }, [dispatch, getApiUrl]);
+  // The server drops this tab's chat topics and background-task interest with
+  // the stream, and a reply or delta missed meanwhile is never replayed.
+  useStreamResync(() => {
+    const openThreadId = selectedBackendChatIdRef.current;
+    if (openThreadId) reloadOpenChat(openThreadId);
+  });
 
   const beginForegroundStream = useCallback(() => {
     foregroundOwnershipTokenRef.current += 1;
@@ -274,14 +334,56 @@ function ConversationPage() {
     cancelStream,
     observeResponseStream,
     dispatch,
-    getApiUrl,
     show,
     selectedBackendChatIdRef,
     reloadOpenChat,
     onForegroundStreamStarted: beginForegroundStream,
     requestForegroundReconciliation,
   });
-  const chatQueue = useChatQueue(selectedBackendChatId);
+  const chatQueue = useChatQueue(
+    selectedBackendChatId,
+    activeBackendChat?.thread_id === selectedBackendChatId ? activeBackendChatState.queue : undefined,
+  );
+  const lastOpenRowActivityRef = useRef(null);
+  // When the open chat was last reloaded. A turn's completion reloads it, and
+  // that turn's row update follows within moments; one reload covers both.
+  const lastReconciliationRef = useRef({ threadId: null, at: 0 });
+  useEffect(() => {
+    if (threadSession?.thread_id === selectedBackendChatId) {
+      lastOpenRowActivityRef.current = threadSession.last_activity || null;
+    }
+  }, [selectedBackendChatId, threadSession?.last_activity, threadSession?.thread_id]);
+  useEffect(() => subscribeUiEvent((event) => {
+    if (event?.type !== UI_EVENT.CHAT_LIST_ROW_UPSERTED) return;
+    const row = event.payload?.row;
+    if (row?.thread_id !== selectedBackendChatIdRef.current || typeof row.last_activity !== 'string') {
+      return;
+    }
+    const previous = lastOpenRowActivityRef.current;
+    lastOpenRowActivityRef.current = row.last_activity;
+    const recent = lastReconciliationRef.current;
+    if (
+      activeStreamIdRef.current
+      || backgroundOriginChatIdRef.current === row.thread_id
+      || backgroundGeneratingChatIds.has(row.thread_id)
+      || (recent.threadId === row.thread_id && Date.now() - recent.at < ROW_RELOAD_COALESCE_MS)
+    ) {
+      return;
+    }
+    // A turn no browser saw (Telegram, schedules) finished on the open chat.
+    if (previous && row.last_activity > previous) {
+      requestForegroundReconciliation({
+        threadId: row.thread_id,
+        streamId: null,
+        forceCanonical: true,
+      });
+    }
+  }), [
+    activeStreamIdRef,
+    backgroundGeneratingChatIds,
+    backgroundOriginChatIdRef,
+    requestForegroundReconciliation,
+  ]);
 
 
   const liveContextUsage = useSyncExternalStore(
@@ -302,6 +404,34 @@ function ConversationPage() {
     [messages, modelProfiles],
   );
 
+  const openLocalDraft = useCallback((requestedThreadId) => {
+    const isReopeningCurrentDraft = isReopeningCurrentLocalDraft({
+      selectedBackendChatId,
+      currentThreadId: threadId,
+      requestedThreadId,
+    });
+    selectionIntentRef.current = { threadId: requestedThreadId };
+    if (!isReopeningCurrentDraft) {
+      preserveStreamInBackground();
+      beginForegroundStream();
+      retireForegroundStream();
+      setMessages([]);
+      setOldestMessageCursor(null);
+    }
+    materializedDraftThreadIdRef.current = null;
+    selectedBackendChatIdRef.current = null;
+    setSelectedBackendChatId(null);
+    dispatch(clearActiveChatSession());
+    setThreadId(requestedThreadId);
+  }, [
+    beginForegroundStream,
+    dispatch,
+    preserveStreamInBackground,
+    retireForegroundStream,
+    selectedBackendChatId,
+    threadId,
+  ]);
+
   const openBackendChat = useCallback(async (requestedThreadId) => {
     if (!requestedThreadId) {
       return;
@@ -309,27 +439,21 @@ function ConversationPage() {
     if (pendingOpenThreadIdRef.current === requestedThreadId) {
       return;
     }
-    // A thread with no session document is a local draft (nothing sent yet,
-    // or Postgres hasn't checkpointed its first message): open it locally
-    // instead of asking the backend for a session that doesn't exist.
-    if (!backendChatSessionsRef.current.some((session) => session.thread_id === requestedThreadId)) {
-      const isReopeningCurrentDraft = isReopeningCurrentLocalDraft({
-        selectedBackendChatId,
-        currentThreadId: threadId,
-        requestedThreadId,
-      });
-      selectionIntentRef.current = { threadId: requestedThreadId };
-      if (!isReopeningCurrentDraft) {
-        preserveStreamInBackground();
-        beginForegroundStream();
-        retireForegroundStream();
-        setMessages([]);
-        setOldestMessageCursor(null);
-      }
-      materializedDraftThreadIdRef.current = null;
-      selectedBackendChatIdRef.current = null;
-      setSelectedBackendChatId(null);
-      setThreadId(requestedThreadId);
+    // An unsent draft has no session document: the page's own current draft,
+    // a draft the URL does not name, or one the server already answered 404.
+    if (
+      !backendChatSessionsRef.current.some((session) => session.thread_id === requestedThreadId)
+      && (
+        isReopeningCurrentLocalDraft({
+          selectedBackendChatId: selectedBackendChatIdRef.current,
+          currentThreadId: localDraftThreadIdRef.current,
+          requestedThreadId,
+        })
+        || requestedThreadId !== urlThreadId
+        || missingThreadIdsRef.current.has(requestedThreadId)
+      )
+    ) {
+      openLocalDraft(requestedThreadId);
       return;
     }
     pendingOpenThreadIdRef.current = requestedThreadId;
@@ -348,7 +472,6 @@ function ConversationPage() {
     setSelectedBackendChatId(requestedThreadId);
     dispatch(clearChatGenerating(requestedThreadId));
     dispatch(clearChatUnread(requestedThreadId));
-    dispatch(clearChatErrored(requestedThreadId));
     lastAppliedBackendChatRequestIdRef.current = null;
     const request = dispatch(requestChatSessionDetail({
       chatsUrl: getApiUrl('chats'),
@@ -357,6 +480,13 @@ function ConversationPage() {
     }));
     try {
       return await request.unwrap();
+    } catch (error) {
+      if (error?.status === 404 || error?.code === 'HTTP_404') {
+        missingThreadIdsRef.current.add(requestedThreadId);
+        openLocalDraft(requestedThreadId);
+        return undefined;
+      }
+      throw error;
     } finally {
       if (pendingOpenThreadIdRef.current === requestedThreadId) {
         pendingOpenThreadIdRef.current = null;
@@ -367,13 +497,10 @@ function ConversationPage() {
     beginForegroundStream,
     dispatch,
     getApiUrl,
+    openLocalDraft,
     pendingOpenThreadIdRef,
-    preserveStreamInBackground,
-    selectedBackendChatId,
-    retireForegroundStream,
     setIsGenerating,
-    setMessages,
-    threadId,
+    urlThreadId,
   ]);
   const acquireDraftChat = useCallback(async (requestedThreadId = null) => {
     // Local-only draft; the backend creates the session document when the
@@ -402,7 +529,20 @@ function ConversationPage() {
     (event) => isEventVisible(event, streamFilters),
     [streamFilters],
   );
-  const hasUnreadChats = unreadChatIds.size > 0;
+
+  const markingReadRef = useRef(new Set());
+  // Reading is account-wide; error status belongs to the last turn, not selection.
+  useEffect(() => {
+    if (!selectedBackendChatId || !chatRowsById[selectedBackendChatId]?.unread
+      || markingReadRef.current.has(selectedBackendChatId)) return;
+    markingReadRef.current.add(selectedBackendChatId);
+    dispatch(clearChatUnread(selectedBackendChatId));
+    dispatch(updateChatSessionMetadata({
+      chatsUrl: getApiUrl('chats'),
+      threadId: selectedBackendChatId,
+      patch: { unread: false },
+    })).finally(() => markingReadRef.current.delete(selectedBackendChatId));
+  }, [chatRowsById, dispatch, getApiUrl, selectedBackendChatId]);
 
   const updateStreamFilters = useCallback(
     (nextFilters) => {
@@ -579,6 +719,7 @@ function ConversationPage() {
       setForegroundReconciliationIntent(null);
       return;
     }
+    lastReconciliationRef.current = { threadId: foregroundReconciliationIntent.threadId, at: Date.now() };
     const request = dispatch(requestChatSessionReconciliation({
       chatsUrl: getApiUrl('chats'),
       threadId: foregroundReconciliationIntent.threadId,
@@ -1182,6 +1323,7 @@ function ConversationPage() {
       firstMessageTime,
       archivedSessions,
       pinnedSessionIds,
+      sidebarQuery,
       backendChatSessions,
       backendChatsLoaded: backendChatSessionsState.loaded,
       // A local draft becomes its session's card as soon as the session exists.
@@ -1205,6 +1347,7 @@ function ConversationPage() {
       messages,
       pinnedSessionIds,
       selectedBackendChatId,
+      sidebarQuery,
       threadSession,
       threadId,
       totalTokenCount,
@@ -1217,26 +1360,98 @@ function ConversationPage() {
     [sessionItems],
   );
   const visibleSessionGroups = useMemo(() => {
-    const normalizedQuery = sidebarQuery.trim().toLowerCase();
-    const filtered = normalizedQuery
-      ? sessionItems.filter((item) => `${item.title} ${item.summary ?? ''}`.toLowerCase().includes(normalizedQuery))
-      : sessionItems;
-    // "Recent" (the default) sorts pinned-first then most-recent-activity
-    // first; grouping still buckets by recency afterward, so this is what
-    // actually determines order *within* each bucket instead of leaving it
-    // however the items happened to arrive in chats.order.
-    const sortedForGrouping = sidebarSort === 'Name' ? filtered : [...filtered].sort(compareSessionItems);
-    const groups = visibleGroupsForFilter({ sessionItems: sortedForGrouping, sidebarFilter, groupSessionItems });
-    // "Name" collapses the recency buckets into a single flat A→Z list (no header),
-    // keeping whatever the active filter already selected.
+    const groups = visibleGroupsForFilter({ sessionItems, sidebarFilter, groupSessionItems });
     if (sidebarSort === 'Name') {
-      const items = groups
-        .flatMap((group) => group.items)
-        .sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
+      const items = groups.flatMap((group) => group.items);
       return items.length ? [{ key: 'name', label: null, items }] : [];
     }
     return groups;
-  }, [sessionItems, sidebarFilter, sidebarQuery, sidebarSort]);
+  }, [sessionItems, sidebarFilter, sidebarSort]);
+  const localSidebarItems = useMemo(() => sessionItems.filter((item) => (
+    item.source === 'local'
+    && (sidebarFilter !== 'archived' || item.archived)
+    && (sidebarFilter !== 'all' || !item.archived)
+    && (sidebarFilter !== 'unread' || (item.unread && !item.archived))
+    && (sidebarFilter !== 'error' || (item.erroredInBackground && !item.archived))
+  )), [sessionItems, sidebarFilter]);
+  const virtualSidebarList = useMemo(() => {
+    if (!sameSidebarView(backendChatSessionsState.view, sidebarView)) {
+      return null;
+    }
+    const groupTitles = {
+      pinned: 'Pinned',
+      today: 'Today',
+      yesterday: 'Yesterday',
+      'this-week': 'This Week',
+      'last-week': 'Last Week',
+      later: 'Later',
+    };
+    const backendGroups = sidebarFilter === 'archived'
+      ? [{ key: 'archived', title: 'Archived', count: backendChatSessionsState.total }]
+      : sidebarView.sort === 'recent'
+        ? backendChatSessionsState.groups.map((group) => ({
+          ...group,
+          title: groupTitles[group.key] ?? group.key,
+        }))
+        : [{ key: 'backend', title: null, count: backendChatSessionsState.total }];
+    const localCount = localSidebarItems.length;
+    return {
+      total: localCount + backendChatSessionsState.total,
+      rowHeight: 51,
+      headerHeight: 27,
+      groups: [
+        ...(localCount ? [{ key: 'local', title: 'Local', count: localCount }] : []),
+        ...backendGroups,
+      ],
+      rowAt: (index) => {
+        if (index < localCount) return localSidebarItems[index];
+        const backendIndex = index - localCount;
+        const rowThreadId = backendChatSessionsState.rowsByIndex[backendIndex];
+        const row = rowThreadId ? chatRowsById[rowThreadId] : null;
+        return row ? buildBackendSessionItem(
+          row,
+          selectedBackendChatId || threadSession?.thread_id || null,
+          unreadChatIds,
+          backgroundGeneratingChatIds,
+          backgroundChatActivityByThreadId,
+          backgroundErrorChatIds,
+          isGenerating,
+        ) : undefined;
+      },
+      onRangeNeeded: (start, end, force) => {
+        if (end <= localCount) return;
+        requestSidebarRange(Math.max(0, start - localCount), end - localCount, force);
+      },
+      rowDelta: backendChatSessionsState.rowDelta
+        ? {
+          ...backendChatSessionsState.rowDelta,
+          index: backendChatSessionsState.rowDelta.index + localCount,
+          end: backendChatSessionsState.rowDelta.end == null
+            ? null
+            : backendChatSessionsState.rowDelta.end + localCount,
+        }
+        : null,
+    };
+  }, [
+    backendChatSessionsState.groups,
+    backendChatSessionsState.rowDelta,
+    backendChatSessionsState.rowsByIndex,
+    backendChatSessionsState.total,
+    backendChatSessionsState.view,
+    backgroundChatActivityByThreadId,
+    backgroundErrorChatIds,
+    backgroundGeneratingChatIds,
+    chatRowsById,
+    isGenerating,
+    localSidebarItems,
+    requestSidebarRange,
+    selectedBackendChatId,
+    sidebarFilter,
+    sidebarView,
+    threadSession,
+    unreadChatIds,
+  ]);
+
   const visibleSessionItems = useMemo(
     () => visibleSessionGroups.flatMap((group) => group.items),
     [visibleSessionGroups],
@@ -1531,7 +1746,6 @@ function ConversationPage() {
         setSessionsCollapsed={setSessionsCollapsed}
         sidebarFilter={sidebarFilter}
         setSidebarFilter={setSidebarFilter}
-        hasUnreadChats={hasUnreadChats}
         startNewChatSession={startNewChatSession}
         isClearingSession={isClearingSession}
         sidebarQuery={sidebarQuery}
@@ -1539,6 +1753,7 @@ function ConversationPage() {
         sidebarSort={sidebarSort}
         setSidebarSort={setSidebarSort}
         visibleSessionGroups={visibleSessionGroups}
+        virtualList={virtualSidebarList}
         sidebarEmptyMessageText={sidebarEmptyMessageText}
         selectSessionItem={selectSessionItem}
       />
@@ -1658,6 +1873,23 @@ function ConversationPage() {
           threadId={threadId}
           runsUrl={getApiUrl('runs')}
           chatsUrl={getApiUrl('chats')}
+          // Only a persisted chat that is the one on screen watches its tasks.
+          // Opening it (the detail request) registers the interest, so wait for
+          // that first answer, and a failed open (an unsent draft answers 404)
+          // watches nothing. Later reloads of an open chat must not toggle the
+          // watch: its release would race the interest the reload registers. A
+          // draft whose first message just created its session asks itself.
+          subscribeTasks={Boolean(
+            selectedBackendChatId
+            && threadId === selectedBackendChatId
+            && (
+              activeBackendChat?.thread_id === selectedBackendChatId
+              || !(
+                activeBackendChatState.threadId === selectedBackendChatId
+                && (activeBackendChatState.loading || activeBackendChatState.error)
+              )
+            ),
+          )}
         />
         <StickyTodoProgress
           liveTurnStore={liveTurnStore}

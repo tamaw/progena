@@ -7,6 +7,8 @@ import { UI_EVENT } from '../../../realtime/eventVocabulary';
  */
 import { createSelector } from '@reduxjs/toolkit';
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from '../../../store/async';
+import { withQuery } from '../../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realtimeClient';
 
 const VALID_PINNED_PANELS = new Set(['quickChat', 'alerts', 'insights']);
 export const DEFAULT_AGENT_NAME = 'Progena';
@@ -57,7 +59,10 @@ function applyPreferences(state, payload) {
 // `preferences.snapshot`.
 export const fetchPreferences = createAcknowledgedThunk(
   'uiData/fetchPreferences',
-  async ({ preferencesUrl }, { requestId }) => requestAcknowledged(preferencesUrl, { requestId }),
+  async ({ preferencesUrl }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(withQuery(preferencesUrl, { client_id: realtimeClientId }), { requestId });
+  },
 );
 
 // Persist the full preferences document. The backend validates it, saves it,
@@ -81,22 +86,27 @@ export const savePreferences = createAcknowledgedThunk(
       lastOpenChatId,
     },
     { requestId },
-  ) =>
-    requestAcknowledged(preferencesUrl, {
-      method: 'PUT',
-      body: {
-        display_name: displayName,
-        agent_name: agentName,
-        timezone,
-        theme,
-        nav_collapsed: navCollapsed,
-        pinned_panel: pinnedPanel,
-        notification_sounds: notificationSounds,
-        quick_chat_thread_id: quickChatThreadId,
-        last_open_chat_thread_id: lastOpenChatId,
+  ) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(
+      withQuery(preferencesUrl, { client_id: realtimeClientId }),
+      {
+        method: 'PUT',
+        body: {
+          display_name: displayName,
+          agent_name: agentName,
+          timezone,
+          theme,
+          nav_collapsed: navCollapsed,
+          pinned_panel: pinnedPanel,
+          notification_sounds: notificationSounds,
+          quick_chat_thread_id: quickChatThreadId,
+          last_open_chat_thread_id: lastOpenChatId,
+        },
+        requestId,
       },
-      requestId,
-    }),
+    );
+  },
 );
 
 export const eventHandlers = {

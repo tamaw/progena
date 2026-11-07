@@ -5,7 +5,8 @@ import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import realtimeReducer, { realtimeConnected, uiEventReceived } from '@frontend/realtime/realtimeSlice';
+import realtimeReducer, { realtimeConnected, realtimeStreamReady, uiEventReceived } from '@frontend/realtime/realtimeSlice';
+import { setRealtimeClientReady } from '@frontend/realtime/realtimeClient';
 import uiDataReducer from '@frontend/store/uiDataSlice';
 import { applyUiEvent } from '@frontend/store/uiEvents';
 import PluginsPage from '@frontend/features/plugins/PluginsPage';
@@ -51,15 +52,17 @@ beforeEach(() => {
   }));
   store = configureStore({ reducer: { realtime: realtimeReducer, uiData: uiDataReducer } });
   store.dispatch(realtimeConnected());
+  setRealtimeClientReady(true);
   deliver('marketplaces.snapshot', { marketplaces: { market: {} } });
   deliver('plugins.snapshot', { plugins: {} });
-  deliver('plugin.catalog.snapshot', { name: 'market', catalog: { plugins: [{ name: 'helper', displayName: 'Helper' }] } });
+  deliver('plugin_catalog.snapshot', { name: 'market', catalog: { plugins: [{ name: 'helper', displayName: 'Helper' }] } });
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
 });
 
 afterEach(async () => {
+  setRealtimeClientReady(false);
   await act(async () => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
@@ -84,6 +87,29 @@ function expectInstallReported() {
   expect(host.textContent).toContain(NEW_CONVERSATION_NOTICE);
   expect(host.querySelector('.plugins-editor-footer').textContent).toBe('Plugin Helper installed.');
 }
+
+it('requests list snapshots when the topic subscription becomes ready', async () => {
+  await act(async () => root.render(
+    <Provider store={store}>
+      <MemoryRouter initialEntries={['/plugins']}>
+        <Routes>
+          <Route path="/plugins/:marketplace?/:plugin?" element={<PluginsPage />} />
+        </Routes>
+      </MemoryRouter>
+    </Provider>,
+  ));
+  expect(globalThis.fetch.mock.calls.some(([url]) => String(url).startsWith('/api/marketplaces?'))).toBe(false);
+  expect(globalThis.fetch.mock.calls.some(([url]) => String(url).startsWith('/api/plugins?'))).toBe(false);
+
+  await act(async () => {
+    store.dispatch(realtimeStreamReady());
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(globalThis.fetch.mock.calls.some(([url]) => String(url).startsWith('/api/marketplaces?'))).toBe(true);
+  expect(globalThis.fetch.mock.calls.some(([url]) => String(url).startsWith('/api/plugins?'))).toBe(true);
+});
 
 it('keeps a finished install reported after a reconnect snapshot replaces its request ID', async () => {
   await renderAndInstall();

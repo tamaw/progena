@@ -4,6 +4,7 @@ import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
 import { requestAcknowledged, withQuery } from '../../../store/http';
 import { createUuid } from '../../../lib/uuid';
 import { CHAT_CONTENT_EVENT, UI_EVENT } from '../../../realtime/eventVocabulary';
+import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realtimeClient';
 
 
 function normalizeInputContent(content) {
@@ -569,8 +570,11 @@ export function useChatApi() {
       activeAcknowledgementRef.current = null;
     }
 
+    await waitForRealtimeClient();
     const responsesUrl = getApiUrl('responses').replace(/\/$/, '');
-    await requestAcknowledged(`${responsesUrl}/${encodeURIComponent(requestId)}/cancel`, {
+    await requestAcknowledged(withQuery(`${responsesUrl}/${encodeURIComponent(requestId)}/cancel`, {
+      client_id: realtimeClientId,
+    }), {
       method: 'PUT',
       requestId: createUuid(),
     }).catch((error) => {

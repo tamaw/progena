@@ -229,6 +229,33 @@ async def test_delete_is_not_allowed(sessions: _Sessions) -> None:
     assert result.error is not None
 
 
+async def test_terminal_turn_status_preserves_session_metadata(sessions: _Sessions) -> None:
+    await sessions.session("aaaaaaaa-live")
+
+    assert await sessions.state_manager.record_session_turn_terminal("aaaaaaaa-live", "failed")
+    await sessions.state_manager.merge_session(
+        "aaaaaaaa-live", {"content": "<user> hello\n<@progena> failed\n"}
+    )
+    failed = await sessions.state_manager.get_session("aaaaaaaa-live")
+    assert failed is not None
+    assert failed["unread"] is True
+    assert failed["errored"] is True
+    assert failed["pinned"] is False
+    assert failed["last_activity"] != "2026-10-12T01:05:00+00:00"
+
+    assert await sessions.state_manager.record_session_turn_terminal("aaaaaaaa-live", "cancelled")
+    cancelled = await sessions.state_manager.get_session("aaaaaaaa-live")
+    assert cancelled is not None
+    assert cancelled["unread"] is True
+    assert cancelled["errored"] is True
+
+    assert await sessions.state_manager.record_session_turn_terminal("aaaaaaaa-live", "completed")
+    completed = await sessions.state_manager.get_session("aaaaaaaa-live")
+    assert completed is not None
+    assert completed["unread"] is True
+    assert completed["errored"] is False
+
+
 async def test_mount_serves_sessions_through_the_agent_filesystem(
     sessions: _Sessions, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:

@@ -7,6 +7,16 @@ import { UI_EVENT } from '../../../realtime/eventVocabulary';
 import { createSelector } from '@reduxjs/toolkit';
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle, addKeyedRequestLifecycle, completeKeyedRequest, selectKeyedRequest } from '../../../store/async';
 import { withQuery } from '../../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realtimeClient';
+
+
+async function requestForWorkflow(url, options, requestId, query = {}) {
+  await waitForRealtimeClient();
+  return requestAcknowledged(
+    withQuery(url, { ...query, client_id: realtimeClientId }),
+    { ...options, requestId },
+  );
+}
 
 function workflowPathForId(workflowId) {
   return workflowId ? `/workflows/${workflowId}.json` : '';
@@ -126,74 +136,54 @@ function upsertWorkflowRun(state, run) {
   sortRuns(state.workflows.runs);
 }
 
-export const fetchWorkflows = createAcknowledgedThunk('uiData/fetchWorkflows', async ({ workflowsUrl }, { requestId }) => {
-  return requestAcknowledged(workflowsUrl, { requestId });
-});
+export const fetchWorkflows = createAcknowledgedThunk('uiData/fetchWorkflows', async ({ workflowsUrl }, { requestId }) => (
+  requestForWorkflow(workflowsUrl, {}, requestId)
+));
 
-export const fetchWorkflowContent = createAcknowledgedThunk('uiData/fetchWorkflowContent', async ({ workflowsUrl, path }, { requestId }) => {
-  return requestAcknowledged(
-    withQuery(`${workflowsUrl}/content`, { path }),
-    { requestId },
-  );
-});
+export const fetchWorkflowContent = createAcknowledgedThunk('uiData/fetchWorkflowContent', async ({ workflowsUrl, path }, { requestId }) => (
+  requestForWorkflow(`${workflowsUrl}/content`, {}, requestId, { path })
+));
 
-export const saveWorkflow = createAcknowledgedThunk('uiData/saveWorkflow', async ({ workflowsUrl, path, workflow }, { requestId }) => {
-  return requestAcknowledged(`${workflowsUrl}/content`, {
-    method: 'PUT',
-    body: { path, workflow },
-    requestId,
-  });
-});
+export const saveWorkflow = createAcknowledgedThunk('uiData/saveWorkflow', async ({ workflowsUrl, path, workflow }, { requestId }) => (
+  requestForWorkflow(`${workflowsUrl}/content`, { method: 'PUT', body: { path, workflow } }, requestId)
+));
 
-export const createWorkflow = createAcknowledgedThunk('uiData/createWorkflow', async ({ workflowsUrl, title, description, documentType }, { requestId }) => {
-  return requestAcknowledged(workflowsUrl, {
+export const createWorkflow = createAcknowledgedThunk('uiData/createWorkflow', async ({ workflowsUrl, title, description, documentType }, { requestId }) => (
+  requestForWorkflow(workflowsUrl, {
     method: 'POST',
-    body: {
-      title,
-      description,
-      document_type: documentType,
-    },
+    body: { title, description, document_type: documentType },
+  }, requestId)
+));
+
+export const deleteWorkflow = createAcknowledgedThunk('uiData/deleteWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => (
+  requestForWorkflow(`${workflowsUrl}/${encodeURIComponent(workflowId)}`, { method: 'DELETE' }, requestId)
+));
+
+export const pauseWorkflow = createAcknowledgedThunk('uiData/pauseWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => (
+  requestForWorkflow(`${workflowsUrl}/${encodeURIComponent(workflowId)}/pause`, { method: 'POST' }, requestId)
+));
+
+export const resumeWorkflow = createAcknowledgedThunk('uiData/resumeWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => (
+  requestForWorkflow(`${workflowsUrl}/${encodeURIComponent(workflowId)}/resume`, { method: 'POST' }, requestId)
+));
+
+export const triggerWorkflow = createAcknowledgedThunk('uiData/triggerWorkflow', async ({ workflowsUrl, workflowId, payload }, { requestId }) => (
+  requestForWorkflow(`${workflowsUrl}/${encodeURIComponent(workflowId)}/trigger`, {
+    method: 'POST',
+    body: payload ? { payload } : {},
+  }, requestId)
+));
+
+export const fetchWorkflowRuns = createAcknowledgedThunk('uiData/fetchWorkflowRuns', async ({ workflowRunsUrl }, { requestId }) => (
+  requestForWorkflow(workflowRunsUrl, {}, requestId)
+));
+export const answerWorkflowRunApproval = createAcknowledgedThunk('uiData/answerWorkflowRunApproval', async ({ workflowsUrl, workflowId, runId, approved }, { requestId }) => (
+  requestForWorkflow(
+    `${workflowsUrl}/${encodeURIComponent(workflowId)}/runs/${encodeURIComponent(runId)}/approval`,
+    { method: 'POST', body: { approved } },
     requestId,
-  });
-});
-
-export const deleteWorkflow = createAcknowledgedThunk('uiData/deleteWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => {
-  return requestAcknowledged(
-    `${workflowsUrl}/${encodeURIComponent(workflowId)}`,
-    { method: 'DELETE', requestId },
-  );
-});
-
-export const pauseWorkflow = createAcknowledgedThunk('uiData/pauseWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => {
-  return requestAcknowledged(
-    `${workflowsUrl}/${encodeURIComponent(workflowId)}/pause`,
-    { method: 'POST', requestId },
-  );
-});
-
-export const resumeWorkflow = createAcknowledgedThunk('uiData/resumeWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => {
-  return requestAcknowledged(
-    `${workflowsUrl}/${encodeURIComponent(workflowId)}/resume`,
-    { method: 'POST', requestId },
-  );
-});
-
-export const triggerWorkflow = createAcknowledgedThunk('uiData/triggerWorkflow', async ({ workflowsUrl, workflowId, payload }, { requestId }) => {
-  return requestAcknowledged(
-    `${workflowsUrl}/${encodeURIComponent(workflowId)}/trigger`,
-    {
-      method: 'POST',
-      body: {
-        ...(payload ? { payload } : {}),
-      },
-      requestId,
-    },
-  );
-});
-
-export const fetchWorkflowRuns = createAcknowledgedThunk('uiData/fetchWorkflowRuns', async ({ workflowRunsUrl }, { requestId }) => {
-  return requestAcknowledged(workflowRunsUrl, { requestId });
-});
+  )
+));
 
 export const eventHandlers = {
   [UI_EVENT.WORKFLOWS_SNAPSHOT]: (state, payload) => {

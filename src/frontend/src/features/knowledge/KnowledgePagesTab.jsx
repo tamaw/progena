@@ -8,6 +8,7 @@ import MarkdownContent from '../../components/MarkdownContent';
 import InlineFailure from '../../components/InlineFailure';
 import { renderSafeMarkdown } from '../../lib/safeMarkdown';
 import { useMenuDismiss } from '../../hooks/useMenuDismiss';
+import useStreamResync from '../../hooks/useStreamResync';
 import { fetchKnowledgePage, fetchKnowledgePageRevision, fetchKnowledgePageRevisions, fetchKnowledgePages, selectKnowledgePage, selectKnowledgePageRequest, selectKnowledgePages, selectKnowledgeRevision, selectKnowledgePageRevisionRequest, selectKnowledgePageRevisionsRequest, selectKnowledgeRevisions } from './state';
 import {
   buildPageTree, dirOf, formatRevisionTime, resolvePageLink,
@@ -205,6 +206,14 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
     })),
     [baseId, dispatch, knowledgeUrl, selectedPath, viewingRevisionId],
   );
+
+  useStreamResync(() => {
+    dispatch(fetchKnowledgePages({ knowledgeUrl, baseId }));
+    if (!selectedPath) return;
+    loadPage(selectedPath);
+    loadRevisions(selectedPath);
+    if (viewingRevisionId) loadRevision(viewingRevisionId);
+  });
 
   useEffect(() => {
     if (selectedPath) {

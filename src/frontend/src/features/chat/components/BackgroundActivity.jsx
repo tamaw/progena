@@ -251,14 +251,16 @@ function useElapsedClock(active) {
 }
 
 /** Sticky, chat-scoped work that survives a root reply ending. */
-export function BackgroundActivity({ messages, liveTurnStore, threadId, workflowRunIds, runsUrl, chatsUrl }) {
+export function BackgroundActivity({
+  messages, liveTurnStore, threadId, workflowRunIds, runsUrl, chatsUrl, subscribeTasks = false,
+}) {
   const asyncTaskRecords = useSelector((state) => selectBackgroundTasks(state, threadId));
   const tasksUrl = threadId && chatsUrl
     ? `${chatsUrl}/${encodeURIComponent(threadId)}/background-tasks`
     : null;
   const { active, refresh } = useActivities({
     messages, liveTurnStore, threadId, workflowRunIds, runsUrl, hydrateRuns: true,
-    asyncTaskRecords, tasksUrl, subscribeTasks: true,
+    asyncTaskRecords, tasksUrl, subscribeTasks,
   });
   const now = useElapsedClock(active.length > 0);
   if (!active.length) return null;

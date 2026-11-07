@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UI_EVENT } from '@frontend/realtime/eventVocabulary';
-import { eventHandlers, initialState, reducers } from '@frontend/features/chat/state/chats';
+import { applyChatRowDelta, deleteChatFromList, eventHandlers, initialState, reducers } from '@frontend/features/chat/state/chats';
 import { reconcileChatPagination } from '@frontend/features/chat/state/actions';
 import { mergeCanonicalMessages } from '@frontend/features/chat/models/conversationModel';
 
@@ -13,6 +13,176 @@ describe('queue lifecycle ownership', () => {
     eventHandlers[UI_EVENT.CHAT_RESPONSE_STARTED](state, { thread_id: 'thread', request_id: 'B-request', content_request_id: 'B', queue_execution: true });
     eventHandlers[UI_EVENT.CHAT_RESPONSE_COMPLETED](state, { thread_id: 'thread', request_id: 'A' });
     expect(state.chatRuntime.requestIdByThreadId.thread).toBe('B');
+  });
+});
+
+describe('persisted chat indicators', () => {
+  it('hydrates flags without a local generation and retains errors while a retry starts', () => {
+    const state = structuredClone(initialState);
+    eventHandlers[UI_EVENT.CHAT_LIST_ROW_UPSERTED](state, {
+      row: { thread_id: 'external', unread: true, errored: true },
+    });
+    expect(state.chatRuntime.unreadChatIds).toEqual(['external']);
+    expect(state.chatRuntime.erroredChatIds).toEqual(['external']);
+    state.chats.active.threadId = 'external';
+    eventHandlers[UI_EVENT.CHAT_RESPONSE_STARTED](state, { thread_id: 'external', request_id: 'retry' });
+    expect(state.chatRuntime.erroredChatIds).toEqual(['external']);
+    eventHandlers[UI_EVENT.CHAT_RESPONSE_FAILED](state, { thread_id: 'external', request_id: 'retry' });
+    expect(state.chatRuntime.erroredChatIds).toEqual(['external']);
+    eventHandlers[UI_EVENT.CHAT_LIST_ROW_UPSERTED](state, {
+      row: { thread_id: 'external', unread: false, errored: true },
+    });
+    expect(state.chatRuntime.unreadChatIds).toEqual([]);
+    expect(state.chatRuntime.erroredChatIds).toEqual(['external']);
+    eventHandlers[UI_EVENT.CHAT_RESPONSE_STARTED](state, { thread_id: 'external', request_id: 'success' });
+    eventHandlers[UI_EVENT.CHAT_RESPONSE_COMPLETED](state, { thread_id: 'external', request_id: 'success' });
+    expect(state.chatRuntime.erroredChatIds).toEqual([]);
+  });
+});
+
+describe('chat list row updates', () => {
+  it('keeps an existing row when only a server-only first-message search match is unknown locally', () => {
+    const state = structuredClone(initialState);
+    state.chats.view = { q: 'server-only phrase', sort: 'recent', filter: 'active' };
+    state.chats.byId.chat = {
+      thread_id: 'chat',
+      title: 'Unrelated title',
+      preview: 'Unrelated preview',
+      archived: false,
+    };
+    state.chats.rowsByIndex = { 0: 'chat' };
+    state.chats.total = 1;
+
+    eventHandlers[UI_EVENT.CHAT_LIST_ROW_UPSERTED](state, {
+      row: {
+        thread_id: 'chat',
+        title: 'Still unrelated locally',
+        preview: 'Still unrelated locally',
+        archived: false,
+      },
+    });
+
+    expect(state.chats.rowsByIndex).toEqual({ 0: 'chat' });
+    expect(state.chats.total).toBe(1);
+  });
+});
+
+describe('chat picker lookups', () => {
+  it('keeps the latest picker page in server order and ignores an older one', () => {
+    const state = structuredClone(initialState);
+    state.chats.lookupRequestIds = {
+      old: { threadIds: [], source: null, picker: true },
+      latest: { threadIds: [], source: null, picker: true },
+    };
+    state.chats.picker.requestId = 'latest';
+    const loaded = (requestId, ids, total) => eventHandlers[UI_EVENT.CHAT_LIST_LOADED](state, {
+      request_id: requestId, total, rows: ids.map((id) => ({ thread_id: id, title: id })),
+    });
+
+    loaded('latest', ['b', 'a'], 120);
+    loaded('old', ['z'], 1);
+
+    expect(state.chats.picker).toMatchObject({ ids: ['b', 'a'], total: 120 });
+    expect(state.chats.byId.a.title).toBe('a');
+  });
+});
+
+describe('positional chat cache deltas', () => {
+  // Row fixtures are dated 2026-11-05 and "today" is read from the clock.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-05T12:30:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not inflate totals when an unloaded conversation changes', () => {
+    const state = structuredClone(initialState);
+    state.chats.total = 100;
+    state.chats.rowsByIndex = { 0: 'first' };
+    state.chats.byId.first = { thread_id: 'first', title: 'First' };
+    state.chats.loadedPages = { 0: true };
+    eventHandlers[UI_EVENT.CHAT_LIST_ROW_UPSERTED](state, {
+      row: { thread_id: 'unloaded', title: 'Updated', unread: true },
+    });
+    expect(state.chats.total).toBe(100);
+    expect(state.chats.rowsByIndex).toEqual({ 0: 'first' });
+    expect(state.chats.loadedPages).toEqual({});
+  });
+
+  function cache() {
+    const state = structuredClone(initialState).chats;
+    state.total = 3;
+    state.groups = [
+      { key: 'pinned', count: 1 },
+      { key: 'today', count: 2 },
+      { key: 'yesterday', count: 0 },
+      { key: 'this-week', count: 0 },
+      { key: 'last-week', count: 0 },
+      { key: 'later', count: 0 },
+    ];
+    state.rowsByIndex = { 0: 'pinned', 1: 'first', 2: 'second' };
+    state.byId = {
+      pinned: { thread_id: 'pinned', pinned: true, archived: false, last_activity: '2026-11-05T11:00:00Z' },
+      first: { thread_id: 'first', pinned: false, archived: false, last_activity: '2026-11-05T10:00:00Z' },
+      second: { thread_id: 'second', pinned: false, archived: false, last_activity: '2026-11-05T09:00:00Z' },
+    };
+    return state;
+  }
+
+  it('moves a refreshed row to the top of its section and shifts cached indexes', () => {
+    const chats = cache();
+    applyChatRowDelta(chats, {
+      ...chats.byId.second,
+      last_activity: '2026-11-05T12:00:00Z',
+    });
+
+    expect(chats.rowsByIndex).toEqual({ 0: 'pinned', 1: 'second', 2: 'first' });
+    expect(chats.total).toBe(3);
+    // Only the row between the old and new position shifted down by one.
+    expect(chats.rowDelta).toMatchObject({ index: 1, amount: 1, end: 2 });
+  });
+
+  it('places an unpinned row by its activity and records the rows it passed', () => {
+    const chats = cache();
+    chats.byId.pinned.last_activity = '2026-11-05T08:00:00Z';
+    applyChatRowDelta(chats, { ...chats.byId.pinned, pinned: false });
+
+    expect(chats.rowsByIndex).toEqual({ 0: 'first', 1: 'second', 2: 'pinned' });
+    expect(chats.rowDelta).toMatchObject({ index: 0, amount: -1, end: 2 });
+  });
+
+  it('inserts a recent row at its section boundary and deletes a loaded row without resurrecting it', () => {
+    const chats = cache();
+    applyChatRowDelta(chats, {
+      thread_id: 'new',
+      pinned: false,
+      archived: false,
+      last_activity: '2026-11-05T12:00:00Z',
+    });
+    expect(chats.rowsByIndex).toEqual({ 0: 'pinned', 1: 'new', 2: 'first', 3: 'second' });
+    expect(chats.groups.find((group) => group.key === 'today').count).toBe(3);
+
+    deleteChatFromList(chats, 'first');
+    expect(chats.rowsByIndex).toEqual({ 0: 'pinned', 1: 'new', 2: 'second' });
+    expect(chats.total).toBe(3);
+    expect(chats.tombstones.first).toBe(true);
+  });
+
+  it('invalidates every window when a deleted row has no known position', () => {
+    const chats = cache();
+    chats.total = 100;
+    chats.loadedPages = { 0: true, 50: true };
+    chats.inFlightRequests = { page: { offset: 50, rangeVersion: 0 } };
+    chats.byId.unloaded = { thread_id: 'unloaded', title: 'Unloaded' };
+
+    deleteChatFromList(chats, 'unloaded');
+
+    expect(chats.loadedPages).toEqual({});
+    expect(chats.inFlightRequests).toEqual({});
+    expect(chats.rangeVersion).toBe(1);
+    expect(chats.tombstones.unloaded).toBe(true);
   });
 });
 

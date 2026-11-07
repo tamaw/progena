@@ -6,6 +6,8 @@ import { useConfig } from '../../context/ConfigContext';
 import { dispatchQuickChatOpen, QUICK_CHAT_MODE } from '../../lib/browserContracts';
 
 import { selectRealtime } from '../../realtime/realtimeSlice';
+import { selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
+import useStreamTopic from '../../hooks/useStreamTopic';
 import { fetchKnowledge, saveKnowledge, selectKnowledgeBases, selectKnowledgePage, selectKnowledgePages, selectKnowledgeRevision, selectKnowledgeRevisions, selectKnowledgeState } from './state';
 import KnowledgePagesTab from './KnowledgePagesTab';
 import InlineFailure from '../../components/InlineFailure';
@@ -122,6 +124,8 @@ export default function KnowledgePage() {
   const knowledgeState = useSelector(selectKnowledgeState);
   const { loaded } = knowledgeState;
   const realtime = useSelector(selectRealtime);
+  const streamReady = useSelector(selectRealtimeStreamReady);
+  useStreamTopic('knowledge');
   const [activeFilter, setActiveFilter] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortMode, setSortMode] = useState('Status');
@@ -133,11 +137,11 @@ export default function KnowledgePage() {
   const knowledgeUrl = getApiUrl('/api/ui/knowledge');
 
   useEffect(() => {
-    if (!realtime.connected) {
+    if (!realtime.connected || !streamReady) {
       return;
     }
     void dispatch(fetchKnowledge({ knowledgeUrl })).unwrap().catch(() => {});
-  }, [dispatch, knowledgeUrl, realtime.connected]);
+  }, [dispatch, knowledgeUrl, realtime.connected, streamReady]);
 
   const bases = useMemo(() => rawBases.map(fromApiBase), [rawBases]);
 

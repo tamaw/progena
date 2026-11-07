@@ -44,7 +44,7 @@ shape:
 {
   "id": "ui-42",
   "seq": 42,
-  "type": "chat.sessions.snapshot",
+  "type": "chat.list.loaded",
   "scope": "chat",
   "session_id": null,
   "payload": {
@@ -58,7 +58,7 @@ shape:
 | --- | --- | --- |
 | `id` | `string` | Stream-global identifier, currently `ui-{seq}`. It is the deduplication and canonical replay cursor value. |
 | `seq` | `integer` | Increasing process-local sequence number. It defines the order of retained canonical replay events. |
-| `type` | `string` | Typed domain event, such as `chat.sessions.snapshot` or `logs.page.loaded`. |
+| `type` | `string` | Typed domain event, such as `chat.list.loaded` or `logs.page.loaded`. |
 | `scope` | `"global" \| "session" \| "chat"` | Event routing scope. It is not an arbitrary nullable string. |
 | `session_id` | `string \| null` | Session scope identifier when applicable. |
 | `payload` | `object` | Event-specific result data. Every event caused by a finite request also has `payload.request_id`. |
@@ -73,12 +73,44 @@ The canonical stream also emits these `ui.event` envelope types:
 
 | Type | Payload | Meaning |
 | --- | --- | --- |
-| `connection.ready` | `{ "stream": "ui", "status": <status>, "alerts": <alerts> }` | Sent after replay on each connection/reconnection; it marks the canonical live-stream boundary. It is not a request-correlated domain snapshot. |
+| `connection.ready` | `{ "stream": "ui", "boot_id": <string>, "alerts": <alerts> }` | Sent after replay on each connection/reconnection; it marks the canonical live-stream boundary. `boot_id` identifies the server process: a browser that sees it change knows the server restarted. It is not a request-correlated domain snapshot. |
 | `connection.heartbeat` | `{ "timestamp": <unix-seconds> }` | Keepalive frame emitted while the subscriber queue is idle (15 seconds by default, configurable through `SSE_HEARTBEAT_INTERVAL`). |
 | `connection.shutdown` | `{ "reason": "server_shutdown", "message": "Server is shutting down" }` | Final canonical envelope before a graceful server-side close. |
 
 Connection events do not resolve a pending finite operation unless their payload
 has the matching request ID, which these connection events do not.
+
+## Event audience
+
+Every `ui.event` has exactly one audience, chosen by the emitter (`broadcast_ui_event`):
+
+| Audience | Emitter argument | Replayed | Used for |
+|---|---|---|---|
+| One tab | `client_id=` | no | The reply to that tab's request (`*.snapshot`, `*.loaded`, `*.selected`, `*.tested`, log chunks, search results). Request routes take the tab's `client_id` and answer `409` without an active stream. |
+| Tabs watching a topic | `topic=` | no | Changes made elsewhere that a page must show live (`inbox`, `chats`, `chat:<id>`, `workflows`, `runs`, `tasks`, `schedules`, `agents`, `routines`, `instructions`, `knowledge`, `plugins`, `mcp`, `policies`, `channels`, `providers`, `repositories`, `canvases`, `dashboard`). |
+| Every tab | neither | yes | App chrome only: `GLOBAL_UI_EVENTS` in `events/stream.py` (alerts, `connection.*`, `inbox.counts.updated`, `nav.activity`, `preferences.snapshot`, `profiles.snapshot`, and the chat lifecycle events that drive the nav chat indicator, which carry no message content). |
+
+`client_id=` and `topic=` are mutually exclusive. `tests/backend/test_event_audience.py` fails when
+an emitter without either names an event that is not in `GLOBAL_UI_EVENTS`; `tests/backend/test_finite_route_contract.py` ensures every finite `202` route declares its required `client_id`.
+
+A tab joins a topic with `PUT /api/ui/stream/topics {client_id, topic, watching}` (topic matches
+`^[a-z][a-z0-9_.:-]{0,63}$`, at most 32 per tab) and receives a targeted `stream.topic.updated`
+acknowledgement. The frontend hook is `useStreamTopic(topic)`. Topic interest ends when the stream
+closes, and topic events are never replayed, so a page reloads its data when the stream becomes
+ready again. A mutation's acknowledgement carries the caller's `request_id`; it must reach the
+caller, so a mutation issued from a page that does not watch the topic also replies with `client_id`.
+
+Domain events that light a nav route's "new activity" dot (`NAV_ACTIVITY_ROUTES`) also emit a tiny
+global `nav.activity {route}` whenever they are not a reply to one tab, so the dot works without
+every tab receiving the domain event.
+
+Connection liveness is the stream itself: every event, and `connection.heartbeat` after 15 s of
+silence, proves it is delivering, and the browser's connection-recovery dialog opens after 30 s of
+none. `status.updated` is not a liveness signal. It is runtime status for the Dashboard alone:
+`GET /api/ui/status?client_id=` replies to the asking tab with the full snapshot (process metrics,
+run state, `loops`, `backlog`), and tabs watching the `dashboard` topic then receive a 5 s
+metrics tick and a full snapshot on each store change. Nothing is computed or sent while no tab is
+on the Dashboard.
 
 ## Canonical replay, reconnect, and resync
 
@@ -99,10 +131,67 @@ This is bounded best-effort replay, not durable catch-up:
 - Reducers MUST be idempotent for replayed snapshots, updates, and deletes and
   MUST deduplicate by envelope `id`.
 - A connection loss does not cancel a finite request. An acknowledgement means
-  the causal event was enqueued, not delivered to or applied by this browser.
+  the causal event was enqueued, not delivered to or applied by this browser. The server records
+  the reply to every request-correlated event (see `POST /api/ui/stream/resolve`) so the tab can
+  ask for it again after a reconnect.
+
+### Client reconnect
+
+- **Server draining:** a connection that opens while the server is shutting down receives
+  `connection.shutdown` alone, with no `connection.ready` (a ready would trigger a resync against a
+  stream about to close).
+- **Backoff:** on `connection.shutdown`, or when the browser gives up on the source (a non-200
+  response such as a proxy's 502 while the backend restarts, readyState `CLOSED`, after which
+  `EventSource` never retries), the client closes the source and reopens it after 1 s, doubling to
+  an 8 s cap with ±25% jitter. The count restarts after a connection has stayed up 10 s. A network
+  error with the source still `CONNECTING` is left to the browser. The 45 s stale watchdog remains
+  the backstop for a stream that is open but silent.
+- **Pending requests survive a disconnect** (`realtime/requestRecovery.js`). An accepted request
+  (HTTP 202) is settled by an event on the tab's own stream, and a reply sent while the stream
+  was down is gone with it. So the tab keeps its pending requests and, once `connection.ready`
+  arrives, asks `POST /api/ui/stream/resolve` to re-deliver the replies the server recorded (see
+  below). They arrive as ordinary events and settle the requests the usual way. If `boot_id` in
+  `connection.ready` changed, the server restarted and the accepted requests died with it, so
+  they fail with "The server restarted before this request finished". A reply the server has no
+  record of (`unknown`) is still being worked on and arrives live; a reply too large to keep
+  (`lost`) fails at once. Each carried operation retains its 60 s deadline while `/resolve` is
+  in flight (which is aborted at that deadline) and while awaiting its 202 acknowledgement. An
+  explicit stop (the idle pause) fails all pending requests.
+- **Resync on every `connection.ready`** (`realtime/streamLifecycle.js`): the frontend first
+  waits for `realtime/streamTopics.js` to register every held topic, then exposes stream
+  readiness and runs resync handlers. A newly held topic uses the same readiness gate, so its
+  mount-time snapshot request cannot race its topic PUT. Holds are reference counted and released
+  200 ms after the last holder leaves so a quick remount sends nothing; failed registration stays
+  unsatisfied and retries while held. List pages reload their snapshot when stream readiness
+  returns. Every open detail pane re-requests its targeted detail with `useStreamResync`: the
+  open Inbox message, the open Chat, and the selected agent or routine, workflow, MCP server,
+  repository, knowledge page (with its revisions), plugin skill and task activity. List snapshots
+  alone cannot repair a detail, because targeted replies are never replayed. Paged lists
+  (`usePositionalListRange`) have one reconnect path: page 0 is requested once and other loaded
+  pages are marked stale, so the visible ones reload as the pane asks for them.
+  Mount-time loading stays in each page's own effect.
+- **Idle pause:** after `idleTimeoutMinutes` (30 by default) without input the shell stops the
+  stream and shows "Updates paused"; input does not dismiss it. Pressing Resume opens a fresh
+  stream, and the next `connection.ready` runs the same resync as any reconnect: held topics are
+  registered again, the inbox counts, profiles and preferences are requested, and each page
+  reloads the state it showed (list page zero, the open message or chat). What changed during the
+  pause appears then; nothing is replayed.
 
 The app shell owns one canonical `EventSource` for `/api/ui/stream`. There is
 no `GET /api/ui/events` stream and no `/api/ui/status` stream.
+
+### Recovering replies after a reconnect
+
+`POST /api/ui/stream/resolve` takes `{ client_id, request_ids: [≤64 ids] }` and answers
+`{ boot_id, replayed, unknown, lost }` (`409` without an active stream for that `client_id`).
+The server keeps the envelopes of request-correlated events for 120 s, bounded to 8 MB in total,
+512 KB per UTF-8 envelope, and eight envelopes per request. An oversized or over-count outcome is
+reported in `lost`; it is never replayed as a partial prefix. Each retained envelope keeps its
+original audience, so resolve queues it only for its target `client_id`, for a caller that
+currently watches its topic and is not excluded, or, for a global event, for any caller. Ids with
+no eligible record are in `unknown`.
+Nothing is consumed, so a tab that drops again can ask again.
+
 
 ## Dedicated chat response SSE
 
@@ -401,7 +490,7 @@ and sends it as `X-Operation-Id`. The successful response is exactly:
 ```json
 {
   "request_id": "4e58d2dc-88bf-4c10-9bf0-1f2ccce2c100",
-  "event_types": ["chat.sessions.snapshot"]
+  "event_types": ["chat.list.loaded"]
 }
 ```
 
@@ -437,6 +526,11 @@ For browser chat generation, the acknowledgement and streams divide ownership:
   `chat.response.started`, `chat.response.completed`, `chat.response.failed`,
   `chat.response.cancelled`, and transition-only `chat.response.activity`
 
+These global lifecycle payloads are deliberately small and contain no response
+body, delta, or queued-message text. When a runtime queue claim needs to expose
+the queued message, `chat.response.queue.started` carries that content only to
+the `chat:{thread_id}` topic.
+
 `chat.response.activity` is emitted only while a non-terminal response changes
 between `generating` and `delegating`. Its payload is exactly:
 
@@ -456,9 +550,14 @@ delegated calls have ended. Background async launches do not enter the
 delegating state. Terminal lifecycle frames clear activity; there is no idle
 activity frame.
 
-When a thread is selected, its session detail is emitted as both the
-request-correlated `chat.session.upserted` and `chat.session.selected` event.
-That detail includes `active_request_id` and nullable `activity`
+Opening a thread (`GET /api/ui/chats/{thread_id}?client_id=`) emits one
+`chat.session.selected` to the requesting tab only; it is never replayed. Its
+payload is `{session, queue, background_tasks}`: the session detail, the
+runtime queue snapshot (`null` when the runtime cannot be reached; the page then
+requests `GET /api/chat/sessions/{id}/queue`), and `{thread_id, tasks, revision}`.
+The request also installs that tab's background-task interest for the thread,
+as `PUT .../background-tasks/subscription` would. The detail includes
+`active_request_id` and nullable `activity`
 (`"delegating"`, `"generating"`, or `null`) from the same volatile response
 registry, not persisted chat history. It also carries nullable `interruption`
 (`{next, at}`): when no response is active and the saved transcript ends
@@ -476,6 +575,15 @@ omits it.
 - canonical terminal cancellation still arrives only as
   `chat.response.cancelled` correlated to the **target** response request ID
 
+`chat.response.delta` fallback frames, queue updates, and
+`chat.response.queue.started` are likewise topic-only on `chat:{thread_id}`.
+Chat-list row upserts/deletes are topic-only on `chats`. The conversation page
+subscribes to both while open and refetches after reconnect because topic events
+are never replayed. Older-message requests and queue snapshots require the
+active `client_id` query parameter and reply only to that tab; cancellation
+acknowledgements are also targeted to its `client_id`.
+
+
 ## Workflow triggers
 
 Workflow graphs require at least one `event`, `cron`, or `manual` trigger.
@@ -486,6 +594,17 @@ payload properties are applied before validation and run creation. An explicit
 run chooses the first manual trigger in graph order when one exists, otherwise
 the first event or cron trigger remains the compatibility fallback.
 
+## Persisted conversation indicators
+
+Conversation-list rows include `unread` and `errored`, defaulting to false for
+older documents. The list `filter` additionally accepts `unread` and `error`;
+both exclude archived conversations and return server-side totals and pages.
+Reading a conversation sends `PATCH /api/ui/chats/{thread_id}` with
+`{"unread": false}`; this clears unread across tabs, not the error indicator.
+Successful turns clear `errored`; failures set it; cancellation preserves the
+previous error. These flags live on the session document, including turns
+started outside the browser.
+
 ## Browser-retained route disposition
 
 The browser-facing retained route families in this table use the acknowledgement
@@ -494,31 +613,39 @@ responses never are.
 
 | Domain | Browser routes | Result contract |
 | --- | --- | --- |
-| Chat sessions | `GET/POST /api/ui/chats`; `POST /api/ui/chats/draft`; `GET/PATCH/DELETE /api/ui/chats/{thread_id}`; `GET /api/ui/chats/{thread_id}/messages` | Canonical `ui.event` envelopes: `chat.sessions.snapshot`, `chat.session.created`, `chat.session.metadata.updated`, `chat.session.upserted`, request-correlated `chat.session.selected` (capped to the newest `CHAT_MESSAGE_PAGE_SIZE` messages, with `has_more_messages` and durable `background_workflow_run_ids` for active runs owned by that chat). Legacy workflow records without parent-chat metadata remain transcript-discovered. `chat.messages.page.loaded` supplies older-page pagination; `chat.session.deleted` removes a session. |
-| Chat background tasks | `GET /api/ui/chats/{thread_id}/background-tasks?client_id=`; `PUT /api/ui/chats/{thread_id}/background-tasks/subscription` | Targeted `chat.background_tasks.snapshot` and `chat.background_tasks.updated` contain `{thread_id,tasks,revision}` from durable `async_subagent_tasks` records. Revisions are monotonic per chat within a backend process; the browser ignores an older in-flight snapshot after a newer update. On `connection.ready`, it resets revision watermarks and resubscribes so a backend restart can replace cached tasks. A browser tab may subscribe to multiple viewed chats concurrently; interests are discarded on disconnect. No polling or full chat-session invalidation occurs. |
+| Chat sessions | `GET/POST /api/ui/chats`; `POST /api/ui/chats/draft`; `GET/PATCH/DELETE /api/ui/chats/{thread_id}`; `GET /api/ui/chats/{thread_id}/messages` | The conversation list is read from `session:` documents alone, never checkpoints. `GET /api/ui/chats?client_id=&q=&sort=recent\|name&filter=active\|archived\|all&source=&thread_id=&offset=&limit=&today=&yesterday=&this_week=&last_week=` (limit 0–200, default 50; `client_id` needs an active stream) emits `chat.list.loaded` to the requesting tab only: `{view, offset, rows, total, groups}`, where `rows` are positions `offset` onward of the whole view and `total` counts it. The four time parameters are the browser's local group starts as UTC instants (all four or none, newest first, else `400`); with them, the recent active view also returns whole-view `groups: [{key, count}]` for `pinned`, `today`, `yesterday`, `this-week`, `last-week` and `later` (pinned chats count only as pinned; counts sum to `total`), so the sidebar can size its scrollbar for every chat before loading them. A row is `{thread_id, title, source, pinned, archived, created_at, last_activity, preview}`; `title` is the display title and `preview` is the latest message as stored by the runtime after each turn (200 characters, secret-redacted). `recent` orders pinned first, then latest activity; `name` orders by display title. `q` matches title, first message and preview. Every tab receives `chat.list.row.upserted {row}` when a session is created, renamed, pinned, archived or finishes a turn, and `chat.list.row.deleted {thread_id}` when it is deleted; PATCH acknowledges `chat.list.row.upserted` (re-sent for a no-op) and DELETE `chat.list.row.deleted`. The tab-targeted `chat.session.selected` is capped to the newest `CHAT_MESSAGE_PAGE_SIZE` messages, with `has_more_messages` and durable `background_workflow_run_ids` for active runs owned by that chat. Legacy workflow records without parent-chat metadata remain transcript-discovered. `chat.messages.page.loaded` supplies older-page pagination. |
+| Chat background tasks | `GET /api/ui/chats/{thread_id}/background-tasks?client_id=`; `PUT /api/ui/chats/{thread_id}/background-tasks/subscription` | Targeted `chat.background_tasks.snapshot` and `chat.background_tasks.updated` contain `{thread_id,tasks,revision}` from durable `async_subagent_tasks` records. Opening a chat installs the interest and carries the first snapshot in `chat.session.selected`; the subscription route releases it and re-registers it. Revisions are monotonic per chat within a backend process; the browser ignores an older in-flight snapshot after a newer update. On `connection.ready`, it resets revision watermarks and resubscribes so a backend restart can replace cached tasks. A browser tab may subscribe to multiple viewed chats concurrently; interests are discarded on disconnect. No polling or full chat-session invalidation occurs. |
 | Generation | `POST /api/ui/responses`; `GET /api/ui/responses/{request_id}/stream`; `PUT /api/ui/responses/{generation_id}/cancel` | Canonical lifecycle envelopes: `chat.response.started`, transition-only `chat.response.activity`, `chat.response.completed`, `chat.response.failed`, `chat.response.cancelled`; dedicated response frames: `chat.response.delta`, `chat.response.event`; dedicated transport-only frames: `chat.response.heartbeat`, `chat.response.resync_required`; cancel acknowledgement declares `chat.response.cancel_requested` |
-| Agent profiles | `GET /api/ui/agent-profiles`; `GET /api/ui/agent-profiles/{agent_id}`; `PATCH /api/ui/agent-profiles/{agent_id}/graph` | Canonical `ui.event` envelopes: `agents.snapshot`, `agent.upserted`, request-correlated `agent.selected`, `agent.graph.updated` |
-| Inbox | `GET /api/ui/inbox`; `POST /api/ui/inbox/{message_id}/read`; `POST /api/ui/inbox/{message_id}/decision`; `DELETE /api/ui/inbox/{message_id}` | Canonical `ui.event` envelopes: `inbox.snapshot`, `inbox.message.upserted`, `inbox.message.deleted` |
-| Knowledge | `GET/PUT /api/ui/knowledge`; `POST /api/ui/knowledge/{base_id}/sources/{source_id}/index`; `GET /api/ui/knowledge/{base_id}/search` | Canonical `ui.event` envelopes: `knowledge.snapshot`, request-scoped `knowledge.search.results` |
-| Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs`; `GET /api/ui/document-types`; `GET /api/ui/workflows/cron-preview?expression=&timezone=&count=` (synchronous: `{"next_runs": [...]}`, `400` with the validation message) | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow.runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed`, `document_types.snapshot` (registry with each type's document schema and derived event/read/query port schemas). Runs start from the durable `document_events` log (see `src/backend/events/documents.py`) or from `cron` trigger nodes fired by the backend clock (`src/backend/workflows/cron.py`, last handled due time per node in `backend.state` `workflow_cron:<workflow>:<node>`), never inline from routes. |
-| Runs | `GET /api/ui/runs?kind=&status=&q=&period=&sort=&cursor=`; `GET /api/ui/runs/{kind}/{run_id}/trace?client_id=`; `PUT /api/ui/runs/subscription` | Request-correlated `runs.snapshot` (`runs`, opaque `next_cursor`), client-targeted `run.trace.loaded` / `run.trace.updated`, and global `run.updated` / `run.deleted`. `sort` is `newest`, `oldest`, `duration` (longest first), or `shortest`; each opaque cursor is bound to its complete query, including sort, and cannot be reused after a sort/filter change. `RunRow` has `kind`, `run_id`, `name`, `trigger`, `status`, times, nullable recorded `tokens`, and compact `overview` spans. |
+| Agent profiles | `GET /api/ui/agent-profiles`; `GET /api/ui/agent-profiles/{agent_id}`; `PATCH /api/ui/agent-profiles/{agent_id}/graph` | Canonical `ui.event` envelopes: `agents.snapshot`, request-correlated `agent.selected` (the only event a detail read publishes; it also refreshes the roster entry), `agent.graph.updated` |
+| Inbox | `GET /api/ui/inbox?client_id=&q=&filter=all\|unread\|pending\|archived&sort=recent\|name&offset=&limit=`; `GET /api/ui/inbox/{message_id}?client_id=`; `GET /api/ui/inbox/counts?client_id=`; `PUT /api/ui/inbox/subscription`; mutations at `/api/ui/inbox/{message_id}` | A list request (limit 0–200, default 50; active `client_id` required) emits targeted `inbox.list.loaded` `{view,offset,rows,total}`. Rows are SQL-paged metadata plus a 200-character first-line preview; they never contain a body, while search matches title and body. `inbox.message.upserted` (slim) and `inbox.message.deleted` go only to tabs on the `inbox` topic (joined by any list or detail read, left with `PUT /inbox/subscription {client_id,message_id:null,watching:false}`, dropped when the stream closes); `inbox.counts.updated` is the global tiny unread count for the nav badge. Detail reads emit targeted `inbox.message.selected {message}` and replace that tab's selected-message interest. `inbox.message.updated {message}` is delivered only to selected interested tabs and never replayed. `PUT /inbox/subscription {client_id,message_id:null}` releases the selection; a non-null ID renews it and emits fresh targeted `inbox.message.selected` after reconnect. |
+| Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs`; `GET /api/ui/document-types`; `GET /api/ui/workflows/cron-preview?expression=&timezone=&count=` (synchronous: `{"next_runs": [...]}`, `400` with the validation message) | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow_runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed`, `document_types.snapshot` (registry with each type's document schema and derived event/read/query port schemas). Runs start from the durable `document_events` log (see `src/backend/events/documents.py`) or from `cron` trigger nodes fired by the backend clock (`src/backend/workflows/cron.py`, last handled due time per node in `backend.state` `workflow_cron:<workflow>:<node>`), never inline from routes. |
+| Runs | `GET /api/ui/runs?kind=&status=&q=&period=&sort=&cursor=`; `GET /api/ui/runs/{kind}/{run_id}/trace?client_id=`; `PUT /api/ui/runs/subscription` | Request-correlated `runs.snapshot` (`runs`, opaque `next_cursor`), client-targeted `run.trace.loaded` / `run.trace.updated`, and `run.updated` / `run.deleted` to tabs on the `runs` topic. `sort` is `newest`, `oldest`, `duration` (longest first), or `shortest`; each opaque cursor is bound to its complete query, including sort, and cannot be reused after a sort/filter change. `RunRow` has `kind`, `run_id`, `name`, `trigger`, `status`, times, nullable recorded `tokens`, and compact `overview` spans. |
 | Search | `GET /api/ui/search` | Request-scoped `search.results` (sections: Inbox, Tasks, Agents, Routines, Workflows, Prompts, Knowledge, Tools, Schedules) |
 | Knowledge | `GET/PUT /api/ui/knowledge`; `GET /api/ui/knowledge/{base_id}/pages`; `GET /api/ui/knowledge/{base_id}/page`; `GET /api/ui/knowledge/{base_id}/page/revisions`; `GET /api/ui/knowledge/{base_id}/page/revisions/{revision_id}` | Canonical `ui.event` envelopes: `knowledge.snapshot`, `knowledge.pages.snapshot`, `knowledge.page.loaded`, `knowledge.page.revisions.loaded`, `knowledge.page.revision.loaded`; indexer-originated `knowledge.index.started`, `knowledge.index.progress`, `knowledge.index.completed`, `knowledge.index.failed` |
-| Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs` | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow.runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed` |
-| Kanban and tasks | `GET /api/ui/kanban`; `POST /api/ui/kanban/cards`; `PATCH/DELETE /api/ui/kanban/cards/{card_id}`; `GET/PUT /api/ui/tasks/{card_id}/content`; `POST /api/ui/tasks/{card_id}/activity` | Canonical `ui.event` envelopes: `kanban.snapshot`, `task.content.updated`, `task.activity.updated` |
+| Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs` | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow_runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed` |
+| Kanban and tasks | `GET /api/ui/kanban`; `POST /api/ui/kanban/cards`; `PATCH/DELETE /api/ui/kanban/cards/{card_id}`; `GET/PUT /api/ui/tasks/{card_id}/content`; `POST /api/ui/tasks/{card_id}/activity` | Canonical `ui.event` envelopes: `tasks.snapshot`, `task.content.updated`, `task.activity.updated` |
 | Widgets and MCP | `GET /api/ui/widgets`; `GET /api/ui/mcp`; `GET /api/ui/mcp/content`; `PATCH/DELETE /api/ui/widgets/{widget_id}`; `POST /api/ui/widgets/{widget_id}/refresh` | Canonical `ui.event` envelopes: `widgets.updated`, `mcp.snapshot` (lean list, no per-tool/log detail), `mcp.server.detail.updated` (full tools/logs for one server) |
-| Schedules and event widgets | `GET/POST /api/ui/schedules`; `POST /api/ui/schedules/{schedule_id}/trigger`; `POST /api/ui/events` | Canonical `ui.event` envelopes: `schedule.snapshot`, `widgets.updated`. `POST /schedules` and `PATCH /widgets/schedule:{id}` accept `conversation_id` (the destination chat; `null`/absent on create is standalone, present on patch retargets). Unknown chats are 404; archived chats are 409, including re-enabling a schedule whose chat is archived. Archiving a chat pauses its schedules and deleting it deletes them. Chat history messages carry `scheduled: {schedule_id, run_id}` on the input a schedule injected, and `scheduled_response` events are scoped (`session_id`/`thread_id`) to the destination chat. |
+| Schedules and event widgets | `GET/POST /api/ui/schedules`; `POST /api/ui/schedules/{schedule_id}/trigger`; `POST /api/ui/events` | Canonical `ui.event` envelopes: `schedules.snapshot`, `widgets.updated`. `POST /schedules` and `PATCH /widgets/schedule:{id}` accept `conversation_id` (the destination chat; `null`/absent on create is standalone, present on patch retargets). Unknown chats are 404; archived chats are 409, including re-enabling a schedule whose chat is archived. Archiving a chat pauses its schedules and deleting it deletes them. Chat history messages carry `scheduled: {schedule_id, run_id}` on the input a schedule injected, and `scheduled_response` events are scoped (`session_id`/`thread_id`) to the destination chat. |
 | Instructions | `GET /api/ui/instructions`; `GET/PUT /api/ui/instructions/content`; `GET /api/ui/instructions/revisions`; `GET /api/ui/instructions/revisions/{id}`; `POST /api/ui/instructions/revisions/{id}/restore` | `instructions.snapshot` (front matter summaries), `instruction.loaded`, `instruction.revisions.loaded`, `instruction.revision.loaded`. Only `progena/` instructions are editable (403 otherwise); invalid front matter or changed `variables` is a 400. |
-| Marketplaces and plugins | `GET/PUT /api/ui/marketplaces`; `GET /api/ui/marketplaces/{name}/plugins`; `GET/POST /api/ui/plugins`; `DELETE /api/ui/plugins/{marketplace}/{plugin}` | Canonical `ui.event` envelopes: `marketplaces.snapshot`, `plugins.snapshot`, request-scoped `plugin.catalog.snapshot`. Skills are no longer authored directly — they ship inside installed marketplace plugins. |
-| Alerts | `GET /api/ui/alerts`; `POST /api/ui/alerts/viewed`; `POST /api/ui/alerts/{alert_id}/dismiss`; `POST /api/ui/alerts/{alert_id}/respond` | Canonical `ui.event` envelopes: `alerts.updated` and `alert` for independently generated alerts |
-| Logs | `GET /api/ui/logs`; `GET /api/ui/logs/sources`; `GET /api/ui/logs/export` | Canonical `ui.event` envelopes: `logs.page.loaded`, `logs.sources.loaded`, `logs.export.started`, `logs.export.chunk`, `logs.export.completed` |
+| Marketplaces and plugins | `GET/PUT /api/ui/marketplaces`; `GET /api/ui/marketplaces/{name}/plugins`; `GET/POST /api/ui/plugins`; `DELETE /api/ui/plugins/{marketplace}/{plugin}` | Canonical `ui.event` envelopes: `marketplaces.snapshot`, `plugins.snapshot`, request-scoped `plugin_catalog.snapshot`. Skills are no longer authored directly — they ship inside installed marketplace plugins. |
+| Providers | `GET/POST /api/ui/providers`; `PATCH/DELETE /api/ui/providers/{id}`; `POST /api/ui/providers/{id}/disconnect` | Reads send a request-correlated `providers.snapshot` only to the active requester. Mutations also send that correlated reply, then send an uncorrelated `providers.snapshot` to `providers` topic watchers other than the requester. |
+| Preferences | `GET/PUT /api/ui/preferences` | Both routes require a nonempty active-stream `client_id` and return `409` before work when it is disconnected. GET sends a request-correlated `preferences.snapshot` only to the requester; PUT publishes the request-correlated global chrome snapshot. |
+| Model profiles | `GET /api/ui/model-profiles`; `PATCH/DELETE /api/ui/model-profiles/{name}` | All routes require a nonempty active-stream `client_id` and return `409` before work when it is disconnected. GET sends a request-correlated `profiles.snapshot` only to the requester; PATCH and DELETE publish their request-correlated global chrome snapshot. |
+| Alerts | `GET /api/ui/alerts`; `POST /api/ui/alerts/viewed`; `POST /api/ui/alerts/{alert_id}/dismiss`; `POST /api/ui/alerts/{alert_id}/respond` | Every route requires a nonempty active-stream `client_id` and returns `409` before work when it is disconnected. GET sends request-correlated `alerts.updated` only to the requester; mutations publish request-correlated global chrome `alerts.updated`, while independently generated alerts use `alert`. |
+| Logs | `GET /api/ui/logs?client_id=<stream client>` (requires that active canonical stream, else `409`; `limit` defaults to 500, `0` returns every match); `GET /api/ui/logs/sources`; `GET /api/ui/logs/export` | Canonical `ui.event` envelopes: `logs.page.loaded` (targeted to the requesting `client_id` only, never replayed), `logs.sources.loaded`, `logs.export.started`, `logs.export.chunk`, `logs.export.completed` |
 | Channels | `GET /api/ui/channels`; `PATCH /api/ui/channels/{channel_id}`; `POST /api/ui/channels/{channel_id}/test`; `POST /api/ui/channels/{channel_id}/reconnect` | Canonical `ui.event` envelopes: `channels.snapshot` (each `channel:<id>` document merged with live connection status, per-process message counts, the type's settings `fields` and credential descriptors; never secret values or ciphertext; also published unsolicited when a channel document or connection state changes), request-scoped `channel.tested` (`{channel_id, ok, error?}`). PATCH accepts only `enabled`, a partial `settings` object (unknown or invalid keys are `422`) and `credentials` (`{source:"environment", env_var}`, `{source:"database", value}` encrypted with `PROGENA_PROVIDER_ENCRYPTION_KEY`, or `null` to clear). Reconnect of a turned-off channel is `409`. |
+
+All finite routes in these families require a nonempty `client_id` for an active
+canonical stream and return `409` before work when it is absent or disconnected.
+Finite replies are targeted only to that client; separate live changes fan out on
+their documented topic. Chat list row changes reach tabs watching the `chats`
+topic, not every open tab.
 
 ### Runs subscriptions
 
-Runs list snapshots are global, replayable state; a late correlated snapshot
-must not overwrite a newer row update. `kind`, `status`, case-insensitive `q`,
-and optional `period=hour|day|week|month` filters apply before one global order
+Runs list snapshots are targeted to the requesting active-stream `client_id` and
+are never globally replayed; a late correlated snapshot must not overwrite a
+newer row update.
 across workflow, routine, and schedule runs. `sort=newest` is the default and
 orders by descending `(started_at, kind, run_id)`; `sort=oldest` reverses that
 order. `sort=duration` orders longest elapsed runs first with the newest
@@ -596,10 +723,10 @@ A deleted path returns `404`; it is not a fallback for a stream failure.
 ## ChatGPT plan provider settings
 
 Provider settings retain the finite acknowledgement/canonical-event contract.
-`GET`/`POST /api/ui/providers` and `PATCH`/`DELETE /api/ui/providers/{id}`
-publish `providers.snapshot`. Its public payload includes `providers`, `go_models`,
-`chatgpt_models` (catalogues keyed by provider ID), and `chatgpt_model_errors`
-(safe per-registration errors). A catalogue failure does not hide other providers.
+`GET /api/ui/providers` replies with a request-correlated `providers.snapshot`
+only to the active requester. `POST /api/ui/providers` and
+`PATCH`/`DELETE /api/ui/providers/{id}` reply to the requester and fan the same
+snapshot out to other tabs watching the `providers` topic.
 
 `POST /api/ui/providers/{id}/test` publishes `providers.tested`; ChatGPT tests
 consume a supported Responses stream through `response.completed`.

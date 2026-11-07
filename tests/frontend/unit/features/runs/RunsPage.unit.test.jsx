@@ -23,6 +23,9 @@ vi.mock('@frontend/context/ConfigContext', () => ({
 vi.mock('@frontend/realtime/realtimeEvents', () => ({
   subscribeUiEvent: () => () => {},
 }));
+vi.mock('@frontend/hooks/useStreamTopic', () => ({
+  default: () => {},
+}));
 
 import RunsPage from '@frontend/features/runs/RunsPage';
 

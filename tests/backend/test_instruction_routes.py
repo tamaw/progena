@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 import pytest
 from ack_helpers import assert_acknowledged
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient as StarletteTestClient
 
 import src.backend.events.stream as events_stream
 import src.backend.instructions.routes as routes
@@ -17,6 +19,22 @@ from src.backend.storage.documents import (
     InMemoryDocumentStore,
     set_default_document_store,
 )
+
+
+class TestClient(StarletteTestClient):
+    def request(self, method, url, **kwargs):
+        parts = urlsplit(str(url))
+        params = dict(parse_qsl(parts.query))
+        params.update(kwargs.pop("params", {}) or {})
+        params["client_id"] = "tab-a"
+        clean_url = urlunsplit((parts.scheme, parts.netloc, parts.path, "", parts.fragment))
+        return super().request(method, clean_url, params=params, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def live_stream_client(monkeypatch):
+    monkeypatch.setattr(events_stream, "_ui_stream_clients", {asyncio.Queue(): "tab-a"})
+
 
 GENESIS = "---\ntitle: System\ndescription: Main prompt\n---\nYou are Progena.\n"
 DISCOVERY = "---\ntitle: Discovery\ndescription: Analyse folders\n---\nAnalyse {folders}.\n"

@@ -24,6 +24,8 @@ from src.progena.utils import normalize_utc_timestamp, utcnow
 
 logger = logging.getLogger(__name__)
 
+TASKS_TOPIC = "tasks"
+
 
 def _kanban_default_columns() -> list[dict]:
     """Return the default kanban workflow columns."""
@@ -753,7 +755,7 @@ def _write_kanban_board(state_reader: monitoring_state.StateReader, board: dict)
     Diff-aware: only cards whose payload actually changed are rewritten, and
     cards dropped from the board have their ``kanban_card:<id>`` row deleted.
     Each touched row fires the shared-store NOTIFY trigger, so a single card
-    edit produces a single ``kanban.snapshot`` rebroadcast rather than a storm.
+    edit produces a single ``tasks.snapshot`` rebroadcast rather than a storm.
     """
     store = storage_access._require_document_store(state_reader)
     normalized = _normalize_kanban_board(board)
@@ -862,13 +864,26 @@ def _apply_kanban_card_order_event(event: storage_documents.DocumentEvent) -> No
 
 
 def broadcast_kanban_snapshot(
-    board: tasks_models.KanbanBoardResponse | None = None, *, request_id: str | None = None
+    board: tasks_models.KanbanBoardResponse | None = None,
+    *,
+    request_id: str | None = None,
+    client_id: str | None = None,
 ) -> events_contracts.UiEventEnvelope:
-    """Broadcast the current Tasks board to /api/ui/stream subscribers."""
+    """Publish the Tasks board to one requester or tabs watching Tasks."""
     state_reader = monitoring_state.get_state_reader()
     payload = (board or _kanban_board_response(state_reader)).model_dump(mode="json")
+    if client_id:
+        return events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.TASKS_SNAPSHOT,
+            payload,
+            request_id=request_id,
+            client_id=client_id,
+        )
     return events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.KANBAN_SNAPSHOT, payload, request_id=request_id
+        events_contracts.UiEvent.TASKS_SNAPSHOT,
+        payload,
+        request_id=request_id,
+        topic=TASKS_TOPIC,
     )
 
 
@@ -877,16 +892,25 @@ def broadcast_task_content(
     content: tasks_models.TaskContentResponse | None = None,
     *,
     request_id: str | None = None,
+    client_id: str | None = None,
 ) -> events_contracts.UiEventEnvelope:
-    """Broadcast the canonical task-body payload for one card."""
+    """Publish one task body to its requester or tabs watching Tasks."""
     state_reader = monitoring_state.get_state_reader()
     if content is None:
         card = _find_kanban_card(state_reader, card_id)
         content = _read_task_content(state_reader, card)
+    if client_id:
+        return events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.TASK_CONTENT_UPDATED,
+            content.model_dump(mode="json"),
+            request_id=request_id,
+            client_id=client_id,
+        )
     return events_stream.broadcast_ui_event(
         events_contracts.UiEvent.TASK_CONTENT_UPDATED,
         content.model_dump(mode="json"),
         request_id=request_id,
+        topic=TASKS_TOPIC,
     )
 
 
@@ -895,12 +919,21 @@ def broadcast_task_activity(
     activity: tasks_models.TaskActivityResponse | None = None,
     *,
     request_id: str | None = None,
+    client_id: str | None = None,
 ) -> events_contracts.UiEventEnvelope:
-    """Broadcast the canonical task activity payload for one card."""
+    """Publish one task timeline to its requester or tabs watching Tasks."""
     state_reader = monitoring_state.get_state_reader()
     payload = activity or _task_activity_response(state_reader, card_id)
+    if client_id:
+        return events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.TASK_ACTIVITY_UPDATED,
+            payload.model_dump(mode="json"),
+            request_id=request_id,
+            client_id=client_id,
+        )
     return events_stream.broadcast_ui_event(
         events_contracts.UiEvent.TASK_ACTIVITY_UPDATED,
         payload.model_dump(mode="json"),
         request_id=request_id,
+        topic=TASKS_TOPIC,
     )

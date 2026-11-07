@@ -410,9 +410,17 @@ class ChannelManager:
             "credential_storage": {CredentialSource.DATABASE.value: database_storage_available()},
         }
 
-    async def broadcast_snapshot(self, *, request_id: str | None = None) -> None:
+    async def broadcast_snapshot(
+        self, *, request_id: str | None = None, client_id: str | None = None
+    ) -> None:
         payload = await self.snapshot_payload()
-        self._broadcast(UiEvent.CHANNELS_SNAPSHOT, payload, request_id=request_id)
+        self._broadcast(
+            UiEvent.CHANNELS_SNAPSHOT,
+            payload,
+            request_id=request_id,
+            client_id=client_id,
+            topic=None if client_id else "channels",
+        )
 
     def schedule_broadcast(self) -> None:
         """Publish one unsolicited snapshot soon; bursts coalesce."""

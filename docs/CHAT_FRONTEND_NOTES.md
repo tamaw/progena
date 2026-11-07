@@ -33,13 +33,23 @@ operation.
 
 Relevant canonical types are:
 
-- `chat.sessions.snapshot` for a durable session-list snapshot;
-- `chat.session.created`, `chat.session.metadata.updated`, and
-  `chat.session.upserted` for session data;
-- request-scoped `chat.session.selected` for selecting/loading a detail;
-- `chat.session.deleted` for durable removal;
+- tab-targeted `chat.list.loaded` for any window of the conversation list
+  (by `offset`), built from session documents only, with the view's total and
+  per-group counts for sizing the sidebar's scrollbar;
+- `chat.list.row.upserted` and `chat.list.row.deleted` for one row, sent to
+  every tab after a create, rename, pin, archive, delete or finished turn;
+- tab-targeted `chat.session.selected` for opening a chat, carrying its
+  detail, queue and background tasks;
 - `chat.response.started`, `chat.response.completed`,
   `chat.response.failed`, and `chat.response.cancelled` for generation lifecycle.
+
+List rows also hydrate persistent `unread`/`errored` indicators. The selected
+conversation clears unread through a metadata PATCH, including when an external
+turn completes while it is open. Reading, starting a retry and cancellation do
+not clear error; only successful completion does. Unread/Error filters use
+server-side pagination and totals, not the subset of rows cached in the browser.
+`PaneListRows` refreshes the visible range on reconnect; the global bridge does
+not independently request page zero.
 
 The dedicated response stream carries only `chat.response.delta` and
 `chat.response.event`. `POST /api/ui/responses`, including a body with
@@ -89,10 +99,11 @@ are not part of this feature.
 
 ## Session card layout
 
-Cards have three rows: time/pin (top), title (middle), and counts (bottom).
-`meta` drives the top-row timestamp from backend `last_activity`, not
-`created_at`. `summary` remains hidden from the DOM but is searched by the
-sidebar filter.
+Cards have two rows: status dot, title and age (top), then the archived or
+delegating label and the stored `preview` (bottom). `meta` drives the age from
+backend `last_activity`, not `created_at`. Search, sort and the archived filter
+run on the server against title, first message and preview; the unread filter
+applies to the loaded rows.
 
 ## Thread routing
 

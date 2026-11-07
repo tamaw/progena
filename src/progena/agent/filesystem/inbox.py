@@ -29,8 +29,8 @@ class InboxDirectoryBackend(_AsyncOnlyFileBackendMixin):
     frontmatter for the fields, markdown body for the content). Each message is
     its own ``inbox_message:<id>`` document in the shared Postgres store, so
     the agent composes one message per file and a write touches a single row.
-    Persistence flows through the StateManager, so the existing LISTEN/NOTIFY
-    pipeline pushes ``inbox.snapshot`` to the Inbox UI with no bespoke tool.
+    Persistence flows through the StateManager; the backend's document-event
+    dispatcher projects each changed row as a slim live inbox update.
 
     The directory is flat — no index document; the message list is a key-prefix
     scan. ``read``/``read_at`` are user-owned (set by the backend when the user

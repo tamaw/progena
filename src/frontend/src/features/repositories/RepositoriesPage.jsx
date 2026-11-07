@@ -28,7 +28,9 @@ import useConfirmAction from '../../hooks/useConfirmAction';
 import useEntityDraft from '../../hooks/useEntityDraft';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { useConfig } from '../../context/ConfigContext';
-import { selectRealtimeConnected } from '../../realtime/realtimeSlice';
+import { selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
+import useStreamTopic from '../../hooks/useStreamTopic';
+import useStreamResync from '../../hooks/useStreamResync';
 import { deleteRepo, fetchRepoDetail, fetchRepoUpstream, fetchRepos, selectRepoDetail, selectRepos, selectReposState, selectWorkspaceSignal } from './state';
 import { repoStatus } from './repositoriesPageModel';
 
@@ -62,7 +64,8 @@ export default function RepositoriesPage() {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const reposUrl = getApiUrl('repos');
-  const realtimeConnected = useSelector(selectRealtimeConnected);
+  useStreamTopic('repositories');
+  const streamReady = useSelector(selectRealtimeStreamReady);
   const rows = useSelector(selectRepos);
   const workspaceSignal = useSelector(selectWorkspaceSignal);
 
@@ -73,10 +76,10 @@ export default function RepositoriesPage() {
   const { loading, error: loadError } = useSelector(selectReposState);
 
   useEffect(() => {
-    if (!realtimeConnected) return undefined;
+    if (!streamReady) return undefined;
     dispatch(fetchRepos({ reposUrl }));
     return undefined;
-  }, [dispatch, realtimeConnected, reposUrl]);
+  }, [dispatch, reposUrl, streamReady]);
 
   const filteredRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -97,10 +100,18 @@ export default function RepositoriesPage() {
   const fetchAction = useUiAction(`repository-fetch:${selectedRepoId || ''}`);
   const deleteAction = useConfirmAction(`repository-delete:${selectedRepoId || ''}`);
 
+  const loadRepoDetail = useCallback((repoId) => {
+    if (!repoId) return;
+    dispatch(fetchRepoDetail({ reposUrl, repoId }));
+  }, [dispatch, reposUrl]);
+
   useEffect(() => {
-    if (!selectedRepoId) return;
-    dispatch(fetchRepoDetail({ reposUrl, repoId: selectedRepoId }));
-  }, [dispatch, reposUrl, selectedRepoId]);
+    loadRepoDetail(selectedRepoId);
+  }, [loadRepoDetail, selectedRepoId]);
+
+  useStreamResync(() => {
+    loadRepoDetail(selectedRepoId);
+  });
 
   const openCreateChat = useCallback(() => {
     dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.REPOSITORY_CREATE });

@@ -98,7 +98,7 @@ const realtimeSlice = createSlice({
       }
       state.lastEventId = event.id;
       state.lastEventAt = event.timestamp || new Date().toISOString();
-      if (event.type !== UI_EVENT.CONNECTION_HEARTBEAT && event.type !== UI_EVENT.STATUS_HEARTBEAT) {
+      if (event.type !== UI_EVENT.CONNECTION_HEARTBEAT) {
         state.lastEvent = event;
       }
       state.receivedIds = [...knownIds.slice(-(MAX_RECEIVED_IDS - 1)), event.id];

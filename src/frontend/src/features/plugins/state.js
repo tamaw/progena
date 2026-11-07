@@ -4,7 +4,13 @@ import { UI_EVENT } from '../../realtime/eventVocabulary';
  * plugins, kept live by SSE snapshots and seeded via REST on page mount.
  */
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle, addKeyedRequestLifecycle, completeKeyedRequest, selectKeyedRequest } from '../../store/async';
+import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
+import { withQuery } from '../../store/http';
 
+async function requestForClient(url, options) {
+  await waitForRealtimeClient();
+  return requestAcknowledged(withQuery(url, { client_id: realtimeClientId }), options);
+}
 export const initialState = {
   marketplaces: {
     items: {},
@@ -54,12 +60,12 @@ function applyPlugins(state, payload, requestId = null) {
 
 // Load registered marketplace sources.
 export const fetchMarketplaces = createAcknowledgedThunk('uiData/fetchMarketplaces', async ({ marketplacesUrl }, { requestId }) => {
-  return requestAcknowledged(marketplacesUrl, { requestId });
+  return requestForClient(marketplacesUrl, { requestId });
 });
 
 // Persist the full marketplaces document.
 export const saveMarketplaces = createAcknowledgedThunk('uiData/saveMarketplaces', async ({ marketplacesUrl, marketplaces }, { requestId }) => {
-  return requestAcknowledged(marketplacesUrl, {
+  return requestForClient(marketplacesUrl, {
     method: 'PUT',
     body: { marketplaces },
     requestId,
@@ -68,17 +74,17 @@ export const saveMarketplaces = createAcknowledgedThunk('uiData/saveMarketplaces
 
 // Load the installed-plugins document.
 export const fetchPlugins = createAcknowledgedThunk('uiData/fetchPlugins', async ({ pluginsUrl }, { requestId }) => {
-  return requestAcknowledged(pluginsUrl, { requestId });
+  return requestForClient(pluginsUrl, { requestId });
 });
 
 // Fetch one marketplace's catalog for browsing.
 export const fetchMarketplaceCatalog = createAcknowledgedThunk('uiData/fetchMarketplaceCatalog', async ({ marketplacesUrl, name }, { requestId }) => {
-  return requestAcknowledged(`${marketplacesUrl}/${encodeURIComponent(name)}/plugins`, { requestId });
+  return requestForClient(`${marketplacesUrl}/${encodeURIComponent(name)}/plugins`, { requestId });
 });
 
 // Install a plugin from a marketplace catalog.
 export const installPlugin = createAcknowledgedThunk('uiData/installPlugin', async ({ pluginsUrl, marketplace, plugin }, { requestId }) => {
-  return requestAcknowledged(pluginsUrl, {
+  return requestForClient(pluginsUrl, {
     method: 'POST',
     body: { marketplace, plugin },
     requestId,
@@ -87,7 +93,7 @@ export const installPlugin = createAcknowledgedThunk('uiData/installPlugin', asy
 
 // Uninstall a plugin.
 export const uninstallPlugin = createAcknowledgedThunk('uiData/uninstallPlugin', async ({ pluginsUrl, marketplace, plugin }, { requestId }) => {
-  return requestAcknowledged(`${pluginsUrl}/${encodeURIComponent(marketplace)}/${encodeURIComponent(plugin)}`, {
+  return requestForClient(`${pluginsUrl}/${encodeURIComponent(marketplace)}/${encodeURIComponent(plugin)}`, {
     method: 'DELETE',
     requestId,
   });
@@ -95,7 +101,7 @@ export const uninstallPlugin = createAcknowledgedThunk('uiData/uninstallPlugin',
 
 // Fetch one installed plugin skill's SKILL.md body for preview.
 export const fetchPluginSkillContent = createAcknowledgedThunk('uiData/fetchPluginSkillContent', async ({ pluginsUrl, marketplace, plugin, skill }, { requestId }) => {
-  const acknowledgement = await requestAcknowledged(
+  const acknowledgement = await requestForClient(
     `${pluginsUrl}/${encodeURIComponent(marketplace)}/${encodeURIComponent(plugin)}/skills/${encodeURIComponent(skill)}`,
     { requestId },
   );

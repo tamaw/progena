@@ -6,35 +6,46 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
+from pydantic import ValidationError
 
+import src.backend.chat.background_tasks as chat_background_tasks
 import src.backend.chat.responses as chat_responses
 import src.backend.chat.service as chat_service
 import src.backend.checkpoint_state as checkpoint_state
 import src.backend.events.documents as events_documents
 import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
+import src.backend.lifecycle.state as lifecycle_state
 import src.backend.runtime_liveness as runtime_liveness
 import src.backend.schedules.service as schedules_service
 import src.backend.storage.documents as storage_documents
 from src.backend.chat.service import (
+    CHAT_LIST_MAX_PAGE_SIZE,
+    CHAT_LIST_PAGE_SIZE,
     CHAT_MESSAGE_PAGE_SIZE,
     ChatInterruption,
+    ChatListFilter,
+    ChatListGroupStarts,
+    ChatListSort,
+    ChatListView,
     ChatMessage,
     ChatMessagesPageResponse,
     ChatPatchRequest,
     ChatSessionDetail,
-    ChatSessionsResponse,
     delete_session_document,
     get_chat_detail,
-    list_chat_sessions,
+    get_chat_list_row,
     paginate_chat_messages,
     patch_session_document,
+    query_chat_list,
     summary_markers_for_page,
 )
 from src.backend.events import contracts as events_contracts
+from src.backend.events.stream import require_ui_stream_client as _require_stream
 from src.backend.http.requests import BroadcastUiEvent
 from src.backend.http.requests import request_correlation_id as _strict_request_correlation_id
 from src.backend.integrations.runtime_history import RuntimeUnavailable
@@ -47,11 +58,13 @@ RUNTIME_UNAVAILABLE_DETAIL = "Progena runtime is unavailable; chat history canno
 _CHAT_ROUTE_ORIGIN_PREFIX = "chat-route:"
 
 
-def _request_id_from_chat_route_origin(origin: str | None) -> str | None:
+def _client_id_from_chat_route_origin(origin: str | None) -> str | None:
     if origin is None or not origin.startswith(_CHAT_ROUTE_ORIGIN_PREFIX):
         return None
-    request_id = origin.removeprefix(_CHAT_ROUTE_ORIGIN_PREFIX)
-    return request_id or None
+    _request_id, separator, client_id = origin.removeprefix(_CHAT_ROUTE_ORIGIN_PREFIX).rpartition(
+        ":"
+    )
+    return client_id if separator and client_id else None
 
 
 def request_correlation_id(request: Request, header_request_id: str | None) -> str:
@@ -62,42 +75,6 @@ def request_correlation_id(request: Request, header_request_id: str | None) -> s
         return str(uuid.uuid4())
 
 
-def chat_sessions_response(
-    *,
-    get_document_store: Callable[[], BackendDocumentStore],
-    include_archived: bool = False,
-    request_id: str | None = None,
-) -> ChatSessionsResponse:
-    sessions = list_chat_sessions(
-        get_document_store(),
-        include_archived=include_archived,
-    )
-    return ChatSessionsResponse(sessions=sessions, total=len(sessions))
-
-
-async def broadcast_chat_sessions_snapshot(
-    *,
-    get_document_store: Callable[[], BackendDocumentStore],
-    broadcast_ui_event: BroadcastUiEvent,
-    include_archived: bool = True,
-    request_id: str | None = None,
-) -> ChatSessionsResponse:
-    # Building the list reads Postgres and the runtime; keep that off the event
-    # loop, and broadcast from the loop itself.
-    response = await asyncio.to_thread(
-        chat_sessions_response,
-        get_document_store=get_document_store,
-        include_archived=include_archived,
-    )
-    broadcast_ui_event(
-        events_contracts.UiEvent.CHAT_SESSIONS_SNAPSHOT,
-        response.model_dump(),
-        scope="chat",
-        request_id=request_id,
-    )
-    return response
-
-
 def create_chat_router(
     *,
     get_document_store: Callable[[], BackendDocumentStore],
@@ -105,18 +82,9 @@ def create_chat_router(
     get_active_response: (
         Callable[[str], tuple[str, Literal["delegating", "generating"]] | None] | None
     ) = None,
+    get_runtime_client: Callable[[], Any] = lambda: lifecycle_state.client,
 ) -> APIRouter:
     router = APIRouter()
-
-    async def broadcast_snapshot(
-        include_archived: bool = True, request_id: str | None = None
-    ) -> ChatSessionsResponse:
-        return await broadcast_chat_sessions_snapshot(
-            get_document_store=get_document_store,
-            broadcast_ui_event=broadcast_ui_event,
-            include_archived=include_archived,
-            request_id=request_id,
-        )
 
     async def off_loop(fn: Callable[..., Any], *args: Any) -> Any:
         """Run blocking chat reads (Postgres, runtime) in a worker thread.
@@ -152,17 +120,75 @@ def create_chat_router(
         except Exception:
             return None
 
+    async def queue_snapshot(thread_id: str) -> dict[str, Any] | None:
+        """The runtime-owned queue, or ``None`` so the page falls back to its own request."""
+        client = get_runtime_client()
+        if client is None:
+            return None
+        try:
+            return await client.get_chat_queue(thread_id)
+        except Exception:
+            logger.debug("Chat queue unavailable for %s", thread_id, exc_info=True)
+            return None
+
     @router.get("/chats", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
     async def get_chats(
         request: Request,
-        include_archived: bool = False,
+        client_id: str = Query(min_length=1, max_length=64),
+        q: str = Query(default="", max_length=200),
+        sort: ChatListSort = "recent",
+        list_filter: ChatListFilter = Query(default="active", alias="filter"),
+        source: str | None = None,
+        thread_id: list[str] = Query(default=[]),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=CHAT_LIST_PAGE_SIZE, ge=0, le=CHAT_LIST_MAX_PAGE_SIZE),
+        today: datetime | None = None,
+        yesterday: datetime | None = None,
+        this_week: datetime | None = None,
+        last_week: datetime | None = None,
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
-        """Acknowledge chat list requests and publish the list on the UI stream."""
+        """Publish rows ``offset`` onward of the conversation list to the requesting tab.
+
+        The four time boundaries are the browser's local group starts; given
+        together, the recent active view also counts every chat per group.
+        """
+        chat_background_tasks.require_stream(client_id)
         request_id = request_correlation_id(request, x_request_id)
-        await broadcast_snapshot(include_archived=include_archived, request_id=request_id)
+        starts = (today, yesterday, this_week, last_week)
+        if any(start is None for start in starts) and any(start is not None for start in starts):
+            raise HTTPException(
+                status_code=400, detail="Give all four chat list group starts or none"
+            )
+        try:
+            view = ChatListView(
+                q=q,
+                sort=sort,
+                filter=list_filter,
+                source=source,
+                thread_ids=thread_id,
+                group_starts=(
+                    ChatListGroupStarts(
+                        today=today, yesterday=yesterday, this_week=this_week, last_week=last_week
+                    )
+                    if today and yesterday and this_week and last_week
+                    else None
+                ),
+            )
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail="Invalid chat list group starts") from exc
+        page = await asyncio.to_thread(
+            query_chat_list, get_document_store(), view, offset=offset, limit=limit
+        )
+        broadcast_ui_event(
+            events_contracts.UiEvent.CHAT_LIST_LOADED,
+            page.model_dump(mode="json"),
+            scope="chat",
+            request_id=request_id,
+            client_id=client_id,
+        )
         return http_contracts.acknowledgement_response(
-            request_id, [events_contracts.UiEvent.CHAT_SESSIONS_SNAPSHOT]
+            request_id, [events_contracts.UiEvent.CHAT_LIST_LOADED]
         )
 
     @router.get(
@@ -173,9 +199,11 @@ def create_chat_router(
     async def get_chat(
         thread_id: str,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
-        """Acknowledge chat detail requests and publish the detail on the UI stream."""
+        """Publish the open chat, its queue and background tasks to the requesting tab."""
+        chat_background_tasks.require_stream(client_id)
         request_id = request_correlation_id(request, x_request_id)
         detail = await off_loop(load_detail, thread_id)
         if detail is None:
@@ -198,25 +226,25 @@ def create_chat_router(
                 "interruption": interruption,
             }
         )
-        broadcast_ui_event(
-            events_contracts.UiEvent.CHAT_SESSION_UPSERTED,
-            {"session": detail.model_dump()},
-            scope="chat",
-            request_id=request_id,
-        )
+        # Opening a chat is this tab's background-task interest in it; the
+        # subscription route stays for releasing it and for reconnects.
+        task_events = chat_background_tasks.background_task_events
+        task_events.subscribe(client_id, thread_id)
+        tasks, revision = await task_events.snapshot(get_document_store(), thread_id)
         broadcast_ui_event(
             events_contracts.UiEvent.CHAT_SESSION_SELECTED,
-            {"session": detail.model_dump()},
+            {
+                "session": detail.model_dump(),
+                "queue": await queue_snapshot(thread_id),
+                "background_tasks": {"thread_id": thread_id, "tasks": tasks, "revision": revision},
+            },
             scope="chat",
             session_id=thread_id,
             request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
-            request_id,
-            [
-                events_contracts.UiEvent.CHAT_SESSION_UPSERTED,
-                events_contracts.UiEvent.CHAT_SESSION_SELECTED,
-            ],
+            request_id, [events_contracts.UiEvent.CHAT_SESSION_SELECTED]
         )
 
     @router.get(
@@ -227,11 +255,13 @@ def create_chat_router(
     async def get_chat_messages(
         thread_id: str,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         before_message_id: str | None = None,
         limit: int = CHAT_MESSAGE_PAGE_SIZE,
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Acknowledge an older-messages page request and publish it on the UI stream."""
+        chat_background_tasks.require_stream(client_id)
         request_id = request_correlation_id(request, x_request_id)
         detail = await off_loop(load_detail, thread_id)
         if detail is None:
@@ -253,6 +283,7 @@ def create_chat_router(
             scope="chat",
             session_id=thread_id,
             request_id=request_id,
+            client_id=client_id,
         )
         return http_contracts.acknowledgement_response(
             request_id, [events_contracts.UiEvent.CHAT_MESSAGES_PAGE_LOADED]
@@ -267,14 +298,16 @@ def create_chat_router(
         thread_id: str,
         request: ChatPatchRequest,
         http_request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Update session document metadata (title/pinned/archived) via atomic merge."""
+        _require_stream(client_id)
         request_id = request_correlation_id(http_request, x_request_id)
 
         def _patch() -> chat_service.ChatSessionPatchResult | None:
             with storage_documents.document_write_origin(
-                f"{_CHAT_ROUTE_ORIGIN_PREFIX}{request_id}"
+                f"{_CHAT_ROUTE_ORIGIN_PREFIX}{request_id}:{client_id}"
             ):
                 return patch_session_document(get_document_store(), thread_id, request)
 
@@ -283,20 +316,21 @@ def create_chat_router(
         patched = await off_loop(_patch)
         if patched is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
-        if not patched.changed:
-            await broadcast_snapshot(request_id=request_id)
-            return http_contracts.acknowledgement_response(
-                request_id, [events_contracts.UiEvent.CHAT_SESSIONS_SNAPSHOT]
+        row = await off_loop(get_chat_list_row, get_document_store(), thread_id)
+        if row is not None:
+            broadcast_ui_event(
+                events_contracts.UiEvent.CHAT_LIST_ROW_UPSERTED,
+                {"row": row.model_dump()},
+                scope="chat",
+                session_id=thread_id,
+                request_id=request_id,
+                client_id=client_id,
             )
         if request.archived:
             # Archiving stops the chat's schedules; unarchiving never resumes them.
             schedules_service.pause_conversation_schedules(thread_id)
         return http_contracts.acknowledgement_response(
-            request_id,
-            [
-                events_contracts.UiEvent.CHAT_SESSION_METADATA_UPDATED,
-                events_contracts.UiEvent.CHAT_SESSIONS_SNAPSHOT,
-            ],
+            request_id, [events_contracts.UiEvent.CHAT_LIST_ROW_UPSERTED]
         )
 
     @router.delete(
@@ -307,27 +341,33 @@ def create_chat_router(
     async def delete_chat(
         thread_id: str,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Delete the session document only; checkpoints are left intact."""
+        _require_stream(client_id)
         request_id = request_correlation_id(request, x_request_id)
 
         def _delete() -> bool:
             store = get_document_store()
             with storage_documents.document_write_origin(
-                f"{_CHAT_ROUTE_ORIGIN_PREFIX}{request_id}"
+                f"{_CHAT_ROUTE_ORIGIN_PREFIX}{request_id}:{client_id}"
             ):
                 return delete_session_document(store, thread_id)
 
         if not await off_loop(_delete):
             raise HTTPException(status_code=404, detail="Chat session not found")
+        events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.CHAT_LIST_ROW_DELETED,
+            {"thread_id": thread_id},
+            scope="chat",
+            session_id=thread_id,
+            request_id=request_id,
+            client_id=client_id,
+        )
         schedules_service.delete_conversation_schedules(thread_id)
         return http_contracts.acknowledgement_response(
-            request_id,
-            [
-                events_contracts.UiEvent.CHAT_SESSION_DELETED,
-                events_contracts.UiEvent.CHAT_SESSIONS_SNAPSHOT,
-            ],
+            request_id, [events_contracts.UiEvent.CHAT_LIST_ROW_DELETED]
         )
 
     return router
@@ -356,50 +396,54 @@ def _interruption_from_checkpoint_state(
     return ChatInterruption(next=next_nodes, at=updated_at if isinstance(updated_at, str) else None)
 
 
+# Last row sent per chat. A session write reaches the list twice (its document
+# event, and the store notification that also covers every-turn writes); the
+# second, uncorrelated copy of an unchanged row is not resent.
+_sent_chat_list_rows: dict[str, dict[str, Any]] = {}
+
+
+async def publish_chat_list_row(thread_id: str, *, exclude_client_id: str | None = None) -> None:
+    """Send a session's current list row to every tab watching Chats."""
+    row = await asyncio.to_thread(
+        chat_service.get_chat_list_row, storage_documents.get_default_document_store(), thread_id
+    )
+    if row is None:
+        return
+    payload = row.model_dump()
+    if _sent_chat_list_rows.get(thread_id) == payload:
+        return
+    _sent_chat_list_rows[thread_id] = payload
+    events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.CHAT_LIST_ROW_UPSERTED,
+        {"row": payload},
+        scope="chat",
+        session_id=thread_id,
+        topic="chats",
+        exclude_client_id=exclude_client_id,
+    )
+
+
 async def _publish_chat_session_document_event(typed: events_documents.TypedDocumentEvent) -> None:
-    """Broadcast sidebar updates when a ``session:`` document changes."""
+    """Turn ``session:`` document changes into conversation-list row events."""
 
     event = typed.event
     if not event.key.startswith(SESSION_KEY_PREFIX):
         return
-    request_id = _request_id_from_chat_route_origin(event.origin)
+    client_id = _client_id_from_chat_route_origin(event.origin)
     thread_id = event.key[len(SESSION_KEY_PREFIX) :]
     if event.op == "deleted":
-        await _broadcast_chat_sessions_snapshot(request_id=request_id)
+        _sent_chat_list_rows.pop(thread_id, None)
         events_stream.broadcast_ui_event(
-            events_contracts.UiEvent.CHAT_SESSION_DELETED,
+            events_contracts.UiEvent.CHAT_LIST_ROW_DELETED,
             {"thread_id": thread_id},
             scope="chat",
             session_id=thread_id,
-            request_id=request_id,
+            topic="chats",
+            exclude_client_id=client_id,
         )
         return
-    await _broadcast_chat_sessions_snapshot(request_id=request_id)
-    summary = await asyncio.to_thread(
-        chat_service.get_chat_summary, storage_documents.get_default_document_store(), thread_id
-    )
-    if summary is None:
-        return
-    events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.CHAT_SESSION_CREATED
-        if event.op == "created"
-        else events_contracts.UiEvent.CHAT_SESSION_METADATA_UPDATED,
-        {"session": summary.model_dump()},
-        scope="chat",
-        session_id=thread_id,
-        request_id=request_id,
-    )
-
-
-async def _broadcast_chat_sessions_snapshot(
-    include_archived: bool = True, request_id: str | None = None
-):
-    return await broadcast_chat_sessions_snapshot(
-        get_document_store=storage_documents.get_default_document_store,
-        broadcast_ui_event=events_stream.broadcast_ui_event,
-        include_archived=include_archived,
-        request_id=request_id,
-    )
+    # The event is historical; the row sent is the document as it is now.
+    await publish_chat_list_row(thread_id, exclude_client_id=client_id)
 
 
 def _get_active_response_for_thread(

@@ -6,6 +6,7 @@ import {
   selectRealtimeStreamReady,
 } from '../../realtime/realtimeSlice';
 import { fetchWidgets, selectUiWidgets } from '../schedules/widgetsState';
+import useStreamTopic from '../../hooks/useStreamTopic';
 
 /**
  * Shared data hook for the redesigned DashboardPage.
@@ -25,7 +26,7 @@ import { fetchSchedules, selectSchedules, selectSchedulesState } from '../schedu
  * session (after `streamReady`) using the existing acknowledged-request
  * framework. Deduplicates StrictMode double-mounts and reconnect refetches.
  */
-import { fetchInbox, selectInboxMessages, selectInboxUnreadCount, selectInboxState } from '../inbox/state';
+import { selectInboxUnreadCount, selectInboxState } from '../inbox/state';
 
 /**
  * Shared data hook for the redesigned DashboardPage.
@@ -35,7 +36,7 @@ import { fetchInbox, selectInboxMessages, selectInboxUnreadCount, selectInboxSta
  * session (after `streamReady`) using the existing acknowledged-request
  * framework. Deduplicates StrictMode double-mounts and reconnect refetches.
  */
-import { selectUiStatus } from '../monitoring/state';
+import { fetchStatus, selectUiStatus } from '../monitoring/state';
 
 /**
  * Shared data hook for the redesigned DashboardPage.
@@ -78,31 +79,34 @@ export function useDashboardData() {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
 
+  useStreamTopic('dashboard');
+  useStreamTopic('schedules');
+  useStreamTopic('workflows');
   const connected = useSelector(selectRealtimeConnected);
   const streamReady = useSelector(selectRealtimeStreamReady);
-
   const status = useSelector(selectUiStatus) ?? null;
   const widgets = useSelector(selectUiWidgets) ?? [];
   const alerts = useSelector(selectUiAlerts) ?? [];
   const schedules = useSelector(selectSchedules) ?? [];
   const workflows = useSelector(selectWorkflows) ?? [];
   const runs = useSelector(selectWorkflowRuns) ?? [];
-  const inboxMessages = useSelector(selectInboxMessages) ?? [];
   const inboxUnreadCount = useSelector(selectInboxUnreadCount) ?? 0;
-
   const workflowsState = useSelector(selectWorkflowsState);
   const schedulesState = useSelector(selectSchedulesState);
   const inboxState = useSelector(selectInboxState);
+  const inboxPendingApprovalCount = inboxState?.counts?.pendingApprovals ?? 0;
 
   const widgetsUrl = getApiUrl('widgets');
   const schedulesUrl = getApiUrl('schedules');
   const workflowsUrl = getApiUrl('workflows');
   const workflowRunsUrl = getApiUrl('workflowRuns');
+  const statusUrl = getApiUrl('status');
 
   const requestedWidgetsUrlRef = useRef(null);
   const requestedSchedulesUrlRef = useRef(null);
   const requestedWorkflowsUrlRef = useRef(null);
   const requestedRunsUrlRef = useRef(null);
+  const requestedStatusUrlRef = useRef(null);
 
   useEffect(() => {
     if (!streamReady) {
@@ -110,7 +114,13 @@ export function useDashboardData() {
       requestedSchedulesUrlRef.current = null;
       requestedWorkflowsUrlRef.current = null;
       requestedRunsUrlRef.current = null;
+      requestedStatusUrlRef.current = null;
       return;
+    }
+
+    if (requestedStatusUrlRef.current !== statusUrl) {
+      requestedStatusUrlRef.current = statusUrl;
+      dispatch(fetchStatus({ statusUrl }));
     }
 
     if (requestedWidgetsUrlRef.current !== widgetsUrl) {
@@ -136,7 +146,7 @@ export function useDashboardData() {
     // Finite requests belong to Redux, not this component. Aborting on effect
     // cleanup would cancel StrictMode's first request while the retained URL
     // refs prevent the replay from replacing it.
-  }, [dispatch, streamReady, widgetsUrl, schedulesUrl, workflowsUrl, workflowRunsUrl]);
+  }, [dispatch, streamReady, statusUrl, widgetsUrl, schedulesUrl, workflowsUrl, workflowRunsUrl]);
 
   return {
     status,
@@ -145,13 +155,12 @@ export function useDashboardData() {
     schedules,
     workflows,
     runs,
-    inboxMessages,
     inboxUnreadCount,
+    inboxPendingApprovalCount,
     connected,
     streamReady,
     retryRuns: () => dispatch(fetchWorkflowRuns({ workflowRunsUrl })),
     retrySchedules: () => dispatch(fetchSchedules({ schedulesUrl })),
-    retryInbox: () => dispatch(fetchInbox({ inboxUrl: getApiUrl('inbox') })),
     collectionState: {
       workflows: {
         loaded: workflowsState?.loaded ?? false,
@@ -169,9 +178,9 @@ export function useDashboardData() {
         error: schedulesState?.error ?? null,
       },
       inbox: {
-        loaded: inboxState.loaded,
-        loading: inboxState.loading,
-        error: inboxState.error,
+        loaded: inboxState.counts.unread !== null && inboxState.counts.pendingApprovals !== null,
+        loading: inboxState.counts.loading,
+        error: inboxState.counts.error,
       },
     },
   };

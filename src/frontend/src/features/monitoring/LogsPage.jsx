@@ -7,6 +7,7 @@ import { useLogsApi } from './useLogsApi';
 import { selectLogsExport, selectLogsPage, selectLogsState } from './logsState';
 import { requestAcknowledged, withQuery } from '../../store/http';
 import { selectRealtime } from '../../realtime/realtimeSlice';
+import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
 import { createUuid } from '../../lib/uuid';
 import Select from '../../components/Select';
 import InlineFailure from '../../components/InlineFailure';
@@ -17,6 +18,7 @@ const COLLAPSED_ROW_HEIGHT = 38;
 const EXPANDED_ROW_HEIGHT = 180;
 const OVERSCAN_ROWS = 8;
 const INCREMENTAL_LIMIT = 250;
+const INITIAL_LIMIT = 500;
 const WEEKDAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
 function toDateInputValue(date) {
@@ -134,7 +136,7 @@ function logDateBoundary(value, endOfDay = false) {
   return new Date(date.getTime() - 1).toISOString().replace(/999Z$/, '999999Z');
 }
 
-function buildQueryParams({ group, filePath, search, startDate, endDate }, extra = {}) {
+function buildQueryParams({ group, filePath, search, level, startDate, endDate }, extra = {}) {
   const params = {};
   if (group) {
     params.folder = group;
@@ -144,6 +146,9 @@ function buildQueryParams({ group, filePath, search, startDate, endDate }, extra
   }
   if (search) {
     params.search = search;
+  }
+  if (level) {
+    params.level = level;
   }
   if (startDate) {
     params.start = logDateBoundary(startDate);
@@ -319,9 +324,10 @@ function LogsPage() {
     group: selectedGroup,
     filePath: selectedFile,
     search,
+    level,
     startDate,
     endDate,
-  }), [endDate, search, selectedFile, selectedGroup, startDate]);
+  }), [endDate, level, search, selectedFile, selectedGroup, startDate]);
 
   const availableFiles = useMemo(() => {
     if (!selectedGroup) {
@@ -410,12 +416,7 @@ function LogsPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [datePickerOpen]);
 
-  const filteredEntries = useMemo(() => {
-    if (!level) {
-      return entries;
-    }
-    return entries.filter((entry) => normalizeLevel(entry.level) === level);
-  }, [entries, level]);
+  const filteredEntries = entries;
 
   const rowLayout = useMemo(() => {
     const items = [];
@@ -490,7 +491,7 @@ function LogsPage() {
       const acknowledgement = await getLogs(buildQueryParams(requestFilters, {
         format: 'json',
         after: incremental ? newestCursorRef.current || undefined : undefined,
-        limit: incremental ? INCREMENTAL_LIMIT : 0,
+        limit: incremental ? INCREMENTAL_LIMIT : INITIAL_LIMIT,
       }));
       if (requestVersion === requestVersionRef.current) {
         setPendingLogRequest({
@@ -580,10 +581,10 @@ function LogsPage() {
     }, 250);
   }, [loadLogs]);
 
-  const realtimeConnected = useSelector(selectRealtime).connected;
+  const streamReady = useSelector(selectRealtime).streamReady;
 
   useEffect(() => {
-    if (!realtimeConnected) {
+    if (!streamReady) {
       return;
     }
     if (newestCursorRef.current) {
@@ -591,7 +592,7 @@ function LogsPage() {
     } else {
       void loadLogs({ incremental: false });
     }
-  }, [realtimeConnected, loadLogs, queueIncrementalRefresh]);
+  }, [streamReady, loadLogs, queueIncrementalRefresh]);
   const handleScroll = useCallback((event) => {
     const nextScrollTop = event.currentTarget.scrollTop;
     setScrollTop(nextScrollTop);
@@ -633,8 +634,13 @@ function LogsPage() {
 
   const handleExport = useCallback(async () => {
     const requestId = createUuid();
-    const params = buildQueryParams(requestFilters, { format: 'csv', ...(level ? { level } : {}) });
+    const params = buildQueryParams(requestFilters, {
+      format: 'csv',
+      ...(level ? { level } : {}),
+      client_id: realtimeClientId,
+    });
     try {
+      await waitForRealtimeClient();
       const acknowledgement = await requestAcknowledged(
         withQuery(getApiUrl('/api/ui/logs/export'), params),
         { requestId },

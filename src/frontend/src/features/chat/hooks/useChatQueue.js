@@ -5,7 +5,8 @@ import { reportFailure } from '../../../lib/failures';
 import { createUuid } from '../../../lib/uuid';
 import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
 import { UI_EVENT } from '../../../realtime/eventVocabulary';
-import { requestAcknowledged } from '../../../store/http';
+import { requestAcknowledged, withQuery } from '../../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realtimeClient';
 
 function normalizeSnapshot(payload, conversationId) {
   if (
@@ -32,8 +33,14 @@ function queueUrl(getApiUrl, conversationId) {
   return `${getApiUrl('/api/chat/sessions').replace(/\/$/, '')}/${encodeURIComponent(conversationId)}/queue`;
 }
 
-/** Queue mutations complete through correlated events, not the HTTP acknowledgement. */
-export function useChatQueue(conversationId) {
+/**
+ * Queue mutations complete through correlated events, not the HTTP acknowledgement.
+ *
+ * `detailQueue` is the queue carried by this conversation's opened detail:
+ * `undefined` until that detail arrives, `null` when the runtime could not
+ * supply it (then the hook requests it), or the snapshot itself.
+ */
+export function useChatQueue(conversationId, detailQueue) {
   const { getApiUrl } = useConfig();
   const { show } = useNotifications();
   const [snapshot, setSnapshot] = useState(null);
@@ -46,7 +53,10 @@ export function useChatQueue(conversationId) {
   const requestSnapshot = useCallback(async (report = false) => {
     if (!conversationId) return false;
     try {
-      await requestAcknowledged(queueUrl(getApiUrl, conversationId), { requestId: createUuid() });
+      await waitForRealtimeClient();
+      await requestAcknowledged(withQuery(queueUrl(getApiUrl, conversationId), {
+        client_id: realtimeClientId,
+      }), { requestId: createUuid() });
       return true;
     } catch (error) {
       if (report) reportFailure(show, 'Load message queue', error);
@@ -57,8 +67,9 @@ export function useChatQueue(conversationId) {
   useEffect(() => {
     commandRef.current = null;
     revisionRef.current = -1;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- a queue command belongs only to its originating conversation.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a pending queue command belongs only to its originating conversation.
     setPendingMutation(null);
+    setSnapshot(null);
     if (!conversationId) return undefined;
 
     const unsubscribe = subscribeUiEvent((event) => {
@@ -70,8 +81,10 @@ export function useChatQueue(conversationId) {
         void requestSnapshot(true);
         return;
       }
-      if (event?.type !== UI_EVENT.CHAT_QUEUE_UPDATED) return;
-      const next = normalizeSnapshot(event.payload, conversationId);
+      const payload = event?.type === UI_EVENT.CHAT_SESSION_SELECTED
+        ? event.payload?.queue
+        : event?.type === UI_EVENT.CHAT_QUEUE_UPDATED ? event.payload : null;
+      const next = normalizeSnapshot(payload, conversationId);
       if (!next) return;
       if (next.revision > revisionRef.current) {
         revisionRef.current = next.revision;
@@ -82,9 +95,20 @@ export function useChatQueue(conversationId) {
         setPendingMutation(null);
       }
     });
-    void requestSnapshot(true);
     return unsubscribe;
   }, [conversationId, requestSnapshot]);
+
+  useEffect(() => {
+    if (detailQueue === undefined) return;
+    const next = normalizeSnapshot(detailQueue, conversationId);
+    if (next && next.revision > revisionRef.current) {
+      revisionRef.current = next.revision;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- detail snapshots are the initial queue state for this conversation.
+      setSnapshot(next);
+      return;
+    }
+    if (!next) void requestSnapshot(true);
+  }, [conversationId, detailQueue, requestSnapshot]);
 
   const dispatchAction = useCallback(async ({ action, messageId, order }) => {
     if (!conversationId || !activeSnapshot || isMutating || commandRef.current) return false;
@@ -92,7 +116,10 @@ export function useChatQueue(conversationId) {
     commandRef.current = commandId;
     setPendingMutation({ conversationId, commandId });
     try {
-      await requestAcknowledged(`${queueUrl(getApiUrl, conversationId)}/actions`, {
+      await waitForRealtimeClient();
+      await requestAcknowledged(withQuery(`${queueUrl(getApiUrl, conversationId)}/actions`, {
+        client_id: realtimeClientId,
+      }), {
         method: 'POST',
         requestId: commandId,
         body: {

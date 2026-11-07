@@ -8,26 +8,19 @@ directly (``src/progena/agent/filesystem/attachments.py``, mounted at
 independent of whatever text gets stuffed into a given prompt.
 
 Upload responds synchronously with the id the caller needs right away to
-attach the file to its own next ``POST /api/ui/responses`` call, but the
-codebase's canonical event pattern (see docs/ARCHITECTURE_DIAGRAM.md) still
-applies: on completion this also broadcasts ``attachment.uploaded`` on the
-canonical ``/api/ui/stream`` so a file-browser view (or another tab) in the
-frontend hears about it without polling.
+attach the file to its own next ``POST /api/ui/responses`` call. Attachment
+upload and deletion have no canonical UI event: the chat composer owns the
+returned upload metadata and message attachments are rendered from canonical
+chat history.
 """
 
 from __future__ import annotations
 
-import logging
-
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
-import src.backend.events.stream as events_stream
 from src.backend.attachments.processing import AttachmentManager, create_attachment_from_upload
 from src.backend.attachments.store import get_attachment_blob_store
-from src.backend.events import contracts as events_contracts
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/attachments", tags=["attachments"])
 
@@ -81,11 +74,6 @@ async def upload_attachment(
     store = get_attachment_blob_store()
     if thread_id:
         store.set_thread_id(result.id, thread_id)
-    meta = store.get_by_checksum(result.checksum)
-    if meta is not None:
-        events_stream.broadcast_ui_event(
-            events_contracts.UiEvent.ATTACHMENT_UPLOADED, _metadata_payload(meta), scope="global"
-        )
 
     return result.model_dump(mode="json")
 
@@ -131,9 +119,6 @@ async def delete_attachment(attachment_id: str, thread_id: str = Query(...)) -> 
     if blob is None or blob.thread_id != thread_id:
         raise HTTPException(status_code=404, detail="Attachment not found")
     store.delete(attachment_id)
-    events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.ATTACHMENT_DELETED, {"id": attachment_id}, scope="global"
-    )
     return Response(status_code=204)
 
 

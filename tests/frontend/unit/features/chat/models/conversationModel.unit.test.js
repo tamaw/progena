@@ -11,6 +11,7 @@ import {
   countToolInvocations,
   countTokens,
   getTimeBucket,
+  getTimeBucketBoundaries,
   groupSessionItems,
   getActiveRouteThreadId,
   shouldDeferInitialRosterSelection,
@@ -827,6 +828,19 @@ describe('getTimeBucket', () => {
 
   it('treats missing timestamps as today', () => {
     expect(getTimeBucket(null, now)).toBe('today');
+  });
+});
+
+describe('getTimeBucketBoundaries', () => {
+  it('uses local calendar days rather than fixed 24-hour offsets', () => {
+    const now = new Date(2026, 2, 9, 12, 0, 0).getTime();
+    const boundaries = getTimeBucketBoundaries(now);
+    const today = new Date(boundaries.today);
+    const yesterday = new Date(boundaries.yesterday);
+
+    expect(today.getHours()).toBe(0);
+    expect(yesterday.getHours()).toBe(0);
+    expect(today.getDate() - yesterday.getDate()).toBe(1);
   });
 });
 

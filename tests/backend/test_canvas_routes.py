@@ -34,10 +34,12 @@ def document_store():
 
 
 @pytest.fixture
-def client():
+def client(ui_stream_client):
+    from conftest import UiStreamTestClient
+
     from src.backend.main import app
 
-    return TestClient(app)
+    return UiStreamTestClient(TestClient(app), ui_stream_client)
 
 
 def _seed_types(store: InMemoryDocumentStore) -> None:
@@ -220,11 +222,58 @@ def test_snapshot_reports_manifest_errors_and_status(document_store):
         "canvas_status:broken",
         {"state": "error", "revision": "abc", "errors": [{"message": "bad"}], "reported_at": "now"},
     )
-    with _Capture() as capture:
-        canvases_routes.broadcast_canvases_snapshot()
+    with _Capture("tab") as capture:
+        canvases_routes.broadcast_canvases_snapshot(client_id="tab")
         item = capture.payloads()[-1]["items"][0]
     assert item["manifest_error"] == "manifest.json is missing."
     assert item["status"]["state"] == "error"
+
+
+def test_delete_canvas_replies_to_requester_and_fans_out_once(document_store):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.backend.events import stream as events_stream
+
+    _canvas(document_store)
+    app = FastAPI()
+    app.include_router(canvases_routes.router)
+    with (
+        _Capture("requester") as requester,
+        _Capture("watcher") as watcher,
+        _Capture("other") as other,
+    ):
+        events_stream.subscribe_topic("watcher", "canvases")
+        response = TestClient(app).delete(
+            "/api/ui/canvases/demo",
+            params={"client_id": "requester"},
+            headers={"X-Operation-Id": "unwatched-request"},
+        )
+        assert_acknowledged(response, ["canvas.deleted"], "unwatched-request")
+        requester_events = [item["envelope"] for item in list(requester.queue._queue)]
+        watcher_events = [item["envelope"] for item in list(watcher.queue._queue)]
+        assert len(requester_events) == len(watcher_events) == 1
+        assert requester_events[0].payload["request_id"] == "unwatched-request"
+        assert "request_id" not in watcher_events[0].payload
+        assert other.queue.empty()
+
+        requester.queue.get_nowait()
+        watcher.queue.get_nowait()
+        _canvas(document_store, "watched")
+        events_stream.subscribe_topic("requester", "canvases")
+        response = TestClient(app).delete(
+            "/api/ui/canvases/watched",
+            params={"client_id": "requester"},
+            headers={"X-Operation-Id": "watched-request"},
+        )
+        assert_acknowledged(response, ["canvas.deleted"], "watched-request")
+        requester_events = [item["envelope"] for item in list(requester.queue._queue)]
+        watcher_events = [item["envelope"] for item in list(watcher.queue._queue)]
+        assert len(requester_events) == len(watcher_events) == 1
+        assert requester_events[0].payload["request_id"] == "watched-request"
+        assert "request_id" not in watcher_events[0].payload
+    events_stream.clear_topics("requester")
+    events_stream.clear_topics("watcher")
 
 
 @pytest.mark.asyncio

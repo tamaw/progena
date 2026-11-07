@@ -29,11 +29,7 @@ describe('compareSessionItems', () => {
     )).toBeGreaterThan(0);
   });
 
-  // Regression: this comparator existed and was unit-tested (above) but was
-  // never actually called from ConversationPage's "Recent" sort, so toggling
-  // it was a no-op - items kept whatever order chats.order last happened to
-  // be in. This mirrors the fix: sort with compareSessionItems before
-  // grouping, so within-bucket order reflects recency instead of arrival order.
+  // Keep each time bucket in recency order before rendering.
   it('sorting with compareSessionItems before grouping puts each bucket in recency order', () => {
     const items = [
       { id: 'old', title: 'Old', bucket: 'today', pinned: false, activityAt: 1 },
@@ -771,34 +767,24 @@ describe('buildChatSessionItems', () => {
         { thread_id: 'other', title: 'other' },
       ],
     });
-    expect(items.some((i) => i.source === 'local' && i.id === 'sess1')).toBe(true);
-    expect(items.filter((i) => i.source === 'backend').map((i) => i.id)).toEqual(['other']);
+
+    expect(items.some((item) => item.source === 'local' && item.id === 'sess1')).toBe(true);
+    expect(items.filter((item) => item.source === 'backend').map((item) => item.id)).toEqual(['other']);
   });
 
-  it('does not synthesize an empty local draft card anymore', () => {
+  it('does not synthesize an empty local draft card', () => {
     const items = buildChatSessionItems({
       ...base,
       threadId: 'draft-1',
       chatTitle: 'New chat',
       selectedBackendChatId: null,
-      backendChatSessions: [
-        { thread_id: 'older', title: 'Earlier chat' },
-      ],
+      backendChatSessions: [{ thread_id: 'older', title: 'Earlier chat' }],
     });
-    expect(items).toEqual([
-      expect.objectContaining({
-        id: 'older',
-        source: 'backend',
-      }),
-    ]);
+
+    expect(items).toEqual([expect.objectContaining({ id: 'older', source: 'backend' })]);
   });
 
-  // Regression: locally-archived sessions used to be gated behind the same
-  // "is there a live draft to show" flag as the current-session card, so
-  // selecting ANY backend chat (setting selectedBackendChatId) made every
-  // archived chat vanish from the list - which also fed into
-  // usePrunedSelection and permanently unpinned/unshared them.
-  it('keeps locally-archived sessions visible once a backend chat is selected', () => {
+  it('keeps locally archived sessions visible once a backend chat is selected', () => {
     const items = buildChatSessionItems({
       ...base,
       messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
@@ -807,14 +793,28 @@ describe('buildChatSessionItems', () => {
       archivedSessions: [
         { id: 'archived-1', threadId: 'archived-1', title: 'Old chat', lastActivityAt: 1 },
       ],
-      backendChatSessions: [
-        { thread_id: 'c1', title: 'One' },
-      ],
+      backendChatSessions: [{ thread_id: 'c1', title: 'One' }],
     });
-    expect(items.some((i) => i.source === 'local' && i.id === 'archived-1')).toBe(true);
-    // The transient current-draft card is still correctly hidden.
-    expect(items.some((i) => i.source === 'local' && i.id === 'sess1')).toBe(false);
+
+    expect(items.some((item) => item.source === 'local' && item.id === 'archived-1')).toBe(true);
+    expect(items.some((item) => item.source === 'local' && item.id === 'sess1')).toBe(false);
   });
+
+  it('hides local items whose title does not match the sidebar query', () => {
+    const items = buildChatSessionItems({
+      ...base,
+      messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
+      threadId: 'local-1',
+      chatTitle: 'Draft title',
+      firstMessageTime: 1,
+      sidebarQuery: 'other',
+      selectedBackendChatId: null,
+      backendChatSessions: [{ thread_id: 'backend-1', title: 'Other chat' }],
+    });
+
+    expect(items.map((item) => item.id)).toEqual(['backend-1']);
+  });
+
 });
 
 describe('shouldLoadSelectedBackendChat', () => {

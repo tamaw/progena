@@ -23,6 +23,8 @@ RUN_CHECKPOINT_CHANNEL = "run_checkpoints"
 _DEBOUNCE_SECONDS = 0.5
 _CACHE_SIZE = 128
 _TERMINAL = {"completed", "failed", "cancelled", "stopped", "error", "interrupted"}
+RUNS_TOPIC = "runs"
+
 TraceKey = tuple[RunKind, str]
 TraceResult = tuple[RunTrace, set[str]]
 
@@ -33,6 +35,7 @@ class _Interest:
     kind: RunKind
     run_id: str
     token: object
+
 
 class RunsEvents:
     """Build once per run/version; connection tokens prevent stale deliveries."""
@@ -260,7 +263,9 @@ class RunsEvents:
                 return
             for row in rows:
                 stream.broadcast_ui_event(
-                    events_contracts.UiEvent.RUN_UPDATED, {"run": row.model_dump(mode="json")}
+                    events_contracts.UiEvent.RUN_UPDATED,
+                    {"run": row.model_dump(mode="json")},
+                    topic=RUNS_TOPIC,
                 )
         finally:
             self.row_building.discard(thread_id)
@@ -316,13 +321,17 @@ class RunsEvents:
             row = await get_run_row(self.store, kind, run_id)
             if row is not None:
                 stream.broadcast_ui_event(
-                    events_contracts.UiEvent.RUN_UPDATED, {"run": row.model_dump(mode="json")}
+                    events_contracts.UiEvent.RUN_UPDATED,
+                    {"run": row.model_dump(mode="json")},
+                    topic=RUNS_TOPIC,
                 )
 
     def _deleted(self, key: TraceKey) -> None:
         self._invalidate(key)
         stream.broadcast_ui_event(
-            events_contracts.UiEvent.RUN_DELETED, {"kind": key[0], "run_id": key[1]}
+            events_contracts.UiEvent.RUN_DELETED,
+            {"kind": key[0], "run_id": key[1]},
+            topic=RUNS_TOPIC,
         )
         for interest_key, interest in tuple(self.interests.items()):
             if (interest.kind, interest.run_id) == key:
@@ -391,7 +400,9 @@ class RunsEvents:
                 self._deleted(key)
             else:
                 stream.broadcast_ui_event(
-                    events_contracts.UiEvent.RUN_UPDATED, {"run": row.model_dump(mode="json")}
+                    events_contracts.UiEvent.RUN_UPDATED,
+                    {"run": row.model_dump(mode="json")},
+                    topic=RUNS_TOPIC,
                 )
             return
         await self._broadcast_row(*key)

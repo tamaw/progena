@@ -24,6 +24,7 @@ export const eventHandlers = {
   },
   [UI_EVENT.CHAT_BACKGROUND_TASKS_SNAPSHOT]: applyTasks,
   [UI_EVENT.CHAT_BACKGROUND_TASKS_UPDATED]: applyTasks,
+  [UI_EVENT.CHAT_SESSION_SELECTED]: (state, payload) => applyTasks(state, payload?.background_tasks),
 };
 
 const selectBackgroundTasksDomain = (state) => state.uiData.chatBackgroundTasks;

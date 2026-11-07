@@ -7,7 +7,12 @@ import { UI_EVENT } from '../../../realtime/eventVocabulary';
  */
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle, addKeyedRequestLifecycle, completeKeyedRequest, selectKeyedRequest } from '../../../store/async';
 import { withQuery } from '../../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realtimeClient';
 
+async function requestForClient(url, options) {
+  await waitForRealtimeClient();
+  return requestAcknowledged(withQuery(url, { client_id: realtimeClientId }), options);
+}
 export const initialState = {
   mcp: {
     servers: [],
@@ -23,13 +28,13 @@ export const initialState = {
 // Acknowledge an MCP-list request; the snapshot arrives on the realtime stream
 // as `mcp.snapshot` (the GET just triggers the broadcast).
 export const fetchMcp = createAcknowledgedThunk('uiData/fetchMcp', async ({ mcpUrl }, { requestId }) => {
-  return requestAcknowledged(mcpUrl, { requestId });
+  return requestForClient(mcpUrl, { requestId });
 });
 
 // Fetch one server's full detail (tools + logs) on demand — the list items
 // carry scalar fields only.
 export const fetchMcpServerDetail = createAcknowledgedThunk('uiData/fetchMcpServerDetail', async ({ mcpUrl, id }, { requestId }) => {
-  return requestAcknowledged(withQuery(`${mcpUrl}/content`, { id }), { requestId });
+  return requestForClient(withQuery(`${mcpUrl}/content`, { id }), { requestId });
 });
 
 export const eventHandlers = {

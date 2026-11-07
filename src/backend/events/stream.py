@@ -5,7 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
+import uuid
+from collections import OrderedDict
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import src.backend.events.contracts as events_contracts
@@ -39,6 +43,101 @@ _UI_EVENT_REPLAY_LIMIT = 200
 _sse_shutdown_event: asyncio.Event | None = None
 _active_ui_stream_tasks: set[asyncio.Task] = set()
 
+# Identifies this server process. `connection.ready` carries it, so a browser that
+# sees it change knows the server restarted and the replies this process had
+# recorded (below) are gone.
+BOOT_ID = uuid.uuid4().hex
+_OUTCOME_TTL_SECONDS = 120.0
+_OUTCOME_BUDGET_BYTES = 8 * 1024 * 1024
+_OUTCOME_MAX_ENVELOPE_BYTES = 512 * 1024
+_OUTCOMES_PER_REQUEST = 8
+_ui_stream_topics: dict[str, set[str]] = {}
+
+# Events every open tab renders as app chrome: alerts, the status bar, and the
+# nav indicators (inbox badge, per-route activity dot, chat busy/unread dot).
+# Anything else must be a reply to one tab (``client_id``) or fan out only to the
+# tabs watching a ``topic``.
+GLOBAL_UI_EVENTS: frozenset[str] = frozenset(
+    {
+        events_contracts.UiEvent.ALERT,
+        events_contracts.UiEvent.ALERTS_UPDATED,
+        events_contracts.UiEvent.CHAT_RESPONSE_ACTIVITY,
+        events_contracts.UiEvent.CHAT_RESPONSE_CANCELLED,
+        events_contracts.UiEvent.CHAT_RESPONSE_COMPLETED,
+        events_contracts.UiEvent.CHAT_RESPONSE_FAILED,
+        events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
+        events_contracts.UiEvent.CONNECTION_HEARTBEAT,
+        events_contracts.UiEvent.CONNECTION_READY,
+        events_contracts.UiEvent.CONNECTION_SHUTDOWN,
+        events_contracts.UiEvent.INBOX_COUNTS_UPDATED,
+        events_contracts.UiEvent.PREFERENCES_SNAPSHOT,
+        events_contracts.UiEvent.PROFILES_SNAPSHOT,
+        events_contracts.UiEvent.NAV_ACTIVITY,
+        events_contracts.UiEvent.PREFERENCES_SNAPSHOT,
+        events_contracts.UiEvent.PROFILES_SNAPSHOT,
+    }
+)
+
+# Domain events that light a nav route's "new activity" dot in tabs that are not
+# on that route. A domain event addressed to a topic reaches only tabs watching
+# it, so any such event that is not a reply to one tab also emits a global
+# ``nav.activity`` carrying just the route.
+NAV_ACTIVITY_ROUTES: dict[str, str] = {
+    events_contracts.UiEvent.AGENTS_SNAPSHOT: "/agents",
+    events_contracts.UiEvent.CANVASES_SNAPSHOT: "/canvases",
+    events_contracts.UiEvent.INSTRUCTIONS_SNAPSHOT: "/instructions",
+    events_contracts.UiEvent.TASKS_SNAPSHOT: "/tasks",
+    events_contracts.UiEvent.KNOWLEDGE_SNAPSHOT: "/knowledge",
+    events_contracts.UiEvent.MCP_SNAPSHOT: "/tools",
+    events_contracts.UiEvent.PLUGINS_SNAPSHOT: "/plugins",
+    events_contracts.UiEvent.PROFILES_SNAPSHOT: "/profiles",
+    events_contracts.UiEvent.REPOSITORIES_SNAPSHOT: "/repositories",
+    events_contracts.UiEvent.RUN_DELETED: "/runs",
+    events_contracts.UiEvent.RUN_UPDATED: "/runs",
+    events_contracts.UiEvent.SCHEDULES_SNAPSHOT: "/schedules",
+    events_contracts.UiEvent.TASK_ACTIVITY_UPDATED: "/tasks",
+    events_contracts.UiEvent.TASK_CONTENT_UPDATED: "/tasks",
+    events_contracts.UiEvent.WIDGETS_UPDATED: "/dashboard",
+    events_contracts.UiEvent.WORKFLOW_DELETED: "/workflows",
+    events_contracts.UiEvent.WORKFLOW_RUN_COMPLETED: "/workflows",
+    events_contracts.UiEvent.WORKFLOW_RUN_FAILED: "/workflows",
+    events_contracts.UiEvent.WORKFLOW_RUN_STARTED: "/workflows",
+    events_contracts.UiEvent.WORKFLOW_RUN_UPDATED: "/workflows",
+    events_contracts.UiEvent.WORKFLOW_RUNS_SNAPSHOT: "/workflows",
+    events_contracts.UiEvent.WORKFLOW_UPDATED: "/workflows",
+    events_contracts.UiEvent.WORKFLOWS_SNAPSHOT: "/workflows",
+    "agent.routine.run.started": "/routines",
+    "agent.routine.run.completed": "/routines",
+    "agent.routine.run.failed": "/routines",
+}
+
+
+def subscribe_topic(client_id: str, topic: str) -> None:
+    """Register one tab's interest in a topic; idempotent."""
+    _ui_stream_topics.setdefault(client_id, set()).add(topic)
+
+
+def unsubscribe_topic(client_id: str, topic: str) -> None:
+    topics = _ui_stream_topics.get(client_id)
+    if topics is None:
+        return
+    topics.discard(topic)
+    if not topics:
+        del _ui_stream_topics[client_id]
+
+
+def clear_topics(client_id: str) -> None:
+    _ui_stream_topics.pop(client_id, None)
+
+
+def has_topic(client_id: str, topic: str) -> bool:
+    return topic in _ui_stream_topics.get(client_id, ())
+
+
+def has_topic_watchers(topic: str) -> bool:
+    """True when at least one connected tab watches ``topic``."""
+    return any(topic in topics for topics in _ui_stream_topics.values())
+
 
 def has_active_ui_stream_subscribers() -> bool:
     """Check if there are any active canonical UI stream subscribers.
@@ -47,6 +146,14 @@ def has_active_ui_stream_subscribers() -> bool:
     not the legacy ``/api/ui/events`` subscriber list.
     """
     return len(_ui_stream_subscribers) > 0
+
+
+def require_ui_stream_client(client_id: str) -> None:
+    """Require that a finite UI request can reach its requesting tab."""
+    from fastapi import HTTPException
+
+    if client_id not in _ui_stream_clients.values():
+        raise HTTPException(status_code=409, detail="An active UI stream is required")
 
 
 def get_subscriber_counts() -> dict[str, int]:
@@ -82,6 +189,109 @@ def _next_ui_envelope(
     )
 
 
+@dataclass(frozen=True)
+class _RecordedOutcomeEnvelope:
+    envelope: events_contracts.UiEventEnvelope
+    client_id: str | None
+    topic: str | None
+    exclude_client_id: str | None
+
+
+@dataclass
+class _RequestOutcome:
+    recorded_at: float
+    envelopes: list[_RecordedOutcomeEnvelope]
+    size: int
+    too_large: bool = False
+
+
+_request_outcomes: OrderedDict[str, _RequestOutcome] = OrderedDict()
+_request_outcome_bytes = 0
+
+
+def _purge_request_outcomes() -> None:
+    global _request_outcome_bytes
+    cutoff = time.monotonic() - _OUTCOME_TTL_SECONDS
+    while _request_outcomes:
+        oldest_id, oldest = next(iter(_request_outcomes.items()))
+        if oldest.recorded_at >= cutoff and _request_outcome_bytes <= _OUTCOME_BUDGET_BYTES:
+            break
+        del _request_outcomes[oldest_id]
+        _request_outcome_bytes -= oldest.size
+
+
+def _retain_request_outcome(
+    request_id: str,
+    client_id: str | None,
+    topic: str | None,
+    exclude_client_id: str | None,
+    envelope: events_contracts.UiEventEnvelope,
+) -> None:
+    """Keep a request reply with its original audience for reconnect recovery."""
+    global _request_outcome_bytes
+    _purge_request_outcomes()
+    outcome = _request_outcomes.get(request_id)
+    if outcome is None:
+        outcome = _RequestOutcome(time.monotonic(), [], 0)
+        _request_outcomes[request_id] = outcome
+    if outcome.too_large:
+        return
+    size = len(envelope.model_dump_json().encode("utf-8"))
+    if size > _OUTCOME_MAX_ENVELOPE_BYTES or len(outcome.envelopes) >= _OUTCOMES_PER_REQUEST:
+        _request_outcome_bytes -= outcome.size
+        outcome.envelopes, outcome.size, outcome.too_large = [], 0, True
+        return
+    outcome.envelopes.append(
+        _RecordedOutcomeEnvelope(envelope, client_id, topic, exclude_client_id)
+    )
+    outcome.size += size
+    _request_outcome_bytes += size
+    _purge_request_outcomes()
+
+
+def replay_request_outcomes(
+    client_id: str, request_ids: list[str]
+) -> tuple[list[str], list[str], list[str]]:
+    """Queue recorded replies that *client_id* is still entitled to receive."""
+    _purge_request_outcomes()
+    queues = [q for q in _ui_stream_subscribers if _ui_stream_clients.get(q) == client_id]
+    replayed: list[str] = []
+    unknown: list[str] = []
+    lost: list[str] = []
+    for request_id in request_ids:
+        outcome = _request_outcomes.get(request_id)
+        if outcome is None:
+            unknown.append(request_id)
+        elif outcome.too_large:
+            lost.append(request_id)
+        else:
+            envelopes = [
+                record.envelope
+                for record in outcome.envelopes
+                if (record.client_id is None and record.topic is None)
+                or record.client_id == client_id
+                or (
+                    record.topic is not None
+                    and record.exclude_client_id != client_id
+                    and has_topic(client_id, record.topic)
+                )
+            ]
+            if not envelopes:
+                unknown.append(request_id)
+                continue
+            delivered = bool(queues)
+            for queue in queues:
+                for envelope in envelopes:
+                    try:
+                        queue.put_nowait(
+                            {"type": events_contracts.SseEvent.UI_EVENT, "envelope": envelope}
+                        )
+                    except asyncio.QueueFull:
+                        delivered = False
+            (replayed if delivered else unknown).append(request_id)
+    return replayed, unknown, lost
+
+
 def broadcast_ui_event(
     event_type: str,
     payload: Mapping[str, Any],
@@ -91,18 +301,37 @@ def broadcast_ui_event(
     request_id: str | None = None,
     client_id: str | None = None,
     interest: object | None = None,
+    topic: str | None = None,
+    exclude_client_id: str | None = None,
+    allow_global: bool = False,
 ) -> events_contracts.UiEventEnvelope:
     """Broadcast one typed event envelope to canonical /api/ui/stream subscribers.
 
     When *request_id* is provided it is embedded in the envelope payload so the
     frontend can correlate the event to a pending operation.
+
+    Audience is exactly one of: *client_id* (reply to one tab), *topic* (tabs
+    that called :func:`subscribe_topic`), or neither (every tab; reserved for
+    :data:`GLOBAL_UI_EVENTS`).  A topic fan-out can exclude its requester after
+    that tab has received a separate request-correlated reply.
     """
+    if client_id is not None and topic is not None:
+        raise ValueError("broadcast_ui_event takes client_id or topic, not both")
+    if exclude_client_id is not None and topic is None:
+        raise ValueError("exclude_client_id requires a topic audience")
+    if (
+        client_id is None
+        and topic is None
+        and event_type not in GLOBAL_UI_EVENTS
+        and not allow_global
+    ):
+        raise ValueError(f"{event_type} requires a client_id or topic audience")
     if request_id is not None:
         payload = {**payload, "request_id": request_id}
     envelope = _next_ui_envelope(event_type, payload, scope=scope, session_id=session_id)
     # Targeted detail is recovered by a subscription snapshot, never replayed
     # to other connections or to a page that has stopped watching.
-    if client_id is None:
+    if client_id is None and topic is None:
         _ui_event_replay.append(envelope)
         del _ui_event_replay[:-_UI_EVENT_REPLAY_LIMIT]
 
@@ -111,7 +340,12 @@ def broadcast_ui_event(
         event["interest"] = interest
     dead: list[asyncio.Queue] = []
     for queue in _ui_stream_subscribers:
-        if client_id and _ui_stream_clients.get(queue) != client_id:
+        subscriber = _ui_stream_clients.get(queue)
+        if client_id and subscriber != client_id:
+            continue
+        if topic is not None and (subscriber is None or not has_topic(subscriber, topic)):
+            continue
+        if exclude_client_id is not None and subscriber == exclude_client_id:
             continue
         try:
             queue.put_nowait(event)
@@ -126,4 +360,9 @@ def broadcast_ui_event(
             # instead of staying open-but-deaf, and true zombies get reaped.
             task.cancel()
         logger.warning("Event queue full for UI stream subscriber — closing stale connection")
+    route = NAV_ACTIVITY_ROUTES.get(event_type)
+    if route is not None and client_id is None:
+        broadcast_ui_event(events_contracts.UiEvent.NAV_ACTIVITY, {"route": route})
+    if request_id is not None:
+        _retain_request_outcome(request_id, client_id, topic, exclude_client_id, envelope)
     return envelope

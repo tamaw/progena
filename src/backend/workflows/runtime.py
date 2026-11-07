@@ -31,6 +31,8 @@ from src.progena.workflows.models import WorkflowDefinition, WorkflowListItem, W
 
 logger = logging.getLogger(__name__)
 
+WORKFLOWS_TOPIC = "workflows"
+
 
 def _resolve_action_thread_id(thread_id: str | None) -> str:
     """Return a workspace execution thread identifier."""
@@ -127,6 +129,7 @@ def get_workflow_executor() -> workflows_service.WorkflowExecutor:
                 event_type,
                 payload,
                 request_id=_workflow_event_request_id(payload),
+                topic=WORKFLOWS_TOPIC,
             ),
         )
     return _workflow_executor
@@ -354,42 +357,84 @@ async def _dispatch_document_event_workflows(typed: events_documents.TypedDocume
 
 
 def broadcast_workflows_snapshot(
-    items: list[WorkflowListItem] | None = None, *, request_id: str | None = None
+    items: list[WorkflowListItem] | None = None,
+    *,
+    request_id: str | None = None,
+    client_id: str | None = None,
 ) -> events_contracts.UiEventEnvelope:
-    """Broadcast the current workflow definition list."""
+    """Publish the workflow definition list to one requester or watching tabs."""
 
     if items is None:
         items = workflows_service.list_workflow_list_items(
             storage_documents.get_default_document_store()
         )
     payload = [item.model_dump(mode="json") for item in items]
+    if client_id:
+        return events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.WORKFLOWS_SNAPSHOT,
+            {"items": payload},
+            request_id=request_id,
+            client_id=client_id,
+        )
     return events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.WORKFLOWS_SNAPSHOT, {"items": payload}, request_id=request_id
+        events_contracts.UiEvent.WORKFLOWS_SNAPSHOT,
+        {"items": payload},
+        request_id=request_id,
+        topic=WORKFLOWS_TOPIC,
     )
 
 
-def broadcast_workflow_detail(workflow_id: str) -> events_contracts.UiEventEnvelope:
-    """Broadcast one workflow definition update or delete event."""
+def broadcast_workflow_detail(
+    workflow_id: str, *, client_id: str | None = None
+) -> events_contracts.UiEventEnvelope:
+    """Publish one workflow definition update or delete to its proper audience."""
 
     definition = workflows_service.get_workflow_definition(
         storage_documents.get_default_document_store(), workflow_id
     )
     if definition is None:
+        if client_id:
+            return events_stream.broadcast_ui_event(
+                events_contracts.UiEvent.WORKFLOW_DELETED,
+                {"workflow_id": workflow_id},
+                client_id=client_id,
+            )
         return events_stream.broadcast_ui_event(
-            events_contracts.UiEvent.WORKFLOW_DELETED, {"workflow_id": workflow_id}
+            events_contracts.UiEvent.WORKFLOW_DELETED,
+            {"workflow_id": workflow_id},
+            topic=WORKFLOWS_TOPIC,
         )
     payload = _workflow_content_response(definition).model_dump(mode="json", by_alias=True)
-    return events_stream.broadcast_ui_event(events_contracts.UiEvent.WORKFLOW_UPDATED, payload)
+    if client_id:
+        return events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.WORKFLOW_UPDATED, payload, client_id=client_id
+        )
+    return events_stream.broadcast_ui_event(
+        events_contracts.UiEvent.WORKFLOW_UPDATED, payload, topic=WORKFLOWS_TOPIC
+    )
 
 
 def broadcast_workflow_runs_snapshot(
-    runs: list[WorkflowRun] | None = None, *, request_id: str | None = None
+    runs: list[WorkflowRun] | None = None,
+    *,
+    request_id: str | None = None,
+    client_id: str | None = None,
 ) -> events_contracts.UiEventEnvelope:
-    """Broadcast the current workflow runs list."""
+    """Publish the workflow runs list to one requester or watching tabs."""
 
     if runs is None:
         runs = workflows_service.list_workflow_runs(storage_documents.get_default_document_store())
     payload = [item.model_dump(mode="json") for item in runs]
+    if client_id:
+        return events_stream.broadcast_ui_event(
+            events_contracts.UiEvent.WORKFLOW_RUNS_SNAPSHOT,
+            {"items": payload},
+            request_id=request_id,
+            client_id=client_id,
+        )
     return events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.WORKFLOW_RUNS_SNAPSHOT, {"items": payload}, request_id=request_id
+        events_contracts.UiEvent.WORKFLOW_RUNS_SNAPSHOT,
+        {"items": payload},
+        request_id=request_id,
+        topic=WORKFLOWS_TOPIC,
     )

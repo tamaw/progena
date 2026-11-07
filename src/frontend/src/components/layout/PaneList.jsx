@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { buildVirtualPaneLayout, findVirtualPaneRange, shouldCompensateVirtualScroll } from './PaneListVirtualModel';
 import { createPortal } from 'react-dom';
 import { usePaneCollapse, NARROW_MQ } from '../../hooks/usePaneCollapse';
 import { useMenuDismiss } from '../../hooks/useMenuDismiss';
@@ -257,12 +258,10 @@ function PaneListGroupHeader({ title, count }) {
   );
 }
 
+
 /**
- * Render grouped or ungrouped pane rows in normal document flow.
- *
- * Keeping every row in the document lets the browser calculate the complete
- * scroll height natively; row components remain responsible for their own
- * natural height and text truncation.
+ * Render grouped or ungrouped pane rows. Callers that provide `virtual` get a
+ * fixed-height positional layout; every other pane remains in normal flow.
  */
 export function PaneListRows({
   groups,
@@ -276,8 +275,14 @@ export function PaneListRows({
     <PaneListGroupHeader title={getGroupTitle(group)} count={groupItems.length} />
   ),
   className = '',
+  onScroll,
+  virtual = null,
 }) {
   const collapseIfNarrow = useContext(PaneAutoCollapseCtx);
+  const scrollRef = useRef(null);
+  const appliedRowDeltaSequenceRef = useRef(null);
+  const rangeTimerRef = useRef(null);
+  const [viewport, setViewport] = useState({ top: 0, height: 0 });
   const rows = useMemo(() => {
     if (Array.isArray(groups)) {
       return groups.flatMap((group, groupIndex) => {
@@ -310,11 +315,116 @@ export function PaneListRows({
       itemIndex: index,
     }));
   }, [getGroupItems, getGroupKey, getGroupTitle, getItemKey, groups, items]);
+  const virtualLayout = useMemo(() => (
+    virtual
+      ? buildVirtualPaneLayout({
+        total: virtual.total,
+        rowHeight: virtual.rowHeight,
+        headerHeight: virtual.headerHeight,
+        groups: virtual.groups,
+      })
+      : null
+  ), [virtual]);
+  const virtualRange = useMemo(() => (
+    virtualLayout
+      ? findVirtualPaneRange(virtualLayout, viewport.top, viewport.height, virtual.overscan ?? virtual.rowHeight * 6)
+      : { start: 0, end: 0 }
+  ), [viewport.height, viewport.top, virtual, virtualLayout]);
+  const onRangeNeeded = virtual?.onRangeNeeded;
+  const rowDelta = virtual?.rowDelta;
+  const virtualRowHeight = virtual?.rowHeight;
+  const syncViewport = useCallback((element) => {
+    if (!element) return;
+    setViewport({ top: element.scrollTop, height: element.clientHeight });
+  }, []);
+
+  useEffect(() => {
+    if (!virtual || !scrollRef.current) return undefined;
+    const element = scrollRef.current;
+    syncViewport(element);
+    const observer = new ResizeObserver(() => syncViewport(element));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [syncViewport, virtual]);
+
+  useEffect(() => {
+    if (!onRangeNeeded || virtualRange.end <= virtualRange.start) return undefined;
+    window.clearTimeout(rangeTimerRef.current);
+    rangeTimerRef.current = window.setTimeout(() => {
+      onRangeNeeded(virtualRange.start, virtualRange.end);
+    }, 25);
+    return () => window.clearTimeout(rangeTimerRef.current);
+  }, [onRangeNeeded, virtualRange.end, virtualRange.start]);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!rowDelta || rowDelta.sequence === appliedRowDeltaSequenceRef.current) return;
+    const shouldCompensate = shouldCompensateVirtualScroll({
+      rowDelta,
+      lastSequence: appliedRowDeltaSequenceRef.current,
+      scrollTop: element?.scrollTop ?? 0,
+      rangeStart: virtualRange.start,
+    });
+    appliedRowDeltaSequenceRef.current = rowDelta.sequence;
+    if (!element || !shouldCompensate) return;
+    element.scrollTop = Math.max(0, element.scrollTop + (rowDelta.amount * virtualRowHeight));
+  }, [rowDelta, virtualRange.start, virtualRowHeight]);
+
+  const handleScroll = useCallback((event) => {
+    if (virtual) syncViewport(event.currentTarget);
+    onScroll?.(event);
+  }, [onScroll, syncViewport, virtual]);
+
+  if (virtual && virtualLayout) {
+    const visibleRows = [];
+    for (let index = virtualRange.start; index < virtualRange.end; index += 1) {
+      const group = virtualLayout.groups.find((entry) => index >= entry.rowStart && index < entry.rowEnd);
+      if (!group) continue;
+      const top = group.rowsTop + ((index - group.rowStart) * virtual.rowHeight);
+      const item = virtual.rowAt(index);
+      visibleRows.push(
+        <div
+          key={`item:${index}:${item ? getItemKey(item, index) : 'placeholder'}`}
+          className="pane-list-row pane-list-row--virtual"
+          style={{ top, height: virtual.rowHeight }}
+        >
+          {item
+            ? renderItem(item, index)
+            : virtual.renderPlaceholder?.(index) ?? <div className="pane-list-row__placeholder" aria-hidden="true" />}
+        </div>,
+      );
+    }
+    const visibleHeaders = virtualLayout.groups
+      .filter((group) => group.hasHeader && group.headerTop < viewport.top + viewport.height + (virtual.overscan ?? 0) && group.rowsTop > viewport.top - (virtual.overscan ?? 0))
+      .map((group) => (
+        <div
+          key={`group:${group.key}`}
+          className="pane-list-row pane-list-row--virtual pane-list-row--group"
+          style={{ top: group.headerTop, height: virtual.headerHeight }}
+        >
+          {renderGroupHeader({ key: group.key, title: group.title, count: group.count }, { length: group.count })}
+        </div>
+      ));
+    return (
+      <div
+        ref={scrollRef}
+        className={`sess-list__scroll ${className}`.trim()}
+        onClick={collapseIfNarrow ?? undefined}
+        onScroll={handleScroll}
+      >
+        <div className="pane-list-rows pane-list-rows--virtual" style={{ height: virtualLayout.height }}>
+          {visibleHeaders}
+          {visibleRows}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
       className={`sess-list__scroll ${className}`.trim()}
       onClick={collapseIfNarrow ?? undefined}
+      onScroll={handleScroll}
     >
       <div className="pane-list-rows">
         {rows.map((row) => (

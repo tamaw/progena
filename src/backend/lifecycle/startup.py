@@ -14,6 +14,7 @@ import src.backend.alerts.routes as alerts_routes
 import src.backend.attachments.store as attachments_store
 import src.backend.channels.manager as channels_manager
 import src.backend.chat.responses as chat_responses
+import src.backend.chat.service as chat_service
 import src.backend.events.contracts as events_contracts
 import src.backend.events.documents as events_documents
 import src.backend.events.routes as events_routes
@@ -183,13 +184,40 @@ async def lifespan(app: FastAPI):
         request_id = data.get("request_id")
         should_broadcast = chat_responses.handle_runtime_queue_lifecycle(event_type, data)
         if should_broadcast:
-            events_stream.broadcast_ui_event(
-                event_type,
-                data,
-                scope="chat",
-                session_id=thread_id,
-                request_id=request_id if isinstance(request_id, str) and request_id else None,
-            )
+            request_id = request_id if isinstance(request_id, str) and request_id else None
+            if (
+                event_type
+                in {
+                    events_contracts.UiEvent.CHAT_RESPONSE_ACTIVITY,
+                    events_contracts.UiEvent.CHAT_RESPONSE_CANCELLED,
+                    events_contracts.UiEvent.CHAT_RESPONSE_COMPLETED,
+                    events_contracts.UiEvent.CHAT_RESPONSE_FAILED,
+                    events_contracts.UiEvent.CHAT_RESPONSE_STARTED,
+                }
+                and thread_id
+                and request_id
+            ):
+                chat_responses.broadcast_response_lifecycle(
+                    event_type, data, thread_id=thread_id, request_id=request_id
+                )
+            elif event_type == events_contracts.UiEvent.CHAT_QUEUE_UPDATED and thread_id:
+                events_stream.broadcast_ui_event(
+                    event_type,
+                    data,
+                    scope="chat",
+                    session_id=thread_id,
+                    request_id=request_id,
+                    topic=f"chat:{thread_id}",
+                )
+            else:
+                events_stream.broadcast_ui_event(
+                    event_type,
+                    data,
+                    scope="chat",
+                    session_id=thread_id,
+                    request_id=request_id,
+                    allow_global=True,
+                )
         # Reflect runtime-driven schedule changes on the canonical UI stream so
         # the Schedules page updates live (e.g. a one-off firing and removing
         # itself, or a schedule created from a chat).
@@ -213,6 +241,16 @@ async def lifespan(app: FastAPI):
     ) -> None:
         await integrations_runtime.start_sse_client_with_retry(client)
         await chat_responses.recover_runtime_queued_executions()
+        # Chats from before stored previews read their history once, here.
+        try:
+            backfilled = await asyncio.to_thread(
+                chat_service.backfill_session_previews, document_store
+            )
+        except Exception:
+            logger.exception("Chat preview backfill failed")
+        else:
+            if backfilled:
+                logger.info("Backfilled %d chat previews", backfilled)
 
     # Register client shutdown callback
     if lifecycle_state.client:

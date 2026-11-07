@@ -1,5 +1,7 @@
 import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { usePaneCollapse } from '../../hooks/usePaneCollapse';
+import useStreamTopic from '../../hooks/useStreamTopic';
+import useStreamResync from '../../hooks/useStreamResync';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -56,6 +58,7 @@ export default function TasksPage({ context = null }) {
   const { show } = useNotifications();
   const dispatch = useDispatch();
   const realtime = useSelector(selectRealtime);
+  useStreamTopic('tasks');
   // `titleSlug` is display context only (e.g. /tasks/card_42/fix-the-thing) --
   // selection is driven entirely by the id, never by the slug. Only the
   // unscoped /tasks page (no project `context`) owns the URL -- Tasks
@@ -89,11 +92,11 @@ export default function TasksPage({ context = null }) {
   ), [dispatch, getApiUrl]);
 
   useEffect(() => {
-    if (!realtime.connected) {
+    if (!realtime.streamReady) {
       return;
     }
     void loadBoard();
-  }, [loadBoard, realtime.connected]);
+  }, [loadBoard, realtime.streamReady]);
 
   const groupedColumns = useMemo(
     () => groupVisibleCards(board, taskFilter, searchQuery, sortMode, context?.projectId),
@@ -186,7 +189,7 @@ export default function TasksPage({ context = null }) {
 
   // Creation is delegated to the Progena agent (same pattern as Tools and
   // Schedules): there is no local create form. The agent writes `/tasks/`
-  // entries and the new card arrives here live via the kanban.snapshot event.
+  // entries and the new card arrives here live via the tasks.snapshot event.
   const openCreateTask = useCallback(() => {
     dispatchQuickChatOpen({ mode: QUICK_CHAT_MODE.TASK_CREATE });
   }, []);
@@ -215,6 +218,10 @@ export default function TasksPage({ context = null }) {
     requestTaskActivity(taskScopeKey);
   }, [requestTaskActivity, taskScopeKey]);
 
+  useStreamResync(() => {
+    requestTaskActivity(taskScopeKey);
+  });
+
   const commitTitle = useCallback((nextTitle, { ticket, trackSave, failSave }) => {
     const target = selectedCard;
     if (!target) {
@@ -225,7 +232,7 @@ export default function TasksPage({ context = null }) {
     const requestId = createUuid();
     trackSave(ticket, {
       requestId,
-      events: [UI_EVENT.KANBAN_SNAPSHOT],
+      events: [UI_EVENT.TASKS_SNAPSHOT],
     });
     let dispatched = false;
     return runTitleAction('Rename task', async () => {
@@ -267,7 +274,7 @@ export default function TasksPage({ context = null }) {
       if (!isCurrent()) {
         return;
       }
-      // The canonical removal arrives through kanban.snapshot. Clear only this
+      // The canonical removal arrives through tasks.snapshot. Clear only this
       // detail's local selection after its request is accepted.
       if (isStandaloneTasksPage && routedCardId === target.id) {
         navigate('/tasks', { replace: true });
@@ -325,7 +332,7 @@ export default function TasksPage({ context = null }) {
     if (draftSave) {
       draftSave.trackSave(draftSave.ticket, {
         requestId,
-        events: [UI_EVENT.KANBAN_SNAPSHOT],
+        events: [UI_EVENT.TASKS_SNAPSHOT],
       });
     }
     let dispatched = false;
@@ -385,7 +392,7 @@ export default function TasksPage({ context = null }) {
     if (draftSave) {
       draftSave.trackSave(draftSave.ticket, {
         requestId,
-        events: [UI_EVENT.KANBAN_SNAPSHOT],
+        events: [UI_EVENT.TASKS_SNAPSHOT],
       });
     }
     let dispatched = false;

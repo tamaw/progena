@@ -9,7 +9,7 @@ import {
   requestAcknowledged,
   selectKeyedRequest,
 } from '../../store/async';
-import { realtimeClientId } from '../../realtime/realtimeClient';
+import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
 
 export const RUN_KINDS = ['routine', 'workflow', 'schedule'];
 export const RUN_STATUSES = ['queued', 'running', 'paused', 'completed', 'failed', 'cancelled', 'stopped', 'interrupted'];
@@ -74,7 +74,8 @@ export const initialState = {
 
 export const fetchRuns = createAcknowledgedThunk(
   'uiData/fetchRuns',
-  ({ runsUrl, ...query }, { requestId }) => {
+  async ({ runsUrl, ...query }, { requestId }) => {
+    await waitForRealtimeClient();
     const normalized = normalizeRunsQuery(query);
     return requestAcknowledged(withQuery(runsUrl, {
       ...(normalized.kind ? { kind: normalized.kind } : {}),
@@ -83,16 +84,20 @@ export const fetchRuns = createAcknowledgedThunk(
       ...(normalized.cursor ? { cursor: normalized.cursor } : {}),
       ...(normalized.period ? { period: normalized.period } : {}),
       sort: normalized.sort,
+      client_id: realtimeClientId,
     }), { requestId });
   },
 );
 
 export const fetchRunTrace = createAcknowledgedThunk(
   'uiData/fetchRunTrace',
-  ({ runsUrl, kind, runId }, { requestId }) => requestAcknowledged(
-    withQuery(`${runsUrl}/${encodeURIComponent(kind)}/${encodeURIComponent(runId)}/trace`, { client_id: realtimeClientId }),
-    { requestId },
-  ),
+  async ({ runsUrl, kind, runId }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(
+      withQuery(`${runsUrl}/${encodeURIComponent(kind)}/${encodeURIComponent(runId)}/trace`, { client_id: realtimeClientId }),
+      { requestId },
+    );
+  },
 );
 
 function rowKey(row) {

@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Literal
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field, model_validator
 
+import src.backend.chat.background_tasks as chat_background_tasks
 import src.backend.events.contracts as events_contracts
 import src.backend.events.stream as events_stream
 import src.backend.lifecycle.state as lifecycle_state
@@ -48,26 +49,27 @@ def create_chat_queue_router(
             raise HTTPException(status_code=503, detail="Chat queue is unavailable")
         return client
 
-    def publish_snapshot(snapshot: dict[str, Any], request_id: str) -> None:
+    def publish_snapshot(snapshot: dict[str, Any], request_id: str, client_id: str) -> None:
         conversation_id = snapshot["conversation_id"]
-        payload = dict(snapshot)
-        payload["request_id"] = request_id
         broadcast_ui_event(
             events_contracts.UiEvent.CHAT_QUEUE_UPDATED,
-            payload,
+            snapshot,
             scope="chat",
             session_id=conversation_id,
             request_id=request_id,
+            client_id=client_id,
         )
 
-    async def invoke(operation: Callable[..., Any], *args: Any, request_id: str) -> None:
+    async def invoke(
+        operation: Callable[..., Any], *args: Any, request_id: str, client_id: str
+    ) -> None:
         try:
             snapshot = await operation(*args)
         except RuntimeQueueError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Chat queue is unavailable") from exc
-        publish_snapshot(snapshot, request_id)
+        publish_snapshot(snapshot, request_id, client_id)
 
     @router.get(
         "/{conversation_id}/queue",
@@ -77,11 +79,15 @@ def create_chat_queue_router(
     async def get_queue(
         conversation_id: str,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ) -> UiRequestAcknowledgement:
+        chat_background_tasks.require_stream(client_id)
         request_id = request_correlation_id(request, x_request_id)
         client = runtime_client()
-        await invoke(client.get_chat_queue, conversation_id, request_id=request_id)
+        await invoke(
+            client.get_chat_queue, conversation_id, request_id=request_id, client_id=client_id
+        )
         return acknowledgement_response(request_id, [events_contracts.UiEvent.CHAT_QUEUE_UPDATED])
 
     @router.post(
@@ -93,8 +99,10 @@ def create_chat_queue_router(
         conversation_id: str,
         body: ChatQueueActionRequest,
         request: Request,
+        client_id: str = Query(min_length=1, max_length=64),
         x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ) -> UiRequestAcknowledgement:
+        chat_background_tasks.require_stream(client_id)
         request_id = request_correlation_id(request, x_request_id)
         client = runtime_client()
         await invoke(
@@ -102,6 +110,7 @@ def create_chat_queue_router(
             conversation_id,
             body.model_dump(exclude_none=True),
             request_id=request_id,
+            client_id=client_id,
         )
         return acknowledgement_response(request_id, [events_contracts.UiEvent.CHAT_QUEUE_UPDATED])
 

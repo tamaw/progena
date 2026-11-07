@@ -4,7 +4,13 @@ import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtime
 import { subscribeUiEvent } from '../../realtime/realtimeEvents';
 
 const watches = new Map();
+// Task URLs whose interest a chat detail request installed on the server and
+// no release has removed since; the next watch adopts it instead of asking.
+const serverRegistrations = new Set();
 let requests = Promise.resolve();
+// A view re-renders through brief gaps (an open chat reloading its detail);
+// releasing at once would race the interest that reload registers.
+const RELEASE_DELAY_MS = 1000;
 
 function submit(watch, subscribed) {
   const operation = requests.catch(() => {}).then(async () => {
@@ -34,24 +40,49 @@ function subscribe(watch, reconnect = false) {
 
 subscribeUiEvent((event) => {
   if (event.type !== UI_EVENT.CONNECTION_READY) return;
+  // A new connection starts with no server interests.
+  serverRegistrations.clear();
   for (const watch of watches.values()) void subscribe(watch, true);
 });
+
+/** A chat detail request was acknowledged: the server now holds this tab's interest. */
+export function noteServerRegistration(tasksUrl) {
+  const watch = watches.get(tasksUrl);
+  if (watch) {
+    // A pending release would undo the registration that just happened.
+    clearTimeout(watch.releaseTimer);
+    watch.releaseTimer = null;
+    return;
+  }
+  serverRegistrations.add(tasksUrl);
+}
+
+/** The detail request that would have installed the interest failed. */
+export function forgetServerRegistration(tasksUrl) {
+  serverRegistrations.delete(tasksUrl);
+}
 
 export function watchBackgroundTasks(tasksUrl) {
   const existing = watches.get(tasksUrl);
   if (existing) {
+    clearTimeout(existing.releaseTimer);
+    existing.releaseTimer = null;
     existing.count += 1;
     return () => release(existing);
   }
-  const watch = { tasksUrl, count: 1, request: null };
+  const watch = { tasksUrl, count: 1, request: null, releaseTimer: null };
   watches.set(tasksUrl, watch);
-  void subscribe(watch);
+  if (!serverRegistrations.delete(tasksUrl)) void subscribe(watch);
   return () => release(watch);
 }
 
 function release(watch) {
   watch.count -= 1;
   if (watch.count > 0 || watches.get(watch.tasksUrl) !== watch) return;
-  watches.delete(watch.tasksUrl);
-  void submit(watch, false).catch(() => {});
+  watch.releaseTimer = setTimeout(() => {
+    if (watch.count > 0 || watches.get(watch.tasksUrl) !== watch) return;
+    watches.delete(watch.tasksUrl);
+    serverRegistrations.delete(watch.tasksUrl);
+    void submit(watch, false).catch(() => {});
+  }, RELEASE_DELAY_MS);
 }

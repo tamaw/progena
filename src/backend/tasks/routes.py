@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 
 import src.backend.http.contracts as http_contracts
 import src.backend.http.requests as http_requests
@@ -13,6 +13,7 @@ import src.backend.monitoring.state as monitoring_state
 import src.backend.tasks.models as tasks_models
 import src.backend.tasks.service as tasks_service
 from src.backend.events import contracts as events_contracts
+from src.backend.events.stream import require_ui_stream_client
 from src.progena.utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -23,16 +24,18 @@ router = APIRouter()
 @router.get("/kanban", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_kanban_board(
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Get the persisted kanban board used by the frontend."""
+    require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     state_reader = monitoring_state.get_state_reader()
     board = tasks_service._read_kanban_board(state_reader)
     response = tasks_service._kanban_board_response(state_reader, board)
-    tasks_service.broadcast_kanban_snapshot(response, request_id=request_id)
+    tasks_service.broadcast_kanban_snapshot(response, request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
-        request_id, [events_contracts.UiEvent.KANBAN_SNAPSHOT]
+        request_id, [events_contracts.UiEvent.TASKS_SNAPSHOT]
     )
 
 
@@ -42,9 +45,11 @@ async def get_kanban_board(
 async def create_kanban_card(
     body: tasks_models.KanbanCardCreateRequest,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Create a new kanban card in the backlog column."""
+    require_ui_stream_client(client_id)
     title = body.title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Card title is required")
@@ -75,10 +80,12 @@ async def create_kanban_card(
     board["cards"].append(card)
     board = tasks_service._write_kanban_board(state_reader, board)
     tasks_service.broadcast_kanban_snapshot(
-        tasks_service._kanban_board_response(state_reader, board), request_id=request_id
+        tasks_service._kanban_board_response(state_reader, board),
+        request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
-        request_id, [events_contracts.UiEvent.KANBAN_SNAPSHOT]
+        request_id, [events_contracts.UiEvent.TASKS_SNAPSHOT]
     )
 
 
@@ -91,9 +98,11 @@ async def patch_kanban_card(
     card_id: str,
     body: tasks_models.KanbanCardPatchRequest,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Patch an existing kanban card."""
+    require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     state_reader = monitoring_state.get_state_reader()
     board = tasks_service._read_kanban_board(state_reader)
@@ -177,10 +186,12 @@ async def patch_kanban_card(
     )
     board = tasks_service._write_kanban_board(state_reader, board)
     tasks_service.broadcast_kanban_snapshot(
-        tasks_service._kanban_board_response(state_reader, board), request_id=request_id
+        tasks_service._kanban_board_response(state_reader, board),
+        request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
-        request_id, [events_contracts.UiEvent.KANBAN_SNAPSHOT]
+        request_id, [events_contracts.UiEvent.TASKS_SNAPSHOT]
     )
 
 
@@ -192,9 +203,11 @@ async def patch_kanban_card(
 async def delete_kanban_card(
     card_id: str,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Delete an existing kanban card."""
+    require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     state_reader = monitoring_state.get_state_reader()
     board = tasks_service._read_kanban_board(state_reader)
@@ -205,10 +218,12 @@ async def delete_kanban_card(
 
     board = tasks_service._write_kanban_board(state_reader, board)
     tasks_service.broadcast_kanban_snapshot(
-        tasks_service._kanban_board_response(state_reader, board), request_id=request_id
+        tasks_service._kanban_board_response(state_reader, board),
+        request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
-        request_id, [events_contracts.UiEvent.KANBAN_SNAPSHOT]
+        request_id, [events_contracts.UiEvent.TASKS_SNAPSHOT]
     )
 
 
@@ -220,14 +235,18 @@ async def delete_kanban_card(
 async def get_task_activity(
     card_id: str,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Acknowledge a task-activity request and publish its canonical timeline."""
+    require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     state_reader = monitoring_state.get_state_reader()
     tasks_service._find_kanban_card(state_reader, card_id)
     activity = tasks_service._task_activity_response(state_reader, card_id)
-    tasks_service.broadcast_task_activity(card_id, activity, request_id=request_id)
+    tasks_service.broadcast_task_activity(
+        card_id, activity, request_id=request_id, client_id=client_id
+    )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.TASK_ACTIVITY_UPDATED]
     )
@@ -241,14 +260,18 @@ async def get_task_activity(
 async def get_task_content(
     card_id: str,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Acknowledge a task-content request and publish its canonical markdown."""
+    require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     state_reader = monitoring_state.get_state_reader()
     card = tasks_service._find_kanban_card(state_reader, card_id)
     content = tasks_service._read_task_content(state_reader, card)
-    tasks_service.broadcast_task_content(card_id, content, request_id=request_id)
+    tasks_service.broadcast_task_content(
+        card_id, content, request_id=request_id, client_id=client_id
+    )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.TASK_CONTENT_UPDATED]
     )
@@ -263,9 +286,11 @@ async def update_task_content(
     card_id: str,
     body: tasks_models.TaskContentUpdateRequest,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Persist the markdown body for a single task card."""
+    require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     state_reader = monitoring_state.get_state_reader()
     tasks_service._find_kanban_card(state_reader, card_id)
@@ -279,8 +304,10 @@ async def update_task_content(
         metadata={"path": result.path},
         created_at=utcnow().isoformat(),
     )
-    tasks_service.broadcast_task_content(card_id, result, request_id=request_id)
-    tasks_service.broadcast_task_activity(card_id, request_id=request_id)
+    tasks_service.broadcast_task_content(
+        card_id, result, request_id=request_id, client_id=client_id
+    )
+    tasks_service.broadcast_task_activity(card_id, request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id,
         [
@@ -299,9 +326,11 @@ async def create_task_activity(
     card_id: str,
     body: tasks_models.TaskActivityCreateRequest,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Append a user-visible activity entry for a task card."""
+    require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     state_reader = monitoring_state.get_state_reader()
     tasks_service._find_kanban_card(state_reader, card_id)
@@ -314,7 +343,7 @@ async def create_task_activity(
         metadata=body.metadata,
         created_at=utcnow().isoformat(),
     )
-    tasks_service.broadcast_task_activity(card_id, request_id=request_id)
+    tasks_service.broadcast_task_activity(card_id, request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.TASK_ACTIVITY_UPDATED]
     )

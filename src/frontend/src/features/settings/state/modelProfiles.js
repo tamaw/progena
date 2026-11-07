@@ -6,6 +6,8 @@ import { UI_EVENT } from '../../../realtime/eventVocabulary';
  * correlated snapshot applies canonical state.
  */
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from '../../../store/async';
+import { withQuery } from '../../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realtimeClient';
 
 export const initialState = {
   modelProfiles: {
@@ -26,23 +28,32 @@ export const initialState = {
 
 export const fetchModelProfiles = createAcknowledgedThunk(
   'uiData/fetchModelProfiles',
-  ({ modelProfilesUrl }, { requestId }) => requestAcknowledged(modelProfilesUrl, { requestId }),
+  async ({ modelProfilesUrl }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(withQuery(modelProfilesUrl, { client_id: realtimeClientId }), { requestId });
+  },
 );
 
 export const patchModelProfile = createAcknowledgedThunk(
   'uiData/patchModelProfile',
-  ({ modelProfilesUrl, name, patch }, { requestId }) => requestAcknowledged(
-    `${modelProfilesUrl}/${encodeURIComponent(name)}`,
-    { method: 'PATCH', body: patch, requestId },
-  ),
+  async ({ modelProfilesUrl, name, patch }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(
+      withQuery(`${modelProfilesUrl}/${encodeURIComponent(name)}`, { client_id: realtimeClientId }),
+      { method: 'PATCH', body: patch, requestId },
+    );
+  },
 );
 
 export const deleteModelProfile = createAcknowledgedThunk(
   'uiData/deleteModelProfile',
-  ({ modelProfilesUrl, name }, { requestId }) => requestAcknowledged(
-    `${modelProfilesUrl}/${encodeURIComponent(name)}`,
-    { method: 'DELETE', requestId },
-  ),
+  async ({ modelProfilesUrl, name }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(
+      withQuery(`${modelProfilesUrl}/${encodeURIComponent(name)}`, { client_id: realtimeClientId }),
+      { method: 'DELETE', requestId },
+    );
+  },
 );
 
 export const eventHandlers = {

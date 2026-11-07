@@ -1754,16 +1754,14 @@ pre.mermaid svg {
     box-shadow: var(--shadow-sm);
 }
 
-.chat-pane-tab__dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #22c55e;
-}
-
 /* .chat-pane-group is still used by the workspace sidebar; its __head styling
    is shared with .task-group__head / .sess-group__head in chrome-frame.css. */
 
+
+.chat-page {
+    --chat-sidebar-row-height: 51px;
+    --chat-sidebar-header-height: 27px;
+}
 .chat-session-card {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -1771,6 +1769,11 @@ pre.mermaid svg {
     padding: 7px 10px 8px;
     cursor: pointer;
     transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.pane-list-row--virtual .chat-session-card {
+    box-sizing: border-box;
+    height: var(--chat-sidebar-row-height);
 }
 
 .chat-session-card:hover {

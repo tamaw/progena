@@ -18,6 +18,20 @@ from src.backend.storage.documents import (
 )
 
 
+class _SearchClient:
+    """Route-test client that always supplies the active stream client ID."""
+
+    def __init__(self, client: TestClient) -> None:
+        self._client = client
+
+    def get(self, url: str, *args: Any, **kwargs: Any):
+        separator = "&" if "?" in url else "?"
+        headers = {"X-Operation-Id": "search-request", **kwargs.pop("headers", {})}
+        return self._client.get(
+            f"{url}{separator}client_id=search-tab", *args, headers=headers, **kwargs
+        )
+
+
 @pytest.fixture
 def harness(monkeypatch):
     store = InMemoryDocumentStore()
@@ -36,7 +50,10 @@ def harness(monkeypatch):
     )
     app = FastAPI()
     app.include_router(routes.router)
-    yield TestClient(app, headers={"X-Operation-Id": "test-request"}), store, events
+    stream_queue = object()
+    events_stream._ui_stream_clients[stream_queue] = "search-tab"
+    yield _SearchClient(TestClient(app)), store, events
+    events_stream._ui_stream_clients.pop(stream_queue, None)
     set_default_document_store(InMemoryDocumentStore())
 
 

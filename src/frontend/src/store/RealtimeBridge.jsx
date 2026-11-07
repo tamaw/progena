@@ -3,28 +3,31 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useConfig } from '../context/ConfigContext';
 import { startRealtimeStream, stopRealtimeStream } from '../realtime/realtimeListener';
 import { selectRealtimeConnected, selectRealtimeStreamReady } from '../realtime/realtimeSlice';
-import { fetchChatSessions, selectGeneratingChatIds } from '../features/chat/state/chats';
-import { fetchInbox } from '../features/inbox/state';
+import {
+  requestChatSessionReconciliation,
+} from '../features/chat/state/chats';
+import { fetchInboxCounts } from '../features/inbox/state';
 import { fetchModelProfiles } from '../features/settings/state/modelProfiles';
-
-function selectHasActiveChatGeneration(state) {
-  const selectedGeneratingChatIds = selectGeneratingChatIds(state);
-  const generatingChatIds = Array.isArray(selectedGeneratingChatIds)
-    ? selectedGeneratingChatIds
-    : [];
-  const responseThreadsByRequestId = state?.uiData?.chatRuntime?.responseThreadsByRequestId || {};
-  return generatingChatIds.length > 0 || Object.keys(responseThreadsByRequestId).length > 0;
+function selectReconnectChat(state) {
+  const chats = state?.uiData?.chats;
+  const threadId = chats?.active?.threadId;
+  if (!threadId) return null;
+  const responseThreads = state?.uiData?.chatRuntime?.responseThreadsByRequestId || {};
+  return Object.values(responseThreads).includes(threadId) ? null : threadId;
 }
+
 
 export default function RealtimeBridge() {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const realtimeConnected = useSelector(selectRealtimeConnected);
   const streamReady = useSelector(selectRealtimeStreamReady);
-  const hasActiveGeneration = useSelector(selectHasActiveChatGeneration);
-  const requestedChatsUrlRef = useRef(null);
+  const reconnectChatThreadId = useSelector(selectReconnectChat);
   const requestedInboxUrlRef = useRef(null);
   const requestedProfilesUrlRef = useRef(null);
+  const hasConnectedRef = useRef(false);
+  const wasConnectedRef = useRef(false);
+
   const streamUrl = getApiUrl('stream');
   const chatsUrl = getApiUrl('chats');
   const inboxUrl = getApiUrl('inbox');
@@ -39,35 +42,31 @@ export default function RealtimeBridge() {
 
   useEffect(() => {
     if (!realtimeConnected) {
-      requestedChatsUrlRef.current = null;
+      wasConnectedRef.current = false;
       return;
     }
-    // Reconnect recovery needs a fresh roster because EventSource cannot
-    // request replay IDs. Delay that large Redux snapshot until any foreground
-    // or background chat streaming settles so it cannot block text delivery on the main thread.
-    if (hasActiveGeneration) {
-      return;
-    }
-    if (requestedChatsUrlRef.current === chatsUrl) {
-      return;
-    }
-    requestedChatsUrlRef.current = chatsUrl;
-    dispatch(fetchChatSessions({ chatsUrl, includeArchived: true }));
-  }, [chatsUrl, dispatch, hasActiveGeneration, realtimeConnected]);
 
-  // Seed the inbox globally so the nav unread badge is correct before the
-  // Inbox page is ever visited; SSE snapshots keep it fresh thereafter.
+    const reconnected = hasConnectedRef.current && !wasConnectedRef.current;
+    hasConnectedRef.current = true;
+    wasConnectedRef.current = true;
+    if (!reconnected) return;
+
+    if (reconnectChatThreadId) {
+      dispatch(requestChatSessionReconciliation({ chatsUrl, threadId: reconnectChatThreadId }));
+    }
+  }, [chatsUrl, dispatch, realtimeConnected, reconnectChatThreadId]);
+
+  // The shell needs only the authoritative unread count before Inbox is
+  // visited. Sidebar pages request their own positional list ranges.
   useEffect(() => {
-    if (!realtimeConnected) {
+    if (!streamReady) {
       requestedInboxUrlRef.current = null;
       return;
     }
-    if (requestedInboxUrlRef.current === inboxUrl) {
-      return;
-    }
+    if (requestedInboxUrlRef.current === inboxUrl) return;
     requestedInboxUrlRef.current = inboxUrl;
-    dispatch(fetchInbox({ inboxUrl }));
-  }, [dispatch, inboxUrl, realtimeConnected]);
+    dispatch(fetchInboxCounts({ inboxUrl }));
+  }, [dispatch, inboxUrl, streamReady]);
 
   // Profiles serve both their management page and routine model selectors.
   useEffect(() => {

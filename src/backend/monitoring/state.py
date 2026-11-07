@@ -42,9 +42,9 @@ from src.progena.documents.kinds import (
     CANVAS_DOCUMENT_KEY_PREFIX,
     CANVAS_STATUS_KEY_PREFIX,
     CHANNEL_KEY_PREFIX,
-    INBOX_MESSAGE_KEY_PREFIX,
     KNOWLEDGE_PAGE_KEY_PREFIX,
     REPO_KEY_PREFIX,
+    SESSION_KEY_PREFIX,
     WORKFLOW_DEFINITION_KEY_PREFIX,
     WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
     WORKFLOW_QUEUE_KEY_PREFIX,
@@ -486,12 +486,8 @@ class StateSnapshot:
     # cycle_count, thread_id, idle_cycles, queue_stats, pid - NOT liveness,
     # which is a live SSE check pushed separately via _process_metrics()).
     health_fingerprint: str = ""
-    # Content fingerprint of all inbox message documents. Like kanban, no other
-    # snapshot field changes when the agent writes /inbox/<id>.md, so this is
-    # the sole signal _state_changed() has for an inbox-only write.
-    inbox_fingerprint: str = ""
     # Content fingerprint of all workflow definition, run, and queue documents.
-    # Like kanban/inbox, no other snapshot field changes when the agent writes
+    # Like kanban, no other snapshot field changes when the agent writes
     # /workflows/<id>.json (or the executor updates a run), so this is
     # the sole signal _state_changed() has for a workflow-only write.
     workflow_fingerprint: str = ""
@@ -935,24 +931,6 @@ class StateReader:
             return ""
         return _hash_material(material)
 
-    def _inbox_fingerprint(self) -> str:
-        """Stable hash of all inbox message documents.
-
-        Mirrors ``_kanban_fingerprint`` (no other snapshot field ever changes
-        on an inbox-only write), but the messages have no index document, so
-        this is a single key-prefix query instead of per-key gets.
-        """
-        if self.document_store is None:
-            return ""
-        try:
-            rows = self.document_store.list_documents(PROGENA_STATE_PREFIX, "inbox_message:")
-            material = [
-                document.payload for _key, document in rows if isinstance(document.payload, dict)
-            ]
-        except Exception:
-            return ""
-        return _hash_material(material)
-
     def _workflow_fingerprint(self) -> str:
         """Stable hash of workflow definitions, runs, queues, and invoke requests.
 
@@ -987,7 +965,7 @@ class StateReader:
         signal is a live SSE check, not stored in Postgres, so a pure liveness
         flip with nothing else changing would never trigger this fingerprint.
         See ``_process_metrics()`` in monitoring/status.py for how liveness reaches the
-        frontend instead (pushed on its own independent ~3s tick).
+        frontend instead (pushed on its own independent ~5s tick, sent only to tabs on the Dashboard).
         """
         if self.document_store is None:
             return ""
@@ -1025,7 +1003,6 @@ class StateReader:
             schedule_fingerprint=self._schedule_fingerprint(),
             kanban_fingerprint=self._kanban_fingerprint(),
             health_fingerprint=self._health_fingerprint(),
-            inbox_fingerprint=self._inbox_fingerprint(),
             workflow_fingerprint=self._workflow_fingerprint(),
         )
 
@@ -1717,7 +1694,6 @@ class StateReader:
                     changed_key.startswith("policy:")
                     or changed_key == "schedule"
                     or changed_key in (MODEL_PROFILES_DOC_KEY, INDEX_STATUS_DOC_KEY)
-                    or changed_key.startswith(INBOX_MESSAGE_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_RUN_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_QUEUE_KEY_PREFIX)
@@ -1731,6 +1707,7 @@ class StateReader:
                     or changed_key.startswith(CANVAS_DATA_KEY_PREFIX)
                     or changed_key.startswith(CANVAS_STATUS_KEY_PREFIX)
                     or changed_key.startswith(CHANNEL_KEY_PREFIX)
+                    or changed_key.startswith(SESSION_KEY_PREFIX)
                 )
             )
             # Reconnect must reach reconciliation even with unchanged state.
@@ -1777,8 +1754,6 @@ class StateReader:
         if new.registry_fingerprint != old.registry_fingerprint:
             return True
         if new.health_fingerprint != old.health_fingerprint:
-            return True
-        if new.inbox_fingerprint != old.inbox_fingerprint:
             return True
         if new.workflow_fingerprint != old.workflow_fingerprint:
             return True

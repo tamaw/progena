@@ -19,8 +19,10 @@ from src.progena.plugins.sources import PluginFetchErrorCode, PluginFetchErrorKi
 
 
 @pytest.fixture
-def client():
-    return TestClient(app)
+def client(ui_stream_client):
+    from conftest import UiStreamTestClient
+
+    return UiStreamTestClient(TestClient(app), ui_stream_client)
 
 
 @pytest.fixture(autouse=True)
@@ -41,18 +43,21 @@ def document_store():
 class _StreamCapture:
     """Subscribe to the UI event stream for the duration of a request."""
 
-    def __init__(self):
+    def __init__(self, client_id: str = "tab-1"):
         from src.backend.events import stream as events_stream
 
         self.events_stream = events_stream
+        self.client_id = client_id
         self.queue = asyncio.Queue()
 
     def __enter__(self):
         self.events_stream._ui_stream_subscribers[self.queue] = None
+        self.events_stream._ui_stream_clients[self.queue] = self.client_id
         return self
 
     def __exit__(self, *exc_info):
         self.events_stream._ui_stream_subscribers.pop(self.queue, None)
+        self.events_stream._ui_stream_clients.pop(self.queue, None)
         return False
 
     def event_types(self):
@@ -78,7 +83,7 @@ class TestMarketplaceRoutes:
             },
         )
         with _StreamCapture() as capture:
-            response = client.get("/api/ui/marketplaces")
+            response = client.get("/api/ui/marketplaces?client_id=tab-1")
 
         assert_acknowledged(response, ["marketplaces.snapshot"])
         envelopes = capture.event_types()
@@ -90,7 +95,7 @@ class TestMarketplaceRoutes:
 
     def test_get_empty_defaults(self, client, document_store):
         with _StreamCapture() as capture:
-            response = client.get("/api/ui/marketplaces")
+            response = client.get("/api/ui/marketplaces?client_id=tab-1")
 
         assert_acknowledged(response, ["marketplaces.snapshot"])
         envelopes = capture.event_types()
@@ -104,7 +109,7 @@ class TestMarketplaceRoutes:
             }
         }
         with _StreamCapture() as capture:
-            response = client.put("/api/ui/marketplaces", json=payload)
+            response = client.put("/api/ui/marketplaces?client_id=tab-1", json=payload)
 
         assert_acknowledged(response, ["marketplaces.snapshot"])
         stored = document_store.get_document(PROGENA_STATE_PREFIX, "marketplaces")
@@ -161,9 +166,9 @@ class TestMarketplaceRoutes:
         with _StreamCapture() as capture:
             response = client.get("/api/ui/marketplaces/acme/plugins")
 
-        assert_acknowledged(response, ["plugin.catalog.snapshot"])
+        assert_acknowledged(response, ["plugin_catalog.snapshot"])
         envelopes = capture.event_types()
-        assert [e.type for e in envelopes] == ["plugin.catalog.snapshot"]
+        assert [e.type for e in envelopes] == ["plugin_catalog.snapshot"]
         assert envelopes[0].payload["name"] == "acme"
         assert envelopes[0].payload["catalog"]["plugins"][0]["name"] == "formatter"
 

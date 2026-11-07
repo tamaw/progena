@@ -1,7 +1,13 @@
 import { createAcknowledgedThunk, requestAcknowledged } from '../../store/async';
 import { failureMessage, isCancellation } from '../../lib/failures';
 import { UI_EVENT } from '../../realtime/eventVocabulary';
+import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
+import { withQuery } from '../../store/http';
 
+async function requestForClient(url, options) {
+  await waitForRealtimeClient();
+  return requestAcknowledged(withQuery(url, { client_id: realtimeClientId }), options);
+}
 export const initialState = {
   channels: {
     items: [],
@@ -17,12 +23,12 @@ export const initialState = {
 
 export const fetchChannels = createAcknowledgedThunk(
   'uiData/fetchChannels',
-  ({ channelsUrl }, { requestId }) => requestAcknowledged(channelsUrl, { requestId }),
+  ({ channelsUrl }, { requestId }) => requestForClient(channelsUrl, { requestId }),
 );
 
 export const patchChannel = createAcknowledgedThunk(
   'uiData/patchChannel',
-  ({ channelsUrl, channelId, patch }, { requestId }) => requestAcknowledged(
+  ({ channelsUrl, channelId, patch }, { requestId }) => requestForClient(
     `${channelsUrl}/${encodeURIComponent(channelId)}`,
     { method: 'PATCH', body: patch, requestId },
   ),
@@ -30,7 +36,7 @@ export const patchChannel = createAcknowledgedThunk(
 
 export const testChannel = createAcknowledgedThunk(
   'uiData/testChannel',
-  ({ channelsUrl, channelId }, { requestId }) => requestAcknowledged(
+  ({ channelsUrl, channelId }, { requestId }) => requestForClient(
     `${channelsUrl}/${encodeURIComponent(channelId)}/test`,
     { method: 'POST', requestId },
   ),
@@ -38,7 +44,7 @@ export const testChannel = createAcknowledgedThunk(
 
 export const reconnectChannel = createAcknowledgedThunk(
   'uiData/reconnectChannel',
-  ({ channelsUrl, channelId }, { requestId }) => requestAcknowledged(
+  ({ channelsUrl, channelId }, { requestId }) => requestForClient(
     `${channelsUrl}/${encodeURIComponent(channelId)}/reconnect`,
     { method: 'POST', requestId },
   ),

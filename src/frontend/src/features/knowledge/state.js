@@ -1,6 +1,8 @@
 import { UI_EVENT } from '../../realtime/eventVocabulary';
 /** Knowledge catalog and markdown pages, kept live by UI stream events. */
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle, addKeyedRequestLifecycle, completeKeyedRequest, selectKeyedRequest } from '../../store/async';
+import { withQuery } from '../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
 
 export const initialState = {
   knowledge: {
@@ -20,12 +22,30 @@ function applyKnowledgeBases(state, payload) {
   }
 }
 
-export const fetchKnowledge = createAcknowledgedThunk('uiData/fetchKnowledge', async ({ knowledgeUrl }, { requestId }) => requestAcknowledged(knowledgeUrl, { requestId }));
-export const saveKnowledge = createAcknowledgedThunk('uiData/saveKnowledge', async ({ knowledgeUrl, bases }, { requestId }) => requestAcknowledged(knowledgeUrl, { method: 'PUT', body: { bases }, requestId }));
-export const fetchKnowledgePages = createAcknowledgedThunk('uiData/fetchKnowledgePages', async ({ knowledgeUrl, baseId }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/pages`, { requestId }));
-export const fetchKnowledgePage = createAcknowledgedThunk('uiData/fetchKnowledgePage', async ({ knowledgeUrl, baseId, path }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page?path=${encodeURIComponent(path)}`, { requestId }));
-export const fetchKnowledgePageRevisions = createAcknowledgedThunk('uiData/fetchKnowledgePageRevisions', async ({ knowledgeUrl, baseId, path }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page/revisions?path=${encodeURIComponent(path)}`, { requestId }));
-export const fetchKnowledgePageRevision = createAcknowledgedThunk('uiData/fetchKnowledgePageRevision', async ({ knowledgeUrl, baseId, path, revisionId }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page/revisions/${encodeURIComponent(revisionId)}?path=${encodeURIComponent(path)}`, { requestId }));
+export const fetchKnowledge = createAcknowledgedThunk('uiData/fetchKnowledge', async ({ knowledgeUrl }, { requestId }) => {
+  await waitForRealtimeClient();
+  return requestAcknowledged(withQuery(knowledgeUrl, { client_id: realtimeClientId }), { requestId });
+});
+export const saveKnowledge = createAcknowledgedThunk('uiData/saveKnowledge', async ({ knowledgeUrl, bases }, { requestId }) => {
+  await waitForRealtimeClient();
+  return requestAcknowledged(withQuery(knowledgeUrl, { client_id: realtimeClientId }), { method: 'PUT', body: { bases }, requestId });
+});
+export const fetchKnowledgePages = createAcknowledgedThunk('uiData/fetchKnowledgePages', async ({ knowledgeUrl, baseId }, { requestId }) => {
+  await waitForRealtimeClient();
+  return requestAcknowledged(withQuery(`${knowledgeUrl}/${encodeURIComponent(baseId)}/pages`, { client_id: realtimeClientId }), { requestId });
+});
+export const fetchKnowledgePage = createAcknowledgedThunk('uiData/fetchKnowledgePage', async ({ knowledgeUrl, baseId, path }, { requestId }) => {
+  await waitForRealtimeClient();
+  return requestAcknowledged(withQuery(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page`, { client_id: realtimeClientId, path }), { requestId });
+});
+export const fetchKnowledgePageRevisions = createAcknowledgedThunk('uiData/fetchKnowledgePageRevisions', async ({ knowledgeUrl, baseId, path }, { requestId }) => {
+  await waitForRealtimeClient();
+  return requestAcknowledged(withQuery(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page/revisions`, { client_id: realtimeClientId, path }), { requestId });
+});
+export const fetchKnowledgePageRevision = createAcknowledgedThunk('uiData/fetchKnowledgePageRevision', async ({ knowledgeUrl, baseId, path, revisionId }, { requestId }) => {
+  await waitForRealtimeClient();
+  return requestAcknowledged(withQuery(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page/revisions/${encodeURIComponent(revisionId)}`, { client_id: realtimeClientId, path }), { requestId });
+});
 
 function patchBaseIndexStatus(state, payload) {
   const bases = state.knowledge.bases;

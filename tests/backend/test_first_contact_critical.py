@@ -266,6 +266,7 @@ class TestRealTimeFeedbackConsistency:
                     "decoded_message": "Greetings from Earth",
                 },
                 scope="chat",
+                allow_global=True,
             )
 
             # All subscribers must receive the event
@@ -295,7 +296,7 @@ class TestRealTimeFeedbackConsistency:
             ]
 
             for event_type, data in events:
-                events_stream.broadcast_ui_event(event_type, data, scope="chat")
+                events_stream.broadcast_ui_event(event_type, data, scope="chat", allow_global=True)
 
             # Verify all events arrived in order
             received = []

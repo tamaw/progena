@@ -51,8 +51,8 @@ from src.progena.sessions.models import (
     CONVERSATION_SUMMARIES_FIELD,
     CONVERSATION_SUMMARIES_INCLUDE,
 )
-from src.progena.sessions.render import merge_session_after_turn
-from src.progena.sessions.status import CANCELLED_STATUS
+from src.progena.sessions.render import merge_session_after_turn, record_session_turn_terminal
+from src.progena.sessions.status import CANCELLED_STATUS, SessionTurnStatus
 
 _T = TypeVar("_T")
 
@@ -534,6 +534,7 @@ class RuntimeChatService:
                     before_count,
                     required=True,
                 )
+            await self._record_session_turn_terminal(thread_id, "cancelled")
             cancelled_response = build_response_object(
                 response_id, thread_id, model, "cancelled", output, metadata
             )
@@ -561,6 +562,7 @@ class RuntimeChatService:
         except Exception as exc:
             logger.error("State read error for %s: %s", response_id, exc, exc_info=True)
             failed = _failed_response(response_id, thread_id, model, metadata, "state_error", exc)
+            await self._record_session_turn_terminal(thread_id, "failed")
             await self._write_failed(
                 response, response_id, thread_id, model, metadata, seq, "state_error", exc
             )
@@ -642,6 +644,7 @@ class RuntimeChatService:
                             response_id, thread_id, model, "failed", [], metadata
                         )
                         resp_obj["error"] = {"code": "stream_error", "message": str(exc)}
+                        await self._record_session_turn_terminal(thread_id, "failed")
                         with contextlib.suppress(ConnectionResetError, ConnectionError):
                             await self._write_frame(
                                 response,
@@ -649,7 +652,6 @@ class RuntimeChatService:
                                 build_sse_event("response.failed", {"response": resp_obj}, seq),
                             )
                         return resp_obj
-
                     item = payload
                     runtime_emitted_at_ms = int(time.time() * 1000)
                     item_type = str(item.get("type", "stream_chunk"))
@@ -748,6 +750,7 @@ class RuntimeChatService:
                     response_id, thread_id, model, "failed", [], metadata
                 )
                 resp_obj["error"] = {"code": "stream_error", "message": str(exc)}
+                await self._record_session_turn_terminal(thread_id, "failed")
                 with contextlib.suppress(ConnectionResetError, ConnectionError):
                     await self._write_frame(
                         response,
@@ -769,6 +772,7 @@ class RuntimeChatService:
                 output = await self._persist_cancelled_turn(
                     thread_id, response_id, current_text, before_count, required=resume
                 )
+                await self._record_session_turn_terminal(thread_id, "cancelled")
                 resp_obj = build_response_object(
                     response_id, thread_id, model, "cancelled", output, metadata
                 )
@@ -779,7 +783,6 @@ class RuntimeChatService:
                         build_sse_event("response.incomplete", {"response": resp_obj}, seq),
                     )
                 return resp_obj
-
             # Close open text item
             if text_item_opened:
                 await self._write_frame(
@@ -851,6 +854,7 @@ class RuntimeChatService:
                 failed = _failed_response(
                     response_id, thread_id, model, metadata, "checkpoint_error", exc
                 )
+                await self._record_session_turn_terminal(thread_id, "failed")
                 await self._write_failed(
                     response, response_id, thread_id, model, metadata, seq, "checkpoint_error", exc
                 )
@@ -859,6 +863,7 @@ class RuntimeChatService:
             resp_obj = build_response_object(
                 response_id, thread_id, model, "completed", output, metadata
             )
+            await self._record_session_turn_terminal(thread_id, "completed")
             with contextlib.suppress(ConnectionResetError, ConnectionError):
                 await self._write_frame(
                     response,
@@ -884,16 +889,19 @@ class RuntimeChatService:
         message_id: str | None = None,
     ) -> dict[str, Any]:
         if cancel_event.is_set():
+            await self._record_session_turn_terminal(thread_id, "cancelled")
             return build_response_object(response_id, thread_id, model, "cancelled", [], metadata)
         bridge = self._create_direct_stream_bridge()
         try:
             before_count = await self._message_count(thread_id)
         except Exception as exc:
             logger.error("State read error for %s: %s", response_id, exc, exc_info=True)
+            await self._record_session_turn_terminal(thread_id, "failed")
             return _failed_response(response_id, thread_id, model, metadata, "state_error", exc)
 
         self._activate_root(thread_id, response_id, cancel_event)
         token = set_current_thread_id(thread_id)
+        terminal_status: SessionTurnStatus | None = None
         try:
             partial_text = ""
             try:
@@ -922,12 +930,14 @@ class RuntimeChatService:
                     response_id, thread_id, model, "failed", [], metadata
                 )
                 failed["error"] = {"code": "stream_error", "message": str(exc)}
+                terminal_status = "failed"
                 return failed
 
             if cancel_event.is_set():
                 output = await self._persist_cancelled_turn(
                     thread_id, response_id, partial_text, before_count
                 )
+                terminal_status = "cancelled"
                 return build_response_object(
                     response_id, thread_id, model, "cancelled", output, metadata
                 )
@@ -937,15 +947,19 @@ class RuntimeChatService:
                 output = await self._turn_output(thread_id, before_count)
             except Exception as exc:
                 logger.error("Checkpoint error for %s: %s", response_id, exc, exc_info=True)
+                terminal_status = "failed"
                 return _failed_response(
                     response_id, thread_id, model, metadata, "checkpoint_error", exc
                 )
+            terminal_status = "completed"
             return build_response_object(
                 response_id, thread_id, model, "completed", output, metadata
             )
         finally:
             reset_current_thread_id(token)
             self._deactivate_root(thread_id, response_id, cancel_event)
+            if terminal_status is not None:
+                await self._record_session_turn_terminal(thread_id, terminal_status)
             self._fire_and_forget_session_merge(thread_id)
             self._schedule_queue_drain(thread_id)
 
@@ -977,7 +991,7 @@ class RuntimeChatService:
                 # Only remove an exact checkpointed prefix. If the stream and
                 # checkpoint disagree, preserve the visible partial response.
                 if committed_text and partial_text.startswith(committed_text):
-                    partial_text = partial_text[len(committed_text):]
+                    partial_text = partial_text[len(committed_text) :]
             message = AIMessage(
                 id=f"msg_{response_id}",
                 content=partial_text,
@@ -998,8 +1012,17 @@ class RuntimeChatService:
                 raise
             return []
 
+    async def _record_session_turn_terminal(
+        self, thread_id: str, status: SessionTurnStatus
+    ) -> None:
+        """Persist flags before asynchronous transcript rendering emits list updates."""
+        context = getattr(self.loop_runner, "heartbeat_context", None)
+        state_manager = getattr(context, "state_manager", None)
+        if state_manager is not None:
+            await record_session_turn_terminal(thread_id, state_manager, status)
+
     def _fire_and_forget_session_merge(self, thread_id: str) -> None:
-        """Re-render the thread and merge ``content``/``last_activity`` into the session row.
+        """Re-render the thread and merge ``content``/``preview``/``last_activity`` into its session.
 
         Renders of one thread never overlap: a turn finishing while its thread
         renders queues one more render, so the last merge reflects the last turn.

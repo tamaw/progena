@@ -4,8 +4,8 @@ import { reportFailure } from '../../../lib/failures';
 import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
 import { UI_EVENT } from '../../../realtime/eventVocabulary';
 import { createUuid } from '../../../lib/uuid';
-import { clearChatErrored, clearChatGenerating, markChatErrored, markChatGenerating, markChatUnread, touchChatSession } from '../state/actions';
-import { fetchChatSessions, selectChatActivityByThreadId, selectErroredChatIds, selectGeneratingChatIds, selectRequestIdByThreadId, selectUnreadChatIds } from '../state/chats';
+import { clearChatGenerating, markChatGenerating, touchChatSession } from '../state/actions';
+import { selectChatActivityByThreadId, selectErroredChatIds, selectGeneratingChatIds, selectRequestIdByThreadId, selectUnreadChatIds } from '../state/chats';
 import {
   createLiveAssistantTurn,
   applyAssistantMetadata,
@@ -52,7 +52,6 @@ export function useChatStream({
   cancelStream,
   observeResponseStream,
   dispatch,
-  getApiUrl,
   show,
   selectedBackendChatIdRef,
   reloadOpenChat,
@@ -287,7 +286,10 @@ export function useChatStream({
       const contentRequestId = payload.content_request_id || payload.request_id;
       if (!contentRequestId) return;
 
-      if (event.type === UI_EVENT.CHAT_RESPONSE_STARTED) {
+      if (event.type === UI_EVENT.CHAT_RESPONSE_STARTED && payload?.queue_execution === true) {
+        return;
+      }
+      if (event.type === UI_EVENT.CHAT_RESPONSE_QUEUE_STARTED) {
         if (payload?.queue_execution !== true && payload?.queued === true) return;
         if (queuedExecutionsRef.current.has(contentRequestId)) return;
         freezeSpectatedTurn();
@@ -575,11 +577,8 @@ export function useChatStream({
     }
     if (outcome.action === 'markUnread') {
       dispatch(clearChatGenerating(outcome.threadId));
-      dispatch(fetchChatSessions({ chatsUrl: getApiUrl('chats'), includeArchived: true }));
-      dispatch(markChatUnread(outcome.threadId));
-      dispatch(outcome.errored ? markChatErrored(outcome.threadId) : clearChatErrored(outcome.threadId));
     }
-  }, [dispatch, getApiUrl, reloadOpenChat]);
+  }, [dispatch, reloadOpenChat]);
   const handleSend = useCallback(async (content, attachments = []) => {
     preserveStreamInBackground();
     const userMessage = {

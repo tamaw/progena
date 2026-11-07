@@ -258,13 +258,15 @@ existing continuation policy.
 
 - Exposes the browser's finite command/query routes and bridges work to the
   runtime.
-- Discovers chats from the checkpoint tables by SQL, but reads chat messages
-  only through the runtime's conversation items endpoint, cached per
+- Lists chats from their `session:` documents alone (title, pin/archive state,
+  timestamps and the `preview` the runtime stores after each turn), paged and
+  searched in SQL, so the list never waits on the runtime. Chat messages are
+  read only through the runtime's conversation items endpoint, cached per
   `(thread_id, checkpoint_id)`. Reads run off the event loop with pooled
   connections. While the runtime is unreachable the last copy seen of a chat
-  is served; a chat never read before lists with `history_unavailable: true`
-  and its detail returns 503 instead of an empty chat. A deleted chat stays
-  deleted even while live runtime state for it exists.
+  is served; a chat never read before returns 503 for its detail instead of an
+  empty chat. A deleted chat stays deleted even while live runtime state for it
+  exists.
 - Owns the canonical `GET /api/ui/stream` SSE transport for connection
   lifecycle, retained state, and chat response lifecycle events.
 - Owns the dedicated `GET /api/ui/responses/{request_id}/stream` SSE transport
@@ -341,7 +343,7 @@ name `ui.event` and carries a `UiEventEnvelope`:
 {
   "id": "ui-42",
   "seq": 42,
-  "type": "chat.sessions.snapshot",
+  "type": "chat.list.loaded",
   "scope": "chat",
   "session_id": null,
   "payload": { "request_id": "operation-uuid" },

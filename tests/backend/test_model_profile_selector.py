@@ -10,12 +10,21 @@ from typing import Any
 import pytest
 from ack_helpers import assert_acknowledged
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient as FastApiTestClient
 
 import src.backend.settings.model_profiles as model_profile_routes
 from src.backend.settings.model_profiles import create_model_profile_router
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 from src.progena.settings.model_profiles import PRICING_FIELDS
+
+
+class TestClient(FastApiTestClient):
+    """Use a live canonical-stream client for finite-route behavior tests."""
+
+    def request(self, method: str, url: str, **kwargs: Any):
+        params = dict(kwargs.pop("params", {}) or {})
+        params.setdefault("client_id", "tab-1")
+        return super().request(method, url, params=params, **kwargs)
 
 
 class FakeProviderRepository:
@@ -53,8 +62,14 @@ def _make_app(
     return app, events
 
 
+@pytest.fixture(autouse=True)
+def _active_ui_stream(ui_stream):
+    """Make the finite-request client above eligible for route side effects."""
+    yield ui_stream
+
+
 class TestPublicLeakageGuard:
-    def test_canonical_fields_are_exposed(self):
+    def test_canonical_fields_are_exposed(self, ui_stream):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENA_STATE_PREFIX,
@@ -78,7 +93,7 @@ class TestPublicLeakageGuard:
         )
         app, events = _make_app(store)
         with TestClient(app) as client:
-            response = client.get("/model-profiles")
+            response = client.get("/model-profiles?client_id=tab-1")
         assert response.status_code == 202
         assert_acknowledged(response, ["profiles.snapshot"])
         assert events[-1][0] == "profiles.snapshot"
@@ -118,24 +133,24 @@ class TestGetAcknowledgement:
             },
         ],
     )
-    def test_get_reports_malformed_store_document(self, payload):
+    def test_get_reports_malformed_store_document(self, payload, ui_stream):
         store = InMemoryDocumentStore()
         store.save_document(PROGENA_STATE_PREFIX, "profile", payload)
         app, events = _make_app(store)
         with TestClient(app) as client:
-            response = client.get("/model-profiles")
+            response = client.get("/model-profiles?client_id=tab-1")
         assert response.status_code == 422
         assert events == []
         assert "must-not-leak" not in response.text
 
-    def test_get_allows_an_empty_profile_catalog(self):
+    def test_get_allows_an_empty_profile_catalog(self, ui_stream):
         app, events = _make_app(InMemoryDocumentStore())
         with TestClient(app) as client:
-            response = client.get("/model-profiles")
+            response = client.get("/model-profiles?client_id=tab-1")
         assert response.status_code == 202
         assert events[-1][1] == {"profiles": []}
 
-    def test_get_migrates_legacy_azure_profile_to_default_foundry(self):
+    def test_get_migrates_legacy_azure_profile_to_default_foundry(self, ui_stream):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENA_STATE_PREFIX,
@@ -147,14 +162,14 @@ class TestGetAcknowledgement:
         )
         app, events = _make_app(store, repository)
         with TestClient(app) as client:
-            response = client.get("/model-profiles")
+            response = client.get("/model-profiles?client_id=tab-1")
         assert response.status_code == 202
         assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == {
             "general": {"provider_id": "foundry-1", "deployment": "legacy"}
         }
         assert events[-1][1]["profiles"][0]["provider_id"] == "foundry-1"
 
-    def test_get_migration_removes_legacy_connection_fields(self):
+    def test_get_migration_removes_legacy_connection_fields(self, ui_stream):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENA_STATE_PREFIX,
@@ -175,7 +190,7 @@ class TestGetAcknowledgement:
         app, events = _make_app(store, repository)
 
         with TestClient(app) as client:
-            response = client.get("/model-profiles")
+            response = client.get("/model-profiles?client_id=tab-1")
 
         assert response.status_code == 202
         assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == {
@@ -574,6 +589,21 @@ class TestPatchEdits:
         with TestClient(app) as client:
             response = client.patch("/model-profiles/general", json={"provider_id": "missing"})
         assert response.status_code == 422
+
+    def test_patch_requires_client_id_before_work(self):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            "profile",
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
+        )
+        app, events = _make_app(store)
+
+        with FastApiTestClient(app) as client:
+            response = client.patch("/model-profiles/general", json={"deployment": "new"})
+
+        assert response.status_code == 422
+        assert events == []
 
 
 class TestDeleteProfiles:

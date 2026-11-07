@@ -13,6 +13,17 @@ import {
 import { applyUiEvent } from '../store/uiEvents';
 import { publishUiEvent } from './realtimeEvents';
 import { realtimeClientId, setRealtimeClientReady } from './realtimeClient';
+import { notifyStreamReady } from './streamLifecycle';
+import { registerHeldTopics } from './streamTopics';
+import {
+  cancelRecovery,
+  consumeStaleAcknowledgement,
+  forgetRequest,
+  holdPendingForRecovery,
+  noteAcknowledged,
+  noteRequestStarted,
+  recoverOnReady,
+} from './requestRecovery';
 import { withQuery } from '../store/http';
 import { UI_EVENT, UI_SSE_EVENT } from './eventVocabulary';
 
@@ -31,9 +42,6 @@ let activeStreamUrl = null;
 const HEARTBEAT_STALE_MS = 45000;
 const WATCHDOG_POLL_MS = 15000;
 
-function isUiDataThunkLifecycle(action) {
-  return action.type.startsWith('uiData/');
-}
 
 function requestIdFor(action) {
   return action.meta?.requestId || action.meta?.arg?.requestId || null;
@@ -76,7 +84,46 @@ function failPendingOperations(listenerApi, error) {
   }
 }
 
+// A stream that ends because the server is shutting down, or that the browser
+// gave up on, is reopened after a backoff that doubles from one second to a cap,
+// so a restarting server is neither hammered nor reconnected to while draining.
+// The count restarts once a connection has stayed up long enough to be stable.
+const STABLE_STREAM_MS = 10000;
+const MAX_RECONNECT_DELAY_MS = 8000;
+const EVENT_SOURCE_CLOSED = 2;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let connectedAt = 0;
+
+export function reconnectDelayMs(attempts, random = Math.random) {
+  const base = Math.min(1000 * 2 ** Math.max(0, attempts), MAX_RECONNECT_DELAY_MS);
+  return Math.round(base * (0.75 + random() * 0.5));
+}
+
+function reconnectAfterBackoff(listenerApi, source, watchdog, streamUrl, error) {
+  clearInterval(watchdog);
+  source.close();
+  eventSource = null;
+  activeStreamUrl = null;
+  setRealtimeClientReady(false);
+  const wasStable = connectedAt > 0 && Date.now() - connectedAt >= STABLE_STREAM_MS;
+  connectedAt = 0;
+  reconnectAttempts = wasStable ? 0 : reconnectAttempts + 1;
+  listenerApi.dispatch(realtimeErrored(error));
+  holdPendingForRecovery(listenerApi);
+  const resumeAfter = listenerApi.getState().realtime.lastEventId;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    listenerApi.dispatch(startRealtimeStream({ streamUrl, after: resumeAfter }));
+  }, reconnectDelayMs(reconnectAttempts));
+}
+
 function closeCurrentStream(dispatch) {
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   setRealtimeClientReady(false);
   if (eventSource) {
     eventSource.close();
@@ -95,7 +142,7 @@ realtimeListenerMiddleware.startListening({
     }
 
     closeCurrentStream(listenerApi.dispatch);
-    if (force) failPendingOperations(listenerApi, 'Reconnecting to event stream');
+    if (force) holdPendingForRecovery(listenerApi);
     listenerApi.dispatch(realtimeConnecting());
 
     const source = new EventSource(withQuery(streamUrl, {
@@ -125,7 +172,7 @@ realtimeListenerMiddleware.startListening({
       activeStreamUrl = null;
       const error = 'Realtime stream stale — reconnecting';
       listenerApi.dispatch(realtimeErrored(error));
-      failPendingOperations(listenerApi, error);
+      holdPendingForRecovery(listenerApi);
       listenerApi.dispatch(startRealtimeStream({ streamUrl, after: resumeAfter }));
     }, WATCHDOG_POLL_MS);
 
@@ -144,12 +191,19 @@ realtimeListenerMiddleware.startListening({
       const error = 'Realtime stream disconnected';
       setRealtimeClientReady(false);
       listenerApi.dispatch(realtimeErrored(error));
-      // EventSource retries automatically after an error. Requests waiting for
-      // an event from the failed connection must not remain pending forever.
-      failPendingOperations(listenerApi, error);
+      // Requests waiting for an event from the failed connection are kept and
+      // recovered once the stream is ready again, within a deadline.
+      holdPendingForRecovery(listenerApi);
+      // After a network error the browser retries by itself. After a bad HTTP
+      // response (a proxy's 502 while the backend restarts) it gives up for good
+      // and the stream stays dead until the stale watchdog notices 45 s later,
+      // so retry here, with the same backoff.
+      if (source.readyState === EVENT_SOURCE_CLOSED) {
+        reconnectAfterBackoff(listenerApi, source, watchdog, streamUrl, error);
+      }
     };
 
-    source.addEventListener(UI_SSE_EVENT, (messageEvent) => {
+    source.addEventListener(UI_SSE_EVENT, async (messageEvent) => {
       if (eventSource !== source) return;
       lastEventAt = Date.now();
       try {
@@ -163,16 +217,34 @@ realtimeListenerMiddleware.startListening({
         if (realtime.receivedIds.includes(event.id)) {
           return;
         }
-        // `connection.ready` is emitted from inside the stream generator, so
-        // by the time it lands the backend has our subscriber queue and a
-        // broadcast can no longer be published into the void.
+        // The server's new connection has no topic interests. Register every
+        // hold before stream readiness permits finite snapshots or resync.
         if (event.type === UI_EVENT.CONNECTION_READY) {
+          connectedAt = Date.now();
+          setRealtimeClientReady(false);
+          const topicsReady = registerHeldTopics({ dispatch: listenerApi.dispatch, streamUrl });
+          if (topicsReady) await topicsReady;
+          if (eventSource !== source) return;
           setRealtimeClientReady(true);
           listenerApi.dispatch(realtimeStreamReady());
         }
         listenerApi.dispatch(applyUiEvent(event));
         listenerApi.dispatch(uiEventReceived(event));
+        const settledRequestId = event.payload?.request_id;
+        if (settledRequestId && !listenerApi.getState().realtime.pendingOps?.[settledRequestId]) {
+          forgetRequest(settledRequestId);
+        }
         publishUiEvent(event);
+        if (event.type === UI_EVENT.CONNECTION_READY) {
+          notifyStreamReady({ dispatch: listenerApi.dispatch, streamUrl });
+          recoverOnReady(listenerApi, streamUrl, event.payload?.boot_id).catch(() => {});
+        }
+        if (event.type === UI_EVENT.CONNECTION_SHUTDOWN) {
+          // The server is going away and will close this stream. Reconnecting at
+          // once would land on a draining server (a ready followed by another
+          // shutdown), so stop here and come back after a backoff.
+          reconnectAfterBackoff(listenerApi, source, watchdog, streamUrl, 'Server is shutting down — reconnecting');
+        }
       } catch (error) {
         listenerApi.dispatch(realtimeErrored(`Malformed ui.event: ${error.message}`));
       }
@@ -184,7 +256,10 @@ realtimeListenerMiddleware.startListening({
   actionCreator: stopRealtimeStream,
   effect: async (_action, listenerApi) => {
     closeCurrentStream(listenerApi.dispatch);
-    // Fail all pending operations when the stream disconnects.
+    reconnectAttempts = 0;
+    connectedAt = 0;
+    // An explicit stop (idle pause, teardown) leaves nothing to recover.
+    cancelRecovery();
     failPendingOperations(listenerApi, 'Stream disconnected');
   },
 });
@@ -193,18 +268,20 @@ realtimeListenerMiddleware.startListening({
 // Rejected operations fail immediately; fulfilled acknowledgements register the
 // event types that are allowed to resolve the pending request.
 realtimeListenerMiddleware.startListening({
-  matcher: (action) => isUiDataThunkLifecycle(action)
+  matcher: (action) => (action.type.startsWith('uiData/') || action.type.startsWith('realtime/'))
     && (isPending(action) || isRejected(action) || isFulfilled(action)),
   effect: (action, listenerApi) => {
     const requestId = requestIdFor(action);
     if (isPending(action)) {
       if (requestId) {
+        noteRequestStarted(requestId);
         listenerApi.dispatch(registerPendingOp({ requestId }));
       }
       return;
     }
     if (isRejected(action)) {
       if (requestId) {
+        forgetRequest(requestId);
         listenerApi.dispatch(failPendingOp({ requestId, error: action.error?.message }));
       }
       return;
@@ -214,6 +291,13 @@ realtimeListenerMiddleware.startListening({
     if (!acknowledgement) {
       return;
     }
+    if (consumeStaleAcknowledgement(acknowledgement.request_id)) {
+      listenerApi.dispatch(failPendingOp({
+        requestId: acknowledgement.request_id,
+        error: 'The server restarted before this request finished. Check its result, then try again.',
+      }));
+      return;
+    }
     if (requestId && requestId !== acknowledgement.request_id) {
       listenerApi.dispatch(resolvePendingOp({ requestId }));
     }
@@ -221,5 +305,6 @@ realtimeListenerMiddleware.startListening({
       requestId: acknowledgement.request_id,
       eventTypes: acknowledgement.event_types,
     }));
+    noteAcknowledged(listenerApi, acknowledgement.request_id);
   },
 });

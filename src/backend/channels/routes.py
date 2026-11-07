@@ -10,13 +10,14 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 import src.backend.http.contracts as http_contracts
 from src.backend.channels.base import ChannelError
 from src.backend.channels.manager import ChannelManager
 from src.backend.channels.store import load_channels, update_channel
 from src.backend.events.contracts import UiEvent
+from src.backend.events.stream import require_ui_stream_client
 from src.backend.http.requests import BroadcastUiEvent, request_correlation_id
 from src.backend.storage.documents import BackendDocumentStore
 
@@ -37,18 +38,22 @@ def create_channels_router(
             raise HTTPException(status_code=404, detail=f"Channel {channel_id!r} not found")
         return stored[channel_id].document
 
-    async def _publish_snapshot(request_id: str) -> None:
+    async def _publish_snapshot(request_id: str, client_id: str | None) -> None:
         try:
-            await get_manager().broadcast_snapshot(request_id=request_id)
+            await get_manager().broadcast_snapshot(request_id=request_id, client_id=client_id)
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Channels are unavailable") from exc
 
     @router.get(
         "/channels", status_code=202, response_model=http_contracts.UiRequestAcknowledgement
     )
-    async def list_channels(request: Request) -> http_contracts.UiRequestAcknowledgement:
+    async def list_channels(
+        request: Request,
+        client_id: str = Query(..., min_length=1, max_length=64),
+    ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
-        await _publish_snapshot(request_id)
+        await _publish_snapshot(request_id, client_id)
         return http_contracts.acknowledgement_response(request_id, [UiEvent.CHANNELS_SNAPSHOT])
 
     @router.patch(
@@ -57,8 +62,12 @@ def create_channels_router(
         response_model=http_contracts.UiRequestAcknowledgement,
     )
     async def patch_channel(
-        channel_id: str, request: Request, body: Any = Body(...)
+        channel_id: str,
+        request: Request,
+        body: Any = Body(...),
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         try:
             await asyncio.to_thread(update_channel, get_store(), channel_id, body)
@@ -71,7 +80,7 @@ def create_channels_router(
         # The store watcher also reconciles; reconciling is idempotent, and
         # doing it here keeps the channel live without a Postgres listener.
         get_manager().request_reconnect(channel_id)
-        await _publish_snapshot(request_id)
+        await _publish_snapshot(request_id, client_id)
         return http_contracts.acknowledgement_response(request_id, [UiEvent.CHANNELS_SNAPSHOT])
 
     @router.post(
@@ -80,8 +89,11 @@ def create_channels_router(
         response_model=http_contracts.UiRequestAcknowledgement,
     )
     async def test_channel(
-        channel_id: str, request: Request
+        channel_id: str,
+        request: Request,
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         document = await _stored_document(channel_id)
         payload: dict[str, Any] = {"channel_id": channel_id, "ok": True}
@@ -89,7 +101,7 @@ def create_channels_router(
             await get_manager().send_test(channel_id, document)
         except ChannelError as exc:
             payload = {"channel_id": channel_id, "ok": False, "error": str(exc)}
-        broadcast(UiEvent.CHANNEL_TESTED, payload, request_id=request_id)
+        broadcast(UiEvent.CHANNEL_TESTED, payload, request_id=request_id, client_id=client_id)
         return http_contracts.acknowledgement_response(request_id, [UiEvent.CHANNEL_TESTED])
 
     @router.post(
@@ -98,14 +110,17 @@ def create_channels_router(
         response_model=http_contracts.UiRequestAcknowledgement,
     )
     async def reconnect_channel(
-        channel_id: str, request: Request
+        channel_id: str,
+        request: Request,
+        client_id: str = Query(..., min_length=1, max_length=64),
     ) -> http_contracts.UiRequestAcknowledgement:
+        require_ui_stream_client(client_id)
         request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         document = await _stored_document(channel_id)
         if document is not None and not document["enabled"]:
             raise HTTPException(status_code=409, detail="Channel is turned off")
         get_manager().request_reconnect(channel_id, force=True)
-        await _publish_snapshot(request_id)
+        await _publish_snapshot(request_id, client_id)
         return http_contracts.acknowledgement_response(request_id, [UiEvent.CHANNELS_SNAPSHOT])
 
     return router

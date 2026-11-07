@@ -81,9 +81,11 @@ async def preview_workflow_cron(
 @router.get("/workflows", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_workflows(
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Return the workflow definition list for the workflows page/sidebar."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     items = workflows_service.list_workflow_list_items(
         storage_documents.get_default_document_store()
@@ -92,6 +94,7 @@ async def get_workflows(
         events_contracts.UiEvent.WORKFLOWS_SNAPSHOT,
         {"items": [item.model_dump(mode="json") for item in items]},
         request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.WORKFLOWS_SNAPSHOT]
@@ -104,9 +107,11 @@ async def get_workflows(
 async def get_workflow_content(
     request: Request,
     path: str = Query(...),
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Return one stored workflow definition by id or mounted virtual path."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     try:
         definition = workflows_service.get_workflow_definition(
@@ -121,6 +126,7 @@ async def get_workflow_content(
         events_contracts.UiEvent.WORKFLOW_UPDATED,
         payload.model_dump(mode="json", by_alias=True),
         request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.WORKFLOW_UPDATED]
@@ -133,9 +139,11 @@ async def get_workflow_content(
 async def put_workflow_content(
     body: workflows_models.WorkflowContentPutRequest,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Persist one workflow definition."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     workflow_payload = dict(body.workflow)
     target_path = body.path
@@ -158,19 +166,9 @@ async def put_workflow_content(
         events_contracts.UiEvent.WORKFLOW_UPDATED,
         payload.model_dump(mode="json", by_alias=True),
         request_id=request_id,
+        client_id=client_id,
     )
-    events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.WORKFLOWS_SNAPSHOT,
-        {
-            "items": [
-                item.model_dump(mode="json")
-                for item in workflows_service.list_workflow_list_items(
-                    storage_documents.get_default_document_store()
-                )
-            ]
-        },
-        request_id=request_id,
-    )
+    workflows_runtime.broadcast_workflows_snapshot(request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id,
         [events_contracts.UiEvent.WORKFLOW_UPDATED, events_contracts.UiEvent.WORKFLOWS_SNAPSHOT],
@@ -181,9 +179,11 @@ async def put_workflow_content(
 async def create_workflow(
     body: workflows_models.WorkflowCreateRequest,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Create a new workflow definition with the minimal valid scaffold."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     try:
         definition = workflows_service.save_workflow_definition(
@@ -201,19 +201,9 @@ async def create_workflow(
         events_contracts.UiEvent.WORKFLOW_UPDATED,
         payload.model_dump(mode="json", by_alias=True),
         request_id=request_id,
+        client_id=client_id,
     )
-    events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.WORKFLOWS_SNAPSHOT,
-        {
-            "items": [
-                item.model_dump(mode="json")
-                for item in workflows_service.list_workflow_list_items(
-                    storage_documents.get_default_document_store()
-                )
-            ]
-        },
-        request_id=request_id,
-    )
+    workflows_runtime.broadcast_workflows_snapshot(request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id,
         [events_contracts.UiEvent.WORKFLOW_UPDATED, events_contracts.UiEvent.WORKFLOWS_SNAPSHOT],
@@ -228,9 +218,11 @@ async def create_workflow(
 async def delete_workflow(
     workflow_id: str,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Delete one stored workflow definition."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     store = storage_documents.get_default_document_store()
     try:
@@ -244,17 +236,9 @@ async def delete_workflow(
         events_contracts.UiEvent.WORKFLOW_DELETED,
         {"workflow_id": workflow_id},
         request_id=request_id,
+        client_id=client_id,
     )
-    events_stream.broadcast_ui_event(
-        events_contracts.UiEvent.WORKFLOWS_SNAPSHOT,
-        {
-            "items": [
-                item.model_dump(mode="json")
-                for item in workflows_service.list_workflow_list_items(store)
-            ]
-        },
-        request_id=request_id,
-    )
+    workflows_runtime.broadcast_workflows_snapshot(request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id,
         [events_contracts.UiEvent.WORKFLOW_DELETED, events_contracts.UiEvent.WORKFLOWS_SNAPSHOT],
@@ -269,9 +253,11 @@ async def delete_workflow(
 async def pause_workflow(
     workflow_id: str,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Pause one workflow definition and any active run."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     store = storage_documents.get_default_document_store()
     try:
@@ -292,8 +278,9 @@ async def pause_workflow(
         events_contracts.UiEvent.WORKFLOW_UPDATED,
         payload.model_dump(mode="json", by_alias=True),
         request_id=request_id,
+        client_id=client_id,
     )
-    workflows_runtime.broadcast_workflows_snapshot(request_id=request_id)
+    workflows_runtime.broadcast_workflows_snapshot(request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id,
         [events_contracts.UiEvent.WORKFLOW_UPDATED, events_contracts.UiEvent.WORKFLOWS_SNAPSHOT],
@@ -308,9 +295,11 @@ async def pause_workflow(
 async def resume_workflow(
     workflow_id: str,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Resume one paused workflow definition and its active run, if any."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     store = storage_documents.get_default_document_store()
     try:
@@ -331,8 +320,9 @@ async def resume_workflow(
         events_contracts.UiEvent.WORKFLOW_UPDATED,
         payload.model_dump(mode="json", by_alias=True),
         request_id=request_id,
+        client_id=client_id,
     )
-    workflows_runtime.broadcast_workflows_snapshot(request_id=request_id)
+    workflows_runtime.broadcast_workflows_snapshot(request_id=request_id, client_id=client_id)
     return http_contracts.acknowledgement_response(
         request_id,
         [events_contracts.UiEvent.WORKFLOW_UPDATED, events_contracts.UiEvent.WORKFLOWS_SNAPSHOT],
@@ -344,12 +334,16 @@ async def resume_workflow(
 )
 async def get_workflow_runs(
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Return active and recent workflow runs."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     items = workflows_service.list_workflow_runs(storage_documents.get_default_document_store())
-    workflows_runtime.broadcast_workflow_runs_snapshot(items, request_id=request_id)
+    workflows_runtime.broadcast_workflow_runs_snapshot(
+        items, request_id=request_id, client_id=client_id
+    )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.WORKFLOW_RUNS_SNAPSHOT]
     )
@@ -364,9 +358,11 @@ async def trigger_workflow(
     workflow_id: str,
     body: workflows_models.WorkflowManualTriggerRequest,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Manually trigger one workflow definition for operator testing."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     store = storage_documents.get_default_document_store()
     try:
@@ -400,6 +396,7 @@ async def trigger_workflow(
             "run": run_payload,
         },
         request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.WORKFLOW_RUN_STARTED]
@@ -416,9 +413,11 @@ async def resolve_workflow_approval(
     run_id: str,
     body: workflows_models.WorkflowApprovalRequest,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Approve or reject a paused workflow approval node."""
+    events_stream.require_ui_stream_client(client_id)
 
     request_id = http_requests.request_correlation_id(request, x_request_id)
     run = await workflows_runtime.get_workflow_executor().resolve_approval(
@@ -432,6 +431,7 @@ async def resolve_workflow_approval(
         events_contracts.UiEvent.WORKFLOW_RUN_UPDATED,
         {"workflow_id": workflow_id, "run_id": run_id, "run": run.model_dump(mode="json")},
         request_id=request_id,
+        client_id=client_id,
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.WORKFLOW_RUN_UPDATED]
@@ -444,9 +444,11 @@ async def resolve_workflow_approval(
 async def action_run(
     body: workflows_models.ActionRunRequest,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Run a prompt/code action through the existing SSE message flow."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
     try:
         thread_id, response_obj, response_text = await workflows_runtime._execute_action_run(body)
@@ -466,9 +468,10 @@ async def action_run(
             },
             scope="chat",
             request_id=request_id,
+            client_id=client_id,
         )
     schedules_service._broadcast_widget_refresh(
-        monitoring_state.get_state_reader(), request_id=request_id
+        monitoring_state.get_state_reader(), request_id=request_id, client_id=client_id
     )
     return http_contracts.acknowledgement_response(
         request_id, [events_contracts.UiEvent.WIDGETS_UPDATED]
@@ -481,9 +484,11 @@ async def action_run(
 async def action_generate(
     body: workflows_models.ActionGenerateRequest,
     request: Request,
+    client_id: str = Query(min_length=1, max_length=64),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Generate output through the existing SSE message flow."""
+    events_stream.require_ui_stream_client(client_id)
     request_id = http_requests.request_correlation_id(request, x_request_id)
 
     if not lifecycle_state.client:
@@ -529,6 +534,7 @@ async def action_generate(
             "response": response.response,
         },
         request_id=request_id,
+        client_id=client_id,
     )
     events_stream.broadcast_ui_event(
         events_contracts.UiEvent.AGENT_MESSAGE,
@@ -539,9 +545,10 @@ async def action_generate(
         },
         scope="chat",
         request_id=request_id,
+        client_id=client_id,
     )
     schedules_service._broadcast_widget_refresh(
-        monitoring_state.get_state_reader(), request_id=request_id
+        monitoring_state.get_state_reader(), request_id=request_id, client_id=client_id
     )
     return http_contracts.acknowledgement_response(
         request_id,

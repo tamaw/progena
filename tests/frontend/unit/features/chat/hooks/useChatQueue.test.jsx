@@ -31,6 +31,11 @@ vi.mock('@frontend/realtime/realtimeEvents', () => ({
 }));
 vi.mock('@frontend/store/http', () => ({
   requestAcknowledged: mocks.requestAcknowledged,
+  withQuery: (url) => url,
+}));
+vi.mock('@frontend/realtime/realtimeClient', () => ({
+  realtimeClientId: 'tab-1',
+  waitForRealtimeClient: () => Promise.resolve(),
 }));
 vi.mock('@frontend/lib/uuid', () => ({
   createUuid: () => `00000000-0000-4000-8000-${String(++mocks.nextId).padStart(12, '0')}`,
@@ -43,8 +48,13 @@ let host;
 let root;
 let queueRef;
 
-const Harness = forwardRef(function Harness({ conversationId = 'thread-1' }, ref) {
-  const queue = useChatQueue(conversationId);
+// By default the chat is opened and its detail carried no queue, so the hook
+// requests it; `awaitingDetail` is a chat whose detail has not arrived yet.
+const Harness = forwardRef(function Harness(
+  { conversationId = 'thread-1', detailQueue = null, awaitingDetail = false },
+  ref,
+) {
+  const queue = useChatQueue(conversationId, awaitingDetail ? undefined : detailQueue);
   useImperativeHandle(ref, () => queue, [queue]);
   return null;
 });
@@ -79,6 +89,29 @@ afterEach(async () => {
 });
 
 describe('useChatQueue', () => {
+  it('waits for the opened detail and uses its queue instead of requesting one', async () => {
+    mocks.requestAcknowledged.mockClear();
+    await act(async () => {
+      root.render(<Harness ref={queueRef} conversationId="thread-2" awaitingDetail />);
+      await Promise.resolve();
+    });
+    expect(mocks.requestAcknowledged).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.render(
+        <Harness
+          ref={queueRef}
+          conversationId="thread-2"
+          detailQueue={{ conversation_id: 'thread-2', revision: 4, messages: [] }}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(mocks.requestAcknowledged).not.toHaveBeenCalled();
+    expect(queueRef.current.snapshot).toEqual({ conversationId: 'thread-2', revision: 4, messages: [] });
+  });
+
   it('hydrates only the active conversation from the canonical snapshot event', async () => {
     expect(mocks.requestAcknowledged).toHaveBeenCalledWith(
       '/api/chat/sessions/thread-1/queue',

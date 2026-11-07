@@ -1,9 +1,11 @@
 import { UI_EVENT } from '../../../realtime/eventVocabulary';
+import { selectRealtimeStreamReady } from '../../../realtime/realtimeSlice';
 import { useDispatch, useSelector, useStore } from 'react-redux';
 import { draftDiscarded, draftSaveStarted, entityDraftKey } from '../../../store/editorDraftsSlice';
 import { createUuid } from '../../../lib/uuid';
 import useEntityDraft from '../../../hooks/useEntityDraft';
 import { useConfig } from '../../../context/ConfigContext';
+import useStreamTopic from '../../../hooks/useStreamTopic';
 import React, { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
 import { selectAgentRoutineRuns, selectAgentRunState, selectRoutineRunLifecycle, selectLatestRoutineRunLifecycle, selectRoutineRunLifecyclesByThreadId, startRoutineRun, controlRoutineRun, continueInterruptedRoutineRun, answerRoutineApproval, fetchRoutineRuns, fetchRunState, selectAgentRoutineRevisionContent, fetchRoutineRevision, selectAgentProfiles, selectAgentRoutineRunsHasMore, isRunLifecycleNewer } from '../../agents/state/agents';
 import { selectPolicies, fetchPolicies } from '../../settings/state/policies';
@@ -562,7 +564,9 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   const runtimeProfiles = useSelector(selectAgentProfiles);
   const policies = useSelector(selectPolicies);
   const policiesUrl = getApiUrl('policies');
-  useEffect(() => { if (!policies.loaded) dispatch(fetchPolicies({ url: policiesUrl })); }, [dispatch, policies.loaded, policiesUrl]);
+  const streamReady = useSelector(selectRealtimeStreamReady);
+  useStreamTopic('policies');
+  useEffect(() => { if (streamReady) dispatch(fetchPolicies({ url: policiesUrl })); }, [dispatch, policiesUrl, streamReady]);
   const {
     status: runStatus,
     lifecycle: liveLifecycle,

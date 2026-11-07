@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest';
 import reducer, { selectUnseenNavRoutes } from '@frontend/store/uiDataSlice';
 import { applyUiEvent } from '@frontend/store/uiEvents';
 import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession, markChatErrored, markChatGenerating, markChatUnread, setErroredChatIds, setGeneratingChatIds, setUnreadChatIds } from '@frontend/features/chat/state/actions';
-import { deleteChatSession, requestChatSessionDetail, requestChatSessionReconciliation, updateChatSessionMetadata, selectActiveChatSessionState, selectChatActivityByThreadId, selectChatActivityForThread, selectChatIndicators, selectChatReconciliationState, selectErroredChatIds, selectGeneratingChatIds, selectRequestIdByThreadId, selectRequestIdForThread, selectChatSessions, selectUnreadChatIds } from '@frontend/features/chat/state/chats';
+import { deleteChatSession, fetchChatSessions, requestChatSessionDetail, requestChatSessionReconciliation, updateChatSessionMetadata, selectActiveChatSessionState, selectChatActivityByThreadId, selectChatActivityForThread, selectChatIndicators, selectChatReconciliationState, selectErroredChatIds, selectGeneratingChatIds, selectRequestIdByThreadId, selectRequestIdForThread, selectChatSessions, selectUnreadChatIds } from '@frontend/features/chat/state/chats';
 import { kanbanSnapshotReceived } from '@frontend/features/tasks/actions';
 import { requestAgentDetail, selectActiveAgentProfile, selectRoutineLatestRunStatusByAgentId, selectAgentProfiles } from '@frontend/features/agents/state/agents';
 import { selectKanbanBoard, selectTaskActivityEntry, selectTaskContentEntry } from '@frontend/features/tasks/state';
-import { fetchInbox, selectInboxMessages, selectInboxState, selectInboxUnreadCount } from '@frontend/features/inbox/state';
+import { fetchInboxList, requestInboxMessageDetail, selectInboxMessages, selectInboxState, selectInboxUnreadCount } from '@frontend/features/inbox/state';
 import { fetchSchedules, selectSchedulesState, selectSchedules } from '@frontend/features/schedules/state';
 import { selectWorkflowDetailByPath, selectWorkflowLatestRunById, selectWorkflowRuns, selectWorkflows, selectWorkflowsState } from '@frontend/features/workflows/state/workflows';
 import { selectMcpServers, selectMcpServerDetail, selectMcpState } from '@frontend/features/settings/state/mcp';
@@ -14,66 +14,81 @@ import { setActiveNavRoute } from '@frontend/store/navigationActions';
 import { scheduleSnapshotReceived } from '@frontend/features/schedules/actions';
 import { fetchTokenUsage, selectInsightsQueryState } from '@frontend/features/insights/state';
 import { CHAT_STATUS } from '@frontend/features/chat/models/chatStatus';
+import { failPendingOp } from '@frontend/realtime/realtimeSlice';
 
-const snapshot = (ids) => applyUiEvent({
-  type: 'chat.sessions.snapshot',
-  payload: { sessions: ids.map((id) => ({ thread_id: id })) },
-});
+function seedChats(ids) {
+  const view = { q: '', sort: 'recent', filter: 'active' };
+  let state = reducer(undefined, fetchChatSessions.pending('LIST', { chatsUrl: '/x', view }));
+  state = reducer(state, applyUiEvent({
+    type: 'chat.list.loaded',
+    payload: {
+      request_id: 'LIST',
+      view,
+      offset: 0,
+      rows: ids.map((id) => ({ thread_id: id })),
+      total: ids.length,
+      groups: [],
+    },
+  }));
+  return state;
+}
+
+  it('clears failed positional chat requests so reconnect can retry them', () => {
+    const view = { q: '', sort: 'recent', filter: 'active' };
+    let state = reducer(undefined, fetchChatSessions.pending('CHAT_PAGE', {
+      chatsUrl: '/x', view, offset: 50, limit: 50,
+    }));
+    state = reducer(state, failPendingOp({ requestId: 'CHAT_PAGE', error: 'Server restarted' }));
+
+    expect(state.chats.inFlightRequests).toEqual({});
+    expect(state.chats.loading).toBe(false);
+  });
 
 describe('applyUiEvent reducer', () => {
-  it('snapshot replaces the chat list and marks loaded', () => {
-    const s = reducer(undefined, snapshot(['a', 'b']));
-    expect(s.chats.order).toEqual(['a', 'b']);
+  it('loads a correlated list response and marks the sidebar ready', () => {
+    const s = seedChats(['a', 'b']);
+    expect(s.chats.rowsByIndex).toEqual({ 0: 'a', 1: 'b' });
     expect(s.chats.loaded).toBe(true);
   });
 
-  it('created prepends a new chat', () => {
-    let s = reducer(undefined, snapshot(['a']));
-    s = reducer(s, applyUiEvent({ type: 'chat.session.created', payload: { session: { thread_id: 'b', title: 'B' } } }));
-    expect(s.chats.order).toEqual(['b', 'a']);
-    expect(s.chats.byId.b.title).toBe('B');
-  });
-
-  it('upserted adds only when missing and does not duplicate', () => {
-    let s = reducer(undefined, snapshot(['a']));
-    s = reducer(s, applyUiEvent({ type: 'chat.session.upserted', payload: { session: { thread_id: 'a', title: 'changed' } } }));
-    expect(s.chats.order).toEqual(['a']);
-    s = reducer(s, applyUiEvent({ type: 'chat.session.upserted', payload: { session: { thread_id: 'c' } } }));
-    expect(s.chats.order).toEqual(['c', 'a']);
-  });
-
-  it('deleted removes the chat and clears the active detail if it was selected', () => {
-    let s = reducer(undefined, snapshot(['a', 'b']));
-    s = reducer(s, applyUiEvent({ type: 'chat.session.deleted', payload: { thread_id: 'a' } }));
-    expect(s.chats.order).toEqual(['b']);
+  it('upserts rows, preserves view order, and removes deleted rows', () => {
+    let s = seedChats(['a']);
+    s = reducer(s, applyUiEvent({
+      type: 'chat.list.row.upserted',
+      payload: { row: { thread_id: 'b', title: 'B', last_activity: '2026-01-02T00:00:00Z' } },
+    }));
+    expect(s.chats.rowsByIndex).toEqual({ 0: 'b', 1: 'a' });
+    s = reducer(s, applyUiEvent({
+      type: 'chat.list.row.deleted',
+      payload: { thread_id: 'a' },
+    }));
+    expect(s.chats.rowsByIndex).toEqual({ 0: 'b' });
     expect(s.chats.byId.a).toBeUndefined();
   });
 
-  it('deleteChatSession.fulfilled acknowledges without changing chats until chat.session.deleted arrives', () => {
-    let s = reducer(undefined, snapshot(['a', 'b']));
+  it('does not change rows on acknowledgements before their row delta', () => {
+    let s = seedChats(['a', 'b']);
     s = reducer(s, deleteChatSession.fulfilled({
       request_id: 'REQ1',
-      event_types: ['chat.session.deleted', 'chat.sessions.snapshot'],
+      event_types: ['chat.list.row.deleted'],
     }, 'REQ1', {
       chatsUrl: '/x',
       threadId: 'a',
     }));
-    expect(s.chats.order).toEqual(['a', 'b']);
-    expect(s.chats.byId.a).toBeDefined();
+    expect(s.chats.rowsByIndex).toEqual({ 0: 'a', 1: 'b' });
 
     s = reducer(s, applyUiEvent({
-      type: 'chat.session.deleted',
+      type: 'chat.list.row.deleted',
       payload: { thread_id: 'a', request_id: 'REQ1' },
     }));
-    expect(s.chats.order).toEqual(['b']);
-    expect(s.chats.byId.a).toBeUndefined();
+    expect(s.chats.rowsByIndex).toEqual({ 0: 'b' });
   });
 
-  it('updateChatSessionMetadata.fulfilled acknowledges without changing archive state until chat.session.metadata.updated arrives', () => {
-    let s = reducer(undefined, snapshot(['a', 'b']));
+  it('applies an archive row delta only after the acknowledgement', () => {
+    let s = seedChats(['a', 'b']);
     s = reducer(s, updateChatSessionMetadata.fulfilled({
       request_id: 'REQ1',
-      event_types: ['chat.session.metadata.updated', 'chat.sessions.snapshot'],
+      event_types: ['chat.list.row.upserted'],
     }, 'REQ1', {
       chatsUrl: '/x',
       threadId: 'a',
@@ -82,41 +97,14 @@ describe('applyUiEvent reducer', () => {
     expect(s.chats.byId.a.archived).toBeUndefined();
 
     s = reducer(s, applyUiEvent({
-      type: 'chat.session.metadata.updated',
+      type: 'chat.list.row.upserted',
       payload: {
         request_id: 'REQ1',
-        session: { thread_id: 'a', title: 'A', archived: true },
+        row: { thread_id: 'a', title: 'A', archived: true },
       },
     }));
     expect(s.chats.byId.a.archived).toBe(true);
-    expect(s.chats.order).toEqual(['a', 'b']);
-  });
-
-  it('updateChatSessionMetadata.fulfilled waits for the canonical snapshot to reorder a touched chat', () => {
-    let s = reducer(undefined, snapshot(['a', 'b', 'c']));
-    s = reducer(s, updateChatSessionMetadata.fulfilled({
-      request_id: 'REQ1',
-      event_types: ['chat.session.metadata.updated', 'chat.sessions.snapshot'],
-    }, 'REQ1', {
-      chatsUrl: '/x',
-      threadId: 'c',
-      patch: { title: 'New chat', touch: true },
-    }));
-    expect(s.chats.order).toEqual(['a', 'b', 'c']);
-
-    s = reducer(s, applyUiEvent({
-      type: 'chat.sessions.snapshot',
-      payload: {
-        request_id: 'REQ1',
-        sessions: [
-          { thread_id: 'c', title: 'New chat' },
-          { thread_id: 'a' },
-          { thread_id: 'b' },
-        ],
-      },
-    }));
-    expect(s.chats.order).toEqual(['c', 'a', 'b']);
-    expect(s.chats.byId.c.title).toBe('New chat');
+    expect(s.chats.rowsByIndex).toEqual({ 0: 'b' });
   });
 
   it('selected applies matching detail with messages and preserves request identity for hydration', () => {
@@ -485,6 +473,7 @@ describe('applyUiEvent reducer', () => {
     expect(s.chats.active).toEqual({
       threadId: null,
       detail: null,
+      queue: null,
       loading: false,
       error: null,
       requestId: null,
@@ -493,9 +482,9 @@ describe('applyUiEvent reducer', () => {
     });
   });
 
-  it('schedule.snapshot replaces the schedules list', () => {
+  it('schedules.snapshot replaces the schedules list', () => {
     const items = [{ id: 'sched-a', name: 'A' }, { id: 'sched-b', name: 'B', paused: true }];
-    const s = reducer(undefined, applyUiEvent({ type: 'schedule.snapshot', payload: { items } }));
+    const s = reducer(undefined, applyUiEvent({ type: 'schedules.snapshot', payload: { items } }));
     expect(selectSchedules({ uiData: s })).toEqual(items);
   });
 
@@ -535,7 +524,7 @@ describe('applyUiEvent reducer', () => {
     expect(selectMcpServerDetail({ uiData: s }, 'mcp:other')).toBe(null);
   });
 
-  it('kanban.snapshot replaces the live tasks board', () => {
+  it('tasks.snapshot replaces the live tasks board', () => {
     const board = {
       id: 'progena-kanban',
       title: 'Tasks',
@@ -544,7 +533,7 @@ describe('applyUiEvent reducer', () => {
       cards: [{ id: 'card_1', title: 'Ship Tasks', column_id: 'backlog', status: 'idle' }],
       card_schema: { statuses: [{ id: 'idle', label: 'Idle' }] },
     };
-    const s = reducer(undefined, applyUiEvent({ type: 'kanban.snapshot', payload: board }));
+    const s = reducer(undefined, applyUiEvent({ type: 'tasks.snapshot', payload: board }));
     expect(selectKanbanBoard({ uiData: s })).toEqual(board);
   });
 
@@ -715,7 +704,7 @@ describe('applyUiEvent reducer', () => {
 
 describe('selectChatSessions (memoized)', () => {
   it('returns a stable reference until the chat list changes', () => {
-    const s1 = reducer(undefined, snapshot(['a']));
+    const s1 = seedChats(['a']);
     const r1 = selectChatSessions({ uiData: s1 });
     expect(selectChatSessions({ uiData: s1 })).toBe(r1);
     // unrelated state change keeps the same chats refs → memo holds
@@ -723,9 +712,12 @@ describe('selectChatSessions (memoized)', () => {
   });
 
   it('recomputes after the chat list changes', () => {
-    const s1 = reducer(undefined, snapshot(['a']));
+    const s1 = seedChats(['a']);
     const r1 = selectChatSessions({ uiData: s1 });
-    const s2 = reducer(s1, applyUiEvent({ type: 'chat.session.created', payload: { session: { thread_id: 'b' } } }));
+    const s2 = reducer(s1, applyUiEvent({
+      type: 'chat.list.row.upserted',
+      payload: { row: { thread_id: 'b', last_activity: '2026-01-02T00:00:00Z' } },
+    }));
     const r2 = selectChatSessions({ uiData: s2 });
     expect(r2).not.toBe(r1);
     expect(r2.map((c) => c.thread_id)).toEqual(['b', 'a']);
@@ -783,15 +775,6 @@ describe('agent reducers', () => {
     expect(s.agents.active.detail.graph).toEqual(graph);
   });
 
-  it('agent.upserted merges into an existing agent and appends new ones', () => {
-    let s = reducer(undefined, agentsSnapshot(['alpha']));
-    s = reducer(s, applyUiEvent({ type: 'agent.upserted', payload: { agent: { id: 'alpha', role: 'changed' } } }));
-    expect(s.agents.order).toEqual(['alpha']);
-    expect(s.agents.byId.alpha.role).toBe('changed');
-    s = reducer(s, applyUiEvent({ type: 'agent.upserted', payload: { agent: { id: 'gamma' } } }));
-    expect(s.agents.order).toEqual(['alpha', 'gamma']);
-  });
-
   it('agent.selected ignores a reply for an agent the selection has moved off', () => {
     let s = reducer(undefined, requestAgentDetail.pending('REQ1', {
       agentsUrl: '/x', agentId: 'alpha',
@@ -815,6 +798,16 @@ describe('agent reducers', () => {
     expect(s.agents.active.requestId).toBe('REQ2');
     s = reducer(s, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'alpha' }, request_id: 'REQ1' } }));
     expect(selectActiveAgentProfile({ uiData: s })).toEqual({ id: 'alpha' });
+  });
+
+  it('agent.selected refreshes the roster entry, and never resurrects a deleted agent', () => {
+    let s = reducer(undefined, agentsSnapshot(['alpha']));
+    s = reducer(s, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'alpha', role: 'detail' } } }));
+    expect(s.agents.byId.alpha.role).toBe('detail');
+    s = reducer(s, applyUiEvent({ type: 'agent.deleted', payload: { agent_id: 'alpha' } }));
+    s = reducer(s, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'alpha', role: 'late' } } }));
+    expect(s.agents.byId.alpha).toBeUndefined();
+    expect(s.agents.order).toEqual([]);
   });
 
   it('agents.snapshot carries A2A fields (skills, url, transport) through to selectors', () => {
@@ -1009,136 +1002,243 @@ describe('kanbanSnapshotReceived', () => {
 });
 
 describe('inbox events', () => {
-  const inboxSnapshot = (messages) => applyUiEvent({
-    type: 'inbox.snapshot',
-    payload: { messages, total: messages.length, unread: messages.filter((m) => !m.read).length },
+  const inboxListLoaded = ({ requestId, rows, total, offset = 0, view = { q: '', filter: 'all', sort: 'recent' } }) => applyUiEvent({
+    type: 'inbox.list.loaded',
+    payload: { request_id: requestId, rows, total, offset, view },
   });
 
-  it('snapshot replaces the message list in server order and marks loaded', () => {
-    const s = reducer(undefined, inboxSnapshot([
-      { id: 'msg_new', title: 'New', read: false },
-      { id: 'msg_old', title: 'Old', read: true },
-    ]));
-    expect(s.inbox.order).toEqual(['msg_new', 'msg_old']);
-    expect(s.inbox.loaded).toBe(true);
-    expect(selectInboxUnreadCount({ uiData: s })).toBe(1);
-  });
-
-  it('unread count excludes archived messages', () => {
-    const s = reducer(undefined, inboxSnapshot([
-      { id: 'msg_new', title: 'New', read: false, archived: false },
-      { id: 'msg_archived', title: 'Archived', read: false, archived: true },
-    ]));
-    expect(selectInboxUnreadCount({ uiData: s })).toBe(1);
-  });
-
-  it('upserted merges an existing message and prepends a new one', () => {
-    let s = reducer(undefined, inboxSnapshot([{ id: 'a', title: 'A', read: false }]));
-    s = reducer(s, applyUiEvent({ type: 'inbox.message.upserted', payload: { message: { id: 'a', read: true } } }));
-    expect(s.inbox.byId.a.title).toBe('A');
-    expect(s.inbox.byId.a.read).toBe(true);
-    expect(selectInboxUnreadCount({ uiData: s })).toBe(0);
-    s = reducer(s, applyUiEvent({ type: 'inbox.message.upserted', payload: { message: { id: 'b', title: 'B', read: false } } }));
-    expect(s.inbox.order).toEqual(['b', 'a']);
-  });
-
-  it('deleted removes the message', () => {
-    let s = reducer(undefined, inboxSnapshot([
-      { id: 'a', title: 'A', read: false },
-      { id: 'b', title: 'B', read: false },
-    ]));
-    s = reducer(s, applyUiEvent({ type: 'inbox.message.deleted', payload: { message_id: 'a' } }));
-    expect(s.inbox.order).toEqual(['b']);
-    expect(s.inbox.byId.a).toBeUndefined();
-    expect(selectInboxMessages({ uiData: s }).map((m) => m.id)).toEqual(['b']);
-  });
-
-  it('fetchInbox.fulfilled acknowledges without installing data until the matching inbox.snapshot event', () => {
-    const acknowledgement = { request_id: 'REQ1', event_types: ['inbox.snapshot'] };
-    let s = reducer(undefined, fetchInbox.pending('REQ1', { inboxUrl: '/api/ui/inbox' }));
-    s = reducer(s, fetchInbox.fulfilled(acknowledgement, 'REQ1', { inboxUrl: '/api/ui/inbox' }));
-    expect(selectInboxState({ uiData: s }).loaded).toBe(false);
-    expect(selectInboxState({ uiData: s }).loading).toBe(true);
-    expect(selectInboxMessages({ uiData: s })).toEqual([]);
-
-    s = reducer(s, applyUiEvent({
-      type: 'inbox.snapshot',
-      payload: {
-        request_id: 'REQ1',
-        messages: [{ id: 'a', title: 'A', read: false }],
-        total: 1,
-        unread: 1,
-      },
+  it('hydrates only the requested positional page with slim rows', () => {
+    const view = { q: '', filter: 'all', sort: 'recent' };
+    let s = reducer(undefined, fetchInboxList.pending('REQ1', {
+      inboxUrl: '/api/ui/inbox',
+      view,
+      offset: 50,
+      limit: 50,
     }));
-    expect(selectInboxState({ uiData: s }).loaded).toBe(true);
-    expect(selectInboxState({ uiData: s }).loading).toBe(false);
-    expect(selectInboxMessages({ uiData: s }).map((message) => message.id)).toEqual(['a']);
+    s = reducer(s, inboxListLoaded({
+      requestId: 'REQ1',
+      offset: 50,
+      total: 122,
+      rows: [
+        { id: 'msg_51', title: 'Page row', preview: 'Slim preview', read: false },
+        { id: 'msg_52', title: 'Another row', read: true },
+      ],
+    }));
+
+    expect(s.inbox.total).toBe(122);
+    expect(s.inbox.rowsByIndex).toEqual({ 50: 'msg_51', 51: 'msg_52' });
+    expect(s.inbox.byId.msg_51.body).toBeUndefined();
+    expect(selectInboxMessages({ uiData: s }).map((message) => message.id)).toEqual(['msg_51', 'msg_52']);
   });
 
-  it('fetchInbox.rejected ignores an unmatched legacy finite-response error', () => {
-    const action = fetchInbox.rejected(new Error('network down'), 'reqId', { inboxUrl: '/api/ui/inbox' });
-    const s = reducer(undefined, action);
-    expect(selectInboxState({ uiData: s }).loading).toBe(false);
-    expect(selectInboxState({ uiData: s }).loaded).toBe(false);
-    expect(selectInboxState({ uiData: s }).error).toBeNull();
+  it('clears failed positional Inbox requests so reconnect can retry them', () => {
+    const view = { q: '', filter: 'all', sort: 'recent' };
+    let s = reducer(undefined, fetchInboxList.pending('INBOX_PAGE', {
+      inboxUrl: '/api/ui/inbox', view, offset: 50, limit: 50,
+    }));
+    s = reducer(s, failPendingOp({ requestId: 'INBOX_PAGE', error: 'Request lost' }));
+
+    expect(s.inbox.inFlightRequests).toEqual({});
+    expect(s.inbox.loading).toBe(false);
+  });
+
+  it('does not inflate a known server total for an outside-window upsert', () => {
+    const view = { q: '', filter: 'all', sort: 'recent' };
+    let s = reducer(undefined, fetchInboxList.pending('REQ1', {
+      inboxUrl: '/api/ui/inbox', view, offset: 0, limit: 50,
+    }));
+    s = reducer(s, inboxListLoaded({
+      requestId: 'REQ1',
+      total: 120,
+      rows: [{ id: 'visible', title: 'Visible', read: false }],
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'inbox.message.upserted',
+      payload: { message: { id: 'outside', title: 'Outside page', preview: 'Only metadata', body: 'must not cache', read: false } },
+    }));
+
+    expect(s.inbox.total).toBe(120);
+    expect(s.inbox.rowsByIndex).toEqual({ 0: 'visible' });
+    expect(s.inbox.byId.outside.body).toBeUndefined();
+  });
+
+  it('clears every in-flight page when a positional deletion changes the range version', () => {
+    const view = { q: '', filter: 'all', sort: 'recent' };
+    let s = reducer(undefined, fetchInboxList.pending('REQ0', {
+      inboxUrl: '/api/ui/inbox', view, offset: 0, limit: 50,
+    }));
+    s = reducer(s, fetchInboxList.pending('REQ100', {
+      inboxUrl: '/api/ui/inbox', view, offset: 100, limit: 50,
+    }));
+    s = reducer(s, inboxListLoaded({
+      requestId: 'REQ100',
+      offset: 100,
+      total: 101,
+      rows: [{ id: 'tail', title: 'Tail', created_at: '2026-01-01T00:00:00Z' }],
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'inbox.message.deleted',
+      payload: { message_id: 'tail' },
+    }));
+
+    expect(s.inbox.inFlightRequests).toEqual({});
+    expect(s.inbox.loading).toBe(false);
+    s = reducer(s, inboxListLoaded({
+      requestId: 'REQ0',
+      total: 100,
+      rows: [{ id: 'stale', title: 'Must be ignored' }],
+    }));
+    expect(s.inbox.rowsByIndex[0]).toBeUndefined();
+  });
+
+  it('invalidates the positional list when a recency row changes its creation instant', () => {
+    const view = { q: '', filter: 'all', sort: 'recent' };
+    let s = reducer(undefined, fetchInboxList.pending('REQ1', {
+      inboxUrl: '/api/ui/inbox', view, offset: 0, limit: 50,
+    }));
+    s = reducer(s, inboxListLoaded({
+      requestId: 'REQ1',
+      total: 1,
+      rows: [{ id: 'moving', title: 'Moving', created_at: '2026-01-01T00:00:00Z' }],
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'inbox.message.upserted',
+      payload: { message: { id: 'moving', title: 'Moving', created_at: '2026-01-02T00:00:00Z' } },
+    }));
+
+    expect(s.inbox.loadedPages).toEqual({});
+  });
+
+  describe('loaded rows', () => {
+    const view = { q: '', filter: 'all', sort: 'recent' };
+    const loadThree = () => {
+      let s = reducer(undefined, fetchInboxList.pending('REQ', {
+        inboxUrl: '/api/ui/inbox', view, offset: 0, limit: 50,
+      }));
+      s = reducer(s, inboxListLoaded({
+        requestId: 'REQ',
+        total: 3,
+        rows: ['a', 'b', 'c'].map((id) => ({ id, title: id, created_at: '2026-01-01T00:00:00Z', read: false })),
+      }));
+      return s;
+    };
+
+    it('deleting a loaded row closes the gap, drops the total and reloads from that page', () => {
+      let s = loadThree();
+      expect(s.inbox.loadedPages).toEqual({ 0: true });
+      s = reducer(s, applyUiEvent({ type: 'inbox.message.deleted', payload: { message_id: 'b' } }));
+
+      expect(s.inbox.rowsByIndex).toEqual({ 0: 'a', 1: 'c' });
+      expect(s.inbox.total).toBe(2);
+      expect(s.inbox.loadedPages).toEqual({});
+      expect(s.inbox.rowDelta).toMatchObject({ index: 1, amount: -1 });
+      expect(s.inbox.byId.b).toBeUndefined();
+    });
+
+    it('a read toggle patches the row in place without reloading any page', () => {
+      let s = loadThree();
+      const before = s.inbox.rangeVersion;
+      s = reducer(s, applyUiEvent({
+        type: 'inbox.message.upserted',
+        payload: { message: { id: 'b', title: 'b', created_at: '2026-01-01T00:00:00Z', read: true } },
+      }));
+
+      expect(s.inbox.byId.b.read).toBe(true);
+      expect(s.inbox.rowsByIndex).toEqual({ 0: 'a', 1: 'b', 2: 'c' });
+      expect(s.inbox.loadedPages).toEqual({ 0: true });
+      expect(s.inbox.rangeVersion).toBe(before);
+      expect(s.inbox.total).toBe(3);
+    });
+
+    it('archiving a loaded row removes it from the all view and shifts the rows after it', () => {
+      let s = loadThree();
+      s = reducer(s, applyUiEvent({
+        type: 'inbox.message.upserted',
+        payload: { message: { id: 'a', title: 'a', created_at: '2026-01-01T00:00:00Z', archived: true } },
+      }));
+
+      expect(s.inbox.rowsByIndex).toEqual({ 0: 'b', 1: 'c' });
+      expect(s.inbox.total).toBe(2);
+      expect(s.inbox.rowDelta).toMatchObject({ index: 0, amount: -1 });
+    });
+  });
+
+  it('keeps full detail separate and rejects a stale selected response', () => {
+    let s = reducer(undefined, requestInboxMessageDetail.pending('REQ_A', {
+      inboxUrl: '/api/ui/inbox', messageId: 'a',
+    }));
+    s = reducer(s, requestInboxMessageDetail.pending('REQ_B', {
+      inboxUrl: '/api/ui/inbox', messageId: 'b',
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'inbox.message.selected',
+      payload: { request_id: 'REQ_A', message: { id: 'a', title: 'Old', body: 'must not render' } },
+    }));
+    expect(s.inbox.active.detail).toBeNull();
+    s = reducer(s, applyUiEvent({
+      type: 'inbox.message.selected',
+      payload: { request_id: 'REQ_B', message: { id: 'b', title: 'Selected', body: 'full body' } },
+    }));
+    expect(s.inbox.active.detail).toEqual({ id: 'b', title: 'Selected', body: 'full body' });
+    s = reducer(s, applyUiEvent({
+      type: 'inbox.message.updated',
+      payload: { message: { id: 'a', title: 'Other tab', body: 'other body' } },
+    }));
+    expect(s.inbox.active.detail.body).toBe('full body');
+  });
+
+  it('uses the server count rather than loaded rows for the shell unread badge', () => {
+    let s = reducer(undefined, applyUiEvent({
+      type: 'inbox.counts.updated',
+      payload: { unread: 17 },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'inbox.message.upserted',
+      payload: { message: { id: 'unread-row', title: 'Unread', read: false } },
+    }));
+    expect(selectInboxUnreadCount({ uiData: s })).toBe(17);
+    expect(selectInboxState({ uiData: s }).counts.unread).toBe(17);
   });
 });
 
 describe('nav activity tracking (unseen-page dots)', () => {
-  it('a route\'s first-ever event is its baseline, not "new" activity', () => {
-    const s = reducer(undefined, applyUiEvent({ type: 'kanban.snapshot', payload: {} }));
-    expect(selectUnseenNavRoutes({ uiData: s })).toEqual({});
-  });
+  const navActivity = (route) => applyUiEvent({ type: 'nav.activity', payload: { route } });
 
-  it('a later event for a route not currently open marks it unseen', () => {
-    let s = reducer(undefined, applyUiEvent({ type: 'kanban.snapshot', payload: {} }));
-    s = reducer(s, applyUiEvent({ type: 'kanban.snapshot', payload: {} }));
+  it('marks a route’s first off-route nav.activity as unseen', () => {
+    const s = reducer(undefined, navActivity('/tasks'));
     expect(selectUnseenNavRoutes({ uiData: s })).toEqual({ '/tasks': true });
   });
 
-  it('an event for the currently active route never marks it unseen', () => {
+  it('does not require a second nav.activity to mark an inactive route unseen', () => {
+    const s = reducer(undefined, navActivity('/tasks'));
+    expect(selectUnseenNavRoutes({ uiData: s })).toEqual({ '/tasks': true });
+  });
+
+  it('activity for the currently active route never marks it unseen', () => {
     let s = reducer(undefined, setActiveNavRoute('/tasks'));
-    s = reducer(s, applyUiEvent({ type: 'kanban.snapshot', payload: {} }));
-    s = reducer(s, applyUiEvent({ type: 'kanban.snapshot', payload: {} }));
+    s = reducer(s, navActivity('/tasks'));
+    s = reducer(s, navActivity('/tasks'));
     expect(selectUnseenNavRoutes({ uiData: s })).toEqual({});
   });
 
   it('navigating to a route clears its unseen flag', () => {
-    let s = reducer(undefined, applyUiEvent({ type: 'kanban.snapshot', payload: {} }));
-    s = reducer(s, applyUiEvent({ type: 'kanban.snapshot', payload: {} }));
+    let s = reducer(undefined, navActivity('/tasks'));
+    s = reducer(s, navActivity('/tasks'));
     expect(selectUnseenNavRoutes({ uiData: s })).toEqual({ '/tasks': true });
     s = reducer(s, setActiveNavRoute('/tasks'));
     expect(selectUnseenNavRoutes({ uiData: s })).toEqual({});
   });
 
-  it('workflow events light the workflows nav dot after the baseline snapshot', () => {
-    let s = reducer(undefined, setActiveNavRoute('/tasks'));
+  it('domain events no longer light a dot: they reach only tabs on that page', () => {
+    let s = reducer(undefined, applyUiEvent({ type: 'tasks.snapshot', payload: {} }));
+    s = reducer(s, applyUiEvent({ type: 'tasks.snapshot', payload: {} }));
+    s = reducer(s, applyUiEvent({ type: 'workflows.snapshot', payload: { items: [] } }));
     s = reducer(s, applyUiEvent({ type: 'workflows.snapshot', payload: { items: [] } }));
     expect(selectUnseenNavRoutes({ uiData: s })).toEqual({});
-    s = reducer(s, applyUiEvent({
-      type: 'workflow.updated',
-      payload: {
-        path: '/workflows/wf_1.json',
-        workflow: {
-          id: 'wf_1',
-          title: 'Workflow',
-          description: '',
-          enabled: true,
-          paused: false,
-          version: 1,
-          document_type: 'kanban_card',
-          graph: { nodes: { event_a: { kind: 'event', title: 'Event', document_type: 'kanban_card' } }, edges: [] },
-          ui: {},
-          updated_at: '2026-07-06T00:00:00Z',
-          created_at: '2026-07-06T00:00:00Z',
-        },
-      },
-    }));
-    expect(selectUnseenNavRoutes({ uiData: s })).toEqual({ '/workflows': true });
   });
 
-  it('unmapped event types are ignored', () => {
-    const s = reducer(undefined, applyUiEvent({ type: 'not.a.tracked.event', payload: {} }));
+  it('nav.activity without a route is ignored', () => {
+    const s = reducer(undefined, applyUiEvent({ type: 'nav.activity', payload: {} }));
     expect(selectUnseenNavRoutes({ uiData: s })).toEqual({});
   });
 });
@@ -1150,14 +1250,14 @@ describe('schedule snapshot recovery', () => {
   it('keeps the list pending until its causal snapshot, including snapshot-before-ack ordering', () => {
     let state = reducer(undefined, fetchSchedules.pending('first', args));
     state = reducer(state, fetchSchedules.fulfilled({
-      request_id: 'first', event_types: ['schedule.snapshot'],
+      request_id: 'first', event_types: ['schedules.snapshot'],
     }, 'first', args));
     expect(selectSchedulesState({ uiData: state })).toMatchObject({
       items: [], loaded: false, loading: true, requestId: 'first',
     });
 
     state = reducer(state, applyUiEvent({
-      type: 'schedule.snapshot', payload: { items: [schedule], request_id: 'first' },
+      type: 'schedules.snapshot', payload: { items: [schedule], request_id: 'first' },
     }));
     expect(selectSchedulesState({ uiData: state })).toMatchObject({
       items: [schedule], loaded: true, loading: false, error: null, requestId: null,
@@ -1165,10 +1265,10 @@ describe('schedule snapshot recovery', () => {
 
     state = reducer(state, fetchSchedules.pending('recovery', args));
     state = reducer(state, applyUiEvent({
-      type: 'schedule.snapshot', payload: { items: [], request_id: 'recovery' },
+      type: 'schedules.snapshot', payload: { items: [], request_id: 'recovery' },
     }));
     state = reducer(state, fetchSchedules.fulfilled({
-      request_id: 'recovery', event_types: ['schedule.snapshot'],
+      request_id: 'recovery', event_types: ['schedules.snapshot'],
     }, 'recovery', args));
     expect(selectSchedulesState({ uiData: state })).toMatchObject({
       items: [], loaded: true, loading: false, error: null, requestId: null,
@@ -1187,7 +1287,7 @@ describe('schedule snapshot recovery', () => {
       loading: false, error: 'Recovery failed', requestId: null,
     });
     state = reducer(state, applyUiEvent({
-      type: 'schedule.snapshot', payload: { items: [schedule] },
+      type: 'schedules.snapshot', payload: { items: [schedule] },
     }));
     expect(selectSchedulesState({ uiData: state })).toMatchObject({
       items: [schedule], loaded: true, error: null,

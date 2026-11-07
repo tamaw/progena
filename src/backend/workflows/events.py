@@ -28,6 +28,8 @@ from src.progena.routines.lifecycle import (
 from src.progena.routines.node_output import browser_run_meta
 from src.progena.runtime.ownership import EXECUTING_ROUTINE_STATUSES
 
+ROUTINES_TOPIC = "routines"
+
 
 def _lifecycle_snapshot(
     payload: dict[str, Any], started: dict[str, Any] | None, *, live
@@ -258,7 +260,9 @@ class RoutineEvents:
 
         if self.claim_lifecycle(payload):
             events_stream.broadcast_ui_event(
-                events_contracts.routine_run_status_event(payload["status"]), payload
+                events_contracts.routine_run_status_event(payload["status"]),
+                payload,
+                topic=ROUTINES_TOPIC,
             )
         agent_id = payload["agent_id"]
         if any(i["agent_id"] == agent_id for i in self.interests.values()):
@@ -375,6 +379,7 @@ class RoutineEvents:
                 events_contracts.UiEvent.AGENT_ROUTINE_LIFECYCLE_SNAPSHOT,
                 {"runs": runs},
                 client_id=client_id,
+                topic="routines" if client_id is None else None,
             )
 
     async def reconcile(self) -> None:

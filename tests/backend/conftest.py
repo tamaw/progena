@@ -5,6 +5,7 @@ Shared fixtures for backend tests.
 import asyncio
 import logging
 from unittest.mock import AsyncMock, patch
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 import pytest
 
@@ -85,14 +86,81 @@ def isolate_uvicorn_logging():
 
 
 @pytest.fixture
-def client():
-    """Provide a TestClient for the FastAPI app."""
+def ui_stream():
+    """Register one canonical-stream subscriber as client ``tab-1`` and yield its queue."""
+    from src.backend.events import stream as events_stream
+
+    queue: asyncio.Queue = asyncio.Queue()
+    events_stream._ui_stream_subscribers[queue] = None
+    events_stream._ui_stream_clients[queue] = "tab-1"
+    try:
+        yield queue
+    finally:
+        events_stream._ui_stream_subscribers.pop(queue, None)
+        events_stream._ui_stream_clients.pop(queue, None)
+
+
+class UiStreamTestClient:
+    """Test client that supplies the active canonical-stream requester."""
+
+    def __init__(self, client, client_id: str) -> None:
+        self._client = client
+        self._client_id = client_id
+
+    def request(self, method, url, **kwargs):
+        parsed = urlsplit(url)
+        params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        params.update(kwargs.pop("params", {}) or {})
+        params.setdefault("client_id", self._client_id)
+        target = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", parsed.fragment))
+        return self._client.request(method, target, params=params, **kwargs)
+
+    def get(self, url, **kwargs):
+        return self.request("GET", url, **kwargs)
+
+    def post(self, url, **kwargs):
+        return self.request("POST", url, **kwargs)
+
+    def put(self, url, **kwargs):
+        return self.request("PUT", url, **kwargs)
+
+    def patch(self, url, **kwargs):
+        return self.request("PATCH", url, **kwargs)
+
+    def delete(self, url, **kwargs):
+        return self.request("DELETE", url, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
+@pytest.fixture
+def ui_stream_client():
+    """Register a canonical stream and return its requester identity."""
+    from src.backend.events import stream as events_stream
+
+    queues = [asyncio.Queue(), asyncio.Queue()]
+    client_id = "tab-1"
+    for queue, stream_client_id in zip(queues, (client_id, "tab"), strict=True):
+        events_stream._ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_clients[queue] = stream_client_id
+    try:
+        yield client_id
+    finally:
+        for queue in queues:
+            events_stream._ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_clients.pop(queue, None)
+
+
+@pytest.fixture
+def client(ui_stream_client):
+    """Provide a TestClient with an active canonical-stream requester."""
     from fastapi.testclient import TestClient
 
     from src.backend.main import app
 
-    with TestClient(app) as client:
-        yield client
+    with TestClient(app) as test_client:
+        yield UiStreamTestClient(test_client, ui_stream_client)
 
 
 @pytest.fixture

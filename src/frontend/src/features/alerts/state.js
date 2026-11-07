@@ -1,5 +1,7 @@
 import { UI_EVENT } from '../../realtime/eventVocabulary';
 import { createAcknowledgedThunk, requestAcknowledged } from '../../store/async';
+import { withQuery } from '../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../realtime/realtimeClient';
 import { arrayPayload } from '../../lib/eventPayload';
 
 export const alertsFrom = (payload) => arrayPayload(payload, ['alerts']);
@@ -20,14 +22,20 @@ export function upsertAlert(alerts, alert) {
 // Alert read acknowledgements deliberately carry no alert data. The correlated
 // `alerts.updated` stream frame below is the sole owner of the alert list and
 // its unread/viewed state.
-export const markAlertsViewed = createAcknowledgedThunk('uiData/markAlertsViewed', ({ alertsUrl, alertIds }, { requestId }) => requestAcknowledged(
-  `${alertsUrl.replace(/\/$/, '')}/viewed`,
-  {
-    method: 'POST',
-    body: Array.isArray(alertIds) && alertIds.length > 0 ? { alert_ids: alertIds } : {},
-    requestId,
+export const markAlertsViewed = createAcknowledgedThunk(
+  'uiData/markAlertsViewed',
+  async ({ alertsUrl, alertIds }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(
+      withQuery(`${alertsUrl.replace(/\/$/, '')}/viewed`, { client_id: realtimeClientId }),
+      {
+        method: 'POST',
+        body: Array.isArray(alertIds) && alertIds.length > 0 ? { alert_ids: alertIds } : {},
+        requestId,
+      },
+    );
   },
-));
+);
 
 export const selectUiAlerts = (state) => state.uiData.alerts;
 
@@ -43,12 +51,6 @@ export const initialState = {
 
 export const eventHandlers = {
   [UI_EVENT.CONNECTION_READY]: (state, payload) => {
-    const alerts = alertsFrom(payload.alerts) || alertsFrom(payload.status?.alerts);
-    if (alerts) {
-      state.alerts = alerts;
-    }
-  },
-  [UI_EVENT.STATUS_UPDATED]: (state, payload) => {
     const alerts = alertsFrom(payload.alerts);
     if (alerts) {
       state.alerts = alerts;

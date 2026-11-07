@@ -6,16 +6,41 @@
  * imperatively by the chat stream hook so route changes do not clear them.
  */
 import { createSelector } from '@reduxjs/toolkit';
-import { createAcknowledgedThunk, requestAcknowledged } from '../../../store/async';
+import { addStreamFailureLifecycle, createAcknowledgedThunk, requestAcknowledged } from '../../../store/async';
 import { withQuery } from '../../../store/http';
+import { realtimeClientId, waitForRealtimeClient } from '../../../realtime/realtimeClient';
 import { deriveChatStatus } from '../models/chatStatus';
 import { failureMessage } from '../../../lib/failures';
 import { UI_EVENT } from '../../../realtime/eventVocabulary';
+import { forgetServerRegistration, noteServerRegistration } from '../backgroundTaskSubscription';
+import { getTimeBucket } from '../models/conversationModel';
+import { createPositionalListOps } from '../../../lib/positionalListCache';
 
+
+// Opening a chat installs this tab's background-task interest server-side.
+// Its stream event can arrive before the HTTP acknowledgement, so the
+// registration is noted up front and withdrawn if the request fails.
+async function requestChatDetail(chatsUrl, threadId, requestId) {
+  await waitForRealtimeClient();
+  const chatUrl = `${chatsUrl}/${encodeURIComponent(threadId)}`;
+  const tasksUrl = `${chatUrl}/background-tasks`;
+  noteServerRegistration(tasksUrl);
+  try {
+    const acknowledgement = await requestAcknowledged(
+      withQuery(chatUrl, { client_id: realtimeClientId }),
+      { requestId },
+    );
+    return { ...acknowledgement, threadId };
+  } catch (error) {
+    forgetServerRegistration(tasksUrl);
+    throw error;
+  }
+}
 
 const emptyActive = () => ({
   threadId: null,
   detail: null,
+  queue: null,
   loading: false,
   error: null,
   requestId: null,
@@ -41,17 +66,32 @@ export const initialState = {
   },
   chats: {
     byId: {},
-    order: [],
+    tombstones: {},
+    view: { q: '', sort: 'recent', filter: 'active' },
+    total: 0,
+    groups: [],
+    rowsByIndex: {},
+    loadedPages: {},
+    inFlightRequests: {},
+    rangeVersion: 0,
+    rowDelta: null,
     loaded: false,
     loading: false,
     error: null,
-    requestId: null,
+    lookupRequestIds: {},
+    lookupResults: {},
+    sourceTotals: {},
+    // The latest chat-picker search: ordered ids of one server page and the
+    // number of matches, so a picker lists rows in server order without
+    // loading the whole chat list.
+    picker: { requestId: null, ids: [], total: 0 },
     requestedAt: null,
-    lastRequestTotal: null,
     active: emptyActive(),
     reconciliation: emptyReconciliation(),
   },
 };
+
+export const CHAT_LIST_PAGE_SIZE = 50;
 
 function threadIdFor(session) {
   return typeof session?.thread_id === 'string' && session.thread_id
@@ -59,62 +99,177 @@ function threadIdFor(session) {
     : null;
 }
 
-function replaceChatList(chats, sessions) {
-  chats.byId = {};
-  chats.order = [];
-  for (const session of Array.isArray(sessions) ? sessions : []) {
-    const threadId = threadIdFor(session);
-    if (!threadId || chats.byId[threadId]) {
-      continue;
-    }
-    chats.byId[threadId] = session;
-    chats.order.push(threadId);
-  }
-}
-
-function upsertChat(chats, session) {
-  const threadId = threadIdFor(session);
-  if (!threadId) {
-    return;
-  }
-  if (!chats.byId[threadId]) {
-    chats.order.unshift(threadId);
-  }
-  chats.byId[threadId] = {
-    ...(chats.byId[threadId] || {}),
-    ...session,
+function normalizeView(view = {}) {
+  return {
+    q: typeof view.q === 'string' ? view.q : '',
+    sort: view.sort === 'name' ? 'name' : 'recent',
+    filter: ['archived', 'all', 'unread', 'error'].includes(view.filter) ? view.filter : 'active',
   };
 }
 
-function addChatIfMissing(chats, session) {
-  const threadId = threadIdFor(session);
-  if (!threadId || chats.byId[threadId]) {
-    return;
-  }
-  chats.byId[threadId] = session;
-  chats.order.unshift(threadId);
+function sameView(left, right) {
+  return left.q === right.q && left.sort === right.sort && left.filter === right.filter;
 }
 
-function deleteChatFromList(chats, threadId) {
-  if (!threadId) {
+function rowMatchesFilter(row, view) {
+  return Boolean(
+    row
+    && (!['active', 'unread', 'error'].includes(view.filter) || !row.archived)
+    && (view.filter !== 'archived' || row.archived)
+    && (view.filter !== 'unread' || row.unread)
+    && (view.filter !== 'error' || row.errored),
+  );
+}
+
+function rowMatchesView(row, view) {
+  if (!rowMatchesFilter(row, view)) return false;
+  const query = view.q.trim().toLocaleLowerCase();
+  return !query || `${row.title || ''} ${row.preview || ''}`.toLocaleLowerCase().includes(query);
+}
+
+function syncStoredIndicators(state, row) {
+  const threadId = threadIdFor(row);
+  if (!threadId) return;
+  for (const [field, ids] of [['unread', 'unreadChatIds'], ['errored', 'erroredChatIds']]) {
+    if (typeof row[field] !== 'boolean') continue;
+    state.chatRuntime[ids] = row[field]
+      ? addChatRuntimeId(state.chatRuntime[ids], threadId)
+      : removeChatRuntimeId(state.chatRuntime[ids], threadId);
+  }
+}
+
+function upsertCachedRow(chats, row) {
+  const threadId = threadIdFor(row);
+  if (!threadId || chats.tombstones[threadId]) return null;
+  chats.byId[threadId] = { ...(chats.byId[threadId] || {}), ...row };
+  return threadId;
+}
+
+const {
+  indexOfRow,
+  shiftRows,
+  invalidatePagesFrom,
+  noteRowDelta,
+  removeRowAt,
+  insertRowAt,
+  settleInFlightRequest,
+} = createPositionalListOps(CHAT_LIST_PAGE_SIZE);
+
+function groupKeyForRow(row, view) {
+  if (!row || view.sort !== 'recent' || view.filter !== 'active') return null;
+  if (row.pinned) return 'pinned';
+  return getTimeBucket(row.last_activity ?? row.created_at);
+}
+
+function adjustGroupCount(chats, key, amount) {
+  if (!key) return;
+  const group = chats.groups.find((entry) => entry.key === key);
+  if (group) group.count = Math.max(0, group.count + amount);
+}
+
+// Recent order is pinned first, then newest activity first. Place the row after
+// the last loaded row of its section with newer activity; a row whose true
+// place lies in an unloaded gap lands at the gap's start, which still puts it
+// on the correct side of every loaded (visible) row.
+function insertionIndex(chats, row) {
+  const threadId = threadIdFor(row);
+  const pinned = Boolean(row.pinned);
+  const activity = row.last_activity ?? '';
+  let target = pinned ? 0 : (chats.groups.find((group) => group.key === 'pinned')?.count ?? 0);
+  for (const [key, id] of Object.entries(chats.rowsByIndex)) {
+    const other = chats.byId[id];
+    if (id === threadId || !other || Boolean(other.pinned) !== pinned) continue;
+    if ((other.last_activity ?? '') > activity) target = Math.max(target, Number(key) + 1);
+  }
+  return target;
+}
+
+export function applyChatRowDelta(chats, row) {
+  const threadId = threadIdFor(row);
+  if (!threadId || chats.tombstones[threadId]) return;
+  const indexValue = indexOfRow(chats, threadId);
+  const index = indexValue == null ? null : Number(indexValue);
+  const previous = chats.byId[threadId];
+  const wasListed = index != null;
+  const matches = wasListed
+    ? rowMatchesFilter(row, chats.view)
+    : rowMatchesView(row, chats.view);
+  const oldGroup = groupKeyForRow(previous, chats.view);
+  const newGroup = groupKeyForRow(row, chats.view);
+  upsertCachedRow(chats, row);
+
+  // A row outside the loaded windows may already be included in the total.
+  // Recount from the server rather than treating an unknown row as a new chat.
+  if (!wasListed && Object.keys(chats.rowsByIndex).length < chats.total) {
+    invalidatePagesFrom(chats, 0);
     return;
   }
+
+  if (wasListed && !matches) {
+    removeRowAt(chats, index);
+    chats.total = Math.max(0, chats.total - 1);
+    adjustGroupCount(chats, oldGroup, -1);
+    return;
+  }
+  if (!wasListed && !matches) return;
+
+  if (!wasListed) {
+    chats.total += 1;
+    adjustGroupCount(chats, newGroup, 1);
+    if (chats.view.sort === 'recent') {
+      insertRowAt(chats, insertionIndex(chats, row), threadId);
+    } else {
+      invalidatePagesFrom(chats, 0);
+    }
+    return;
+  }
+
+  if (chats.view.q || chats.view.sort === 'name') {
+    // Search also includes server-only first-message text, so retain the row
+    // until the authoritative page replaces this ordered window.
+    invalidatePagesFrom(chats, 0);
+    return;
+  }
+
+  if (oldGroup !== newGroup) {
+    adjustGroupCount(chats, oldGroup, -1);
+    adjustGroupCount(chats, newGroup, 1);
+  }
+  const moved = chats.view.sort === 'recent'
+    && (previous?.pinned !== row.pinned || previous?.last_activity !== row.last_activity);
+  if (!moved) return;
+  delete chats.rowsByIndex[index];
+  shiftRows(chats, index + 1, -1);
+  const target = insertionIndex(chats, row);
+  shiftRows(chats, target, 1);
+  chats.rowsByIndex[target] = threadId;
+  invalidatePagesFrom(chats, Math.min(index, target));
+  // Only the rows between the old and new position shift, by one.
+  if (target < index) noteRowDelta(chats, target, 1, index);
+  else if (target > index) noteRowDelta(chats, index, -1, target);
+}
+
+export function deleteChatFromList(chats, threadId) {
+  if (!threadId) return;
+  const indexValue = indexOfRow(chats, threadId);
+  const previous = chats.byId[threadId];
+  if (indexValue != null) {
+    const index = Number(indexValue);
+    removeRowAt(chats, index);
+    chats.total = Math.max(0, chats.total - 1);
+    adjustGroupCount(chats, groupKeyForRow(previous, chats.view), -1);
+  } else {
+    // An unloaded deletion shifts every retained later position; the next page
+    // response restores the authoritative total and order.
+    invalidatePagesFrom(chats, 0);
+  }
   delete chats.byId[threadId];
-  chats.order = chats.order.filter((item) => item !== threadId);
+  chats.tombstones[threadId] = true;
 }
 
 function mergeActiveDetail(active, session) {
-  if (!session?.thread_id) {
-    return;
-  }
-  if (active.detail?.thread_id !== session.thread_id) {
-    return;
-  }
-  active.detail = {
-    ...active.detail,
-    ...session,
-    messages: active.detail.messages || [],
-  };
+  if (!session?.thread_id || active.detail?.thread_id !== session.thread_id) return;
+  active.detail = { ...active.detail, ...session, messages: active.detail.messages || [] };
 }
 
 function normalizeChatRuntimeIds(ids) {
@@ -227,22 +382,69 @@ function hydrateResponseTracking(runtime, session) {
   }
 }
 
-export const fetchChatSessions = createAcknowledgedThunk('uiData/fetchChatSessions', async ({ chatsUrl, includeArchived = true }, { requestId }) => {
-  return requestAcknowledged(
-    withQuery(chatsUrl, { include_archived: includeArchived ? 'true' : 'false' }),
-    { requestId },
-  );
-});
-export const requestChatSessionDetail = createAcknowledgedThunk('uiData/requestChatSessionDetail', async ({ chatsUrl, threadId }, { requestId }) => {
-  const acknowledgement = await requestAcknowledged(
-    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { request_id: requestId }),
-    { requestId },
-  );
-  return { ...acknowledgement, threadId };
-});
+function chatListUrl(chatsUrl, {
+  view,
+  offset = 0,
+  limit = CHAT_LIST_PAGE_SIZE,
+  source,
+  threadIds = [],
+  groupStarts = null,
+}) {
+  const params = new URLSearchParams({
+    client_id: realtimeClientId,
+    q: view.q,
+    sort: view.sort,
+    filter: view.filter,
+    offset: String(Math.max(0, offset)),
+    limit: String(Math.max(0, Math.min(200, limit))),
+  });
+  if (groupStarts && view.sort === 'recent' && view.filter === 'active') {
+    params.set('today', groupStarts.today);
+    params.set('yesterday', groupStarts.yesterday);
+    params.set('this_week', groupStarts.thisWeek);
+    params.set('last_week', groupStarts.lastWeek);
+  }
+  if (source) params.set('source', source);
+  for (const threadId of threadIds) {
+    if (typeof threadId === 'string' && threadId) params.append('thread_id', threadId);
+  }
+  return `${chatsUrl}${chatsUrl.includes('?') ? '&' : '?'}${params.toString()}`;
+}
+
+export const fetchChatSessions = createAcknowledgedThunk(
+  'uiData/fetchChatSessions',
+  async ({
+    chatsUrl,
+    view,
+    offset = 0,
+    limit = CHAT_LIST_PAGE_SIZE,
+    source = null,
+    threadIds = [],
+    groupStarts = null,
+  }, { requestId }) => {
+    await waitForRealtimeClient();
+    return requestAcknowledged(
+      chatListUrl(chatsUrl, {
+        view: normalizeView(view),
+        offset,
+        limit,
+        source,
+        threadIds,
+        groupStarts,
+      }),
+      { requestId },
+    );
+  },
+);
+export const requestChatSessionDetail = createAcknowledgedThunk(
+  'uiData/requestChatSessionDetail',
+  ({ chatsUrl, threadId }, { requestId }) => requestChatDetail(chatsUrl, threadId, requestId),
+);
 export const fetchChatMessages = createAcknowledgedThunk('uiData/fetchChatMessages', async ({ chatsUrl, threadId, beforeMessageId, limit }, { requestId }) => {
+  await waitForRealtimeClient();
   const acknowledgement = await requestAcknowledged(
     withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}/messages`, {
+      client_id: realtimeClientId,
       ...(beforeMessageId ? { before_message_id: beforeMessageId } : {}),
       ...(limit ? { limit: String(limit) } : {}),
     }),
@@ -254,23 +456,22 @@ export const fetchChatMessages = createAcknowledgedThunk('uiData/fetchChatMessag
 // A completed foreground stream is already visible locally. This fetches the
 // persisted canonical transcript without taking ownership of the selected
 // detail or putting ConversationPage into its blocking loading branch.
-export const requestChatSessionReconciliation = createAcknowledgedThunk('uiData/requestChatSessionReconciliation', async ({ chatsUrl, threadId }, { requestId }) => {
-  const acknowledgement = await requestAcknowledged(
-    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { request_id: requestId }),
-    { requestId },
-  );
-  return { ...acknowledgement, threadId };
-});
+export const requestChatSessionReconciliation = createAcknowledgedThunk(
+  'uiData/requestChatSessionReconciliation',
+  ({ chatsUrl, threadId }, { requestId }) => requestChatDetail(chatsUrl, threadId, requestId),
+);
 export const updateChatSessionMetadata = createAcknowledgedThunk('uiData/updateChatSessionMetadata', async ({ chatsUrl, threadId, patch }, { requestId }) => {
+  await waitForRealtimeClient();
   const acknowledgement = await requestAcknowledged(
-    `${chatsUrl}/${encodeURIComponent(threadId)}`,
+    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { client_id: realtimeClientId }),
     { method: 'PATCH', body: patch, requestId },
   );
   return { ...acknowledgement, threadId };
 });
 export const deleteChatSession = createAcknowledgedThunk('uiData/deleteChatSession', async ({ chatsUrl, threadId }, { requestId }) => {
+  await waitForRealtimeClient();
   const acknowledgement = await requestAcknowledged(
-    `${chatsUrl}/${encodeURIComponent(threadId)}`,
+    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { client_id: realtimeClientId }),
     { method: 'DELETE', requestId },
   );
   return { ...acknowledgement, threadId };
@@ -321,18 +522,14 @@ export const reducers = {
     }
     state.chats.active.hasMoreMessages = Boolean(reconciliation.detail.has_more_messages);
   },
-  // Optimistic bump so the sidebar re-sorts a chat to the top of "Recent" the
-  // instant a message is sent, instead of waiting for the stream to finish and
-  // a fresh chat list snapshot to arrive.
+  // Optimistically move a loaded recent row before the stream completes.
   touchChatSession(state, action) {
     const threadId = action.payload;
-    if (typeof threadId !== 'string' || !threadId || !state.chats.byId[threadId]) {
-      return;
-    }
-    state.chats.byId[threadId] = {
+    if (typeof threadId !== 'string' || !threadId || !state.chats.byId[threadId]) return;
+    applyChatRowDelta(state.chats, {
       ...state.chats.byId[threadId],
       last_activity: new Date().toISOString(),
-    };
+    });
   },
 };
 export const eventHandlers = {
@@ -347,7 +544,6 @@ export const eventHandlers = {
 
     beginResponseTracking(state.chatRuntime, requestId, threadId);
     state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
-    state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
     // The restart interruption describes the conversation's latest turn. A new
     // turn supersedes it; the interrupted turn itself keeps its own row once
     // the canonical transcript reports it `interrupted`.
@@ -407,13 +603,10 @@ export const eventHandlers = {
       state.chatRuntime.generatingChatIds,
       threadId,
     );
-    if (isActiveThread) {
-      state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
-      state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
-    } else {
+    if (!isActiveThread) {
       state.chatRuntime.unreadChatIds = addChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
-      state.chatRuntime.erroredChatIds = addChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
     }
+    state.chatRuntime.erroredChatIds = addChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
   },
   [UI_EVENT.CHAT_RESPONSE_CANCELLED]: (state, payload) => {
     const response = terminalResponseFor(payload, state.chatRuntime);
@@ -427,29 +620,71 @@ export const eventHandlers = {
       threadId,
     );
   },
-  [UI_EVENT.CHAT_SESSIONS_SNAPSHOT]: (state, payload) => {
-    replaceChatList(state.chats, payload.sessions);
-    state.chats.loaded = true;
-    if (!state.chats.loading || payload.request_id === state.chats.requestId) {
-      state.chats.loading = false;
-      state.chats.error = null;
-      state.chats.requestId = null;
-      state.chats.requestedAt = new Date().toISOString();
+  [UI_EVENT.CHAT_LIST_LOADED]: (state, payload) => {
+    const requestId = payload?.request_id;
+    const isLookup = Boolean(requestId && state.chats.lookupRequestIds[requestId]);
+    if (!requestId) return;
+    const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+    if (isLookup) {
+      for (const row of rows) syncStoredIndicators(state, row);
+      for (const row of rows) upsertCachedRow(state.chats, row);
+      const lookup = state.chats.lookupRequestIds[requestId];
+      for (const threadId of lookup.threadIds) {
+        state.chats.lookupResults[threadId] = rows.some((row) => row?.thread_id === threadId);
+      }
+      if (lookup.source) state.chats.sourceTotals[lookup.source] = Number.isInteger(payload?.total) ? payload.total : 0;
+      if (lookup.picker && state.chats.picker.requestId === requestId) {
+        state.chats.picker.ids = rows.map((row) => row?.thread_id).filter(Boolean);
+        state.chats.picker.total = Number.isInteger(payload?.total) ? payload.total : rows.length;
+      }
+      delete state.chats.lookupRequestIds[requestId];
+      return;
     }
-  },
-  [UI_EVENT.CHAT_SESSION_CREATED]: (state, payload) => {
-    upsertChat(state.chats, payload.session);
-    mergeActiveDetail(state.chats.active, payload.session);
+    const request = state.chats.inFlightRequests[requestId];
+    if (
+      !request
+      || request.rangeVersion !== state.chats.rangeVersion
+      || !sameView(normalizeView(payload.view), state.chats.view)
+    ) return;
+    for (const row of rows) syncStoredIndicators(state, row);
+    for (const [index, row] of rows.entries()) {
+      const threadId = upsertCachedRow(state.chats, row);
+      if (threadId) state.chats.rowsByIndex[request.offset + index] = threadId;
+    }
+    if (Number.isInteger(payload?.total)) {
+      state.chats.total = payload.total;
+      for (const index of Object.keys(state.chats.rowsByIndex)) {
+        if (Number(index) >= payload.total) delete state.chats.rowsByIndex[index];
+      }
+    }
+    if (Array.isArray(payload?.groups)) {
+      state.chats.groups = payload.groups.map((group) => ({
+        key: group.key,
+        count: Number.isInteger(group.count) ? group.count : 0,
+      }));
+    }
+    state.chats.loadedPages[request.offset] = true;
+    delete state.chats.inFlightRequests[requestId];
     state.chats.loaded = true;
+    state.chats.loading = Object.keys(state.chats.inFlightRequests).length > 0;
+    state.chats.error = null;
+    state.chats.requestedAt = new Date().toISOString();
   },
-  [UI_EVENT.CHAT_SESSION_METADATA_UPDATED]: (state, payload) => {
-    upsertChat(state.chats, payload.session);
-    mergeActiveDetail(state.chats.active, payload.session);
-    state.chats.loaded = true;
+  [UI_EVENT.CHAT_LIST_ROW_UPSERTED]: (state, payload) => {
+    applyChatRowDelta(state.chats, payload?.row);
+    mergeActiveDetail(state.chats.active, payload?.row);
+    syncStoredIndicators(state, payload?.row);
   },
-  [UI_EVENT.CHAT_SESSION_UPSERTED]: (state, payload) => {
-    addChatIfMissing(state.chats, payload.session);
-    state.chats.loaded = true;
+  [UI_EVENT.CHAT_LIST_ROW_DELETED]: (state, payload) => {
+    const threadId = typeof payload?.thread_id === 'string' && payload.thread_id ? payload.thread_id : null;
+    deleteChatFromList(state.chats, threadId);
+    if (threadId) {
+      clearResponseTrackingForThread(state.chatRuntime, threadId);
+      state.chatRuntime.generatingChatIds = removeChatRuntimeId(state.chatRuntime.generatingChatIds, threadId);
+      state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
+      state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
+    }
+    if (state.chats.active.threadId === threadId) state.chats.active = emptyActive();
   },
   [UI_EVENT.CHAT_SESSION_SELECTED]: (state, payload) => {
     hydrateResponseTracking(state.chatRuntime, payload.session);
@@ -459,10 +694,9 @@ export const eventHandlers = {
       state.chats.reconciliation.error = null;
       return;
     }
-    if (state.chats.active.requestId && payload.request_id !== state.chats.active.requestId) {
-      return;
-    }
+    if (state.chats.active.requestId && payload.request_id !== state.chats.active.requestId) return;
     state.chats.active.detail = payload.session || null;
+    state.chats.active.queue = payload.queue || null;
     state.chats.active.threadId = payload.session?.thread_id || null;
     state.chats.active.loading = false;
     state.chats.active.error = null;
@@ -471,9 +705,7 @@ export const eventHandlers = {
     state.chats.active.pendingOlderPage = null;
   },
   [UI_EVENT.CHAT_MESSAGES_PAGE_LOADED]: (state, payload) => {
-    if (payload?.thread_id !== state.chats.active.threadId) {
-      return;
-    }
+    if (payload?.thread_id !== state.chats.active.threadId) return;
     state.chats.active.hasMoreMessages = Boolean(payload.has_more);
     state.chats.active.pendingOlderPage = {
       requestId: payload.request_id || null,
@@ -481,37 +713,52 @@ export const eventHandlers = {
       summaryMarkers: Array.isArray(payload.summary_markers) ? payload.summary_markers : [],
     };
   },
-  [UI_EVENT.CHAT_SESSION_DELETED]: (state, payload) => {
-    const threadId = typeof payload?.thread_id === 'string' && payload.thread_id
-      ? payload.thread_id
-      : null;
-    deleteChatFromList(state.chats, threadId);
-    if (threadId) {
-      clearResponseTrackingForThread(state.chatRuntime, threadId);
-      state.chatRuntime.generatingChatIds = removeChatRuntimeId(state.chatRuntime.generatingChatIds, threadId);
-      state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
-      state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
-    }
-    if (state.chats.active.threadId === threadId) {
-      state.chats.active = emptyActive();
-    }
-  },
 };
 
 export function buildExtraReducers(builder) {
   builder
     .addCase(fetchChatSessions.pending, (state, action) => {
-      state.chats.loading = true;
-      state.chats.error = null;
-      state.chats.requestId = action.meta.requestId;
-    })
-    .addCase(fetchChatSessions.rejected, (state, action) => {
-      if (state.chats.requestId !== action.meta.requestId) {
+      const {
+        offset = 0,
+        lookup = false,
+        picker = false,
+        threadIds = [],
+        source = null,
+        view,
+      } = action.meta.arg;
+      if (lookup) {
+        state.chats.lookupRequestIds[action.meta.requestId] = { threadIds, source, picker };
+        if (picker) state.chats.picker.requestId = action.meta.requestId;
         return;
       }
-      state.chats.loading = false;
+      const nextView = normalizeView(view);
+      if (!sameView(nextView, state.chats.view)) {
+        state.chats.view = nextView;
+        state.chats.total = 0;
+        state.chats.groups = [];
+        state.chats.rowsByIndex = {};
+        state.chats.loadedPages = {};
+        state.chats.inFlightRequests = {};
+        state.chats.rangeVersion += 1;
+        state.chats.rowDelta = null;
+        state.chats.loaded = false;
+      }
+      state.chats.inFlightRequests[action.meta.requestId] = {
+        offset: Math.max(0, offset),
+        rangeVersion: state.chats.rangeVersion,
+      };
+      state.chats.error = null;
+      state.chats.loading = !state.chats.loaded;
+    })
+    .addCase(fetchChatSessions.rejected, (state, action) => {
+      if (state.chats.lookupRequestIds[action.meta.requestId]) {
+        delete state.chats.lookupRequestIds[action.meta.requestId];
+        return;
+      }
+      if (!state.chats.inFlightRequests[action.meta.requestId]) return;
+      delete state.chats.inFlightRequests[action.meta.requestId];
+      state.chats.loading = Object.keys(state.chats.inFlightRequests).length > 0 && !state.chats.loaded;
       state.chats.error = failureMessage(action.error?.message ? action.error : 'Failed to load chats').message;
-      state.chats.requestId = null;
     })
     .addCase(requestChatSessionDetail.pending, (state, action) => {
       state.chats.active.threadId = action.meta.arg.threadId;
@@ -537,13 +784,24 @@ export function buildExtraReducers(builder) {
         state.chats.reconciliation.requestId = null;
       }
     });
+  addStreamFailureLifecycle(builder, (state, requestId) => {
+    settleInFlightRequest(state.chats, requestId);
+  });
 }
 
 export const selectChatSessions = createSelector(
-  [(state) => state.uiData.chats.order, (state) => state.uiData.chats.byId],
-  (order, byId) => order.map((threadId) => byId[threadId]).filter(Boolean),
+  [(state) => state.uiData.chats.rowsByIndex, (state) => state.uiData.chats.byId],
+  (rowsByIndex, byId) => Object.keys(rowsByIndex)
+    .map(Number)
+    .sort((left, right) => left - right)
+    .map((index) => byId[rowsByIndex[index]])
+    .filter(Boolean),
 );
 export const selectChatSessionsState = (state) => state.uiData.chats;
+export const selectChatRowsById = (state) => state.uiData.chats.byId;
+export const selectChatLookupResults = (state) => state.uiData.chats.lookupResults;
+export const selectChatPicker = (state) => state.uiData.chats.picker;
+export const selectChatSourceTotals = (state) => state.uiData.chats.sourceTotals;
 export const selectUnreadChatIds = (state) => state.uiData.chatRuntime.unreadChatIds;
 export const selectGeneratingChatIds = (state) => state.uiData.chatRuntime.generatingChatIds;
 export const selectChatActivityByThreadId = (state) => state.uiData.chatRuntime.activityByThreadId;

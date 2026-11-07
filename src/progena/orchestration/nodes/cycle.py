@@ -14,6 +14,7 @@ from src.progena.orchestration.nodes.respond import response_node
 from src.progena.orchestration.state import ProgenaState
 from src.progena.sessions.context import reset_current_thread_id, set_current_thread_id
 from src.progena.sessions.messages import get_last_ai_message, summarize_message_schema
+from src.progena.sessions.render import finalize_session_turn
 from src.progena.threads import MAIN_THREAD_ID
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,13 @@ async def _run_cycle(
     response_updates = await response_node(cast(ProgenaState, working_state), runtime)
     working_state.update(response_updates)
     updates.update(response_updates)
+    if current_input:
+        await finalize_session_turn(
+            effective_thread_id,
+            "completed",
+            getattr(runtime.context.agent_graph, "checkpointer", None),
+            runtime.context.state_manager,
+        )
 
     response_text = cast(str | None, working_state.get("last_cycle_response"))
     if response_text:
